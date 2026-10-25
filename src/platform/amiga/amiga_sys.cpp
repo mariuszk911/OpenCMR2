@@ -401,7 +401,7 @@ int EnsureIntuition(void)
     return IntuitionBase != NULL;
 }
 
-struct IntuiText *BuildBodyText(char *body, struct IntuiText *lines, int maxLines)
+int BuildBodyText(char *body, struct IntuiText *lines, int maxLines)
 {
     int count = 0;
     char *line = body;
@@ -413,7 +413,7 @@ struct IntuiText *BuildBodyText(char *body, struct IntuiText *lines, int maxLine
         lines[count].BackPen = 0;
         lines[count].DrawMode = JAM2;
         lines[count].LeftEdge = 0;
-        lines[count].TopEdge = 0;
+        lines[count].TopEdge = (SHORT)(count * 8);
         lines[count].IText = (UBYTE *)line;
         lines[count].NextText = NULL;
         if (count > 0)
@@ -421,7 +421,7 @@ struct IntuiText *BuildBodyText(char *body, struct IntuiText *lines, int maxLine
         ++count;
         line = end != NULL ? end + 1 : NULL;
     }
-    return count > 0 ? &lines[0] : NULL;
+    return count;
 }
 
 } // namespace
@@ -907,9 +907,10 @@ extern "C" int Sys_MessageBox(const char *title, const char *text, int buttons)
         return buttons == SYS_MESSAGEBOX_RETRY_CANCEL ? SYS_MESSAGEBOX_RESULT_CANCEL
                                                        : SYS_MESSAGEBOX_RESULT_OK;
     CopyPath(body, sizeof(body), text);
-    struct IntuiText *bodyText = BuildBodyText(body, lines, 16);
-    if (bodyText == NULL)
+    const int lineCount = BuildBodyText(body, lines, 16);
+    if (lineCount == 0)
         return SYS_MESSAGEBOX_RESULT_OK;
+    const int height = lineCount * 9 + 20;
 
     memset(&positive, 0, sizeof(positive));
     positive.FrontPen = 1;
@@ -921,10 +922,10 @@ extern "C" int Sys_MessageBox(const char *title, const char *text, int buttons)
     negative.IText = (UBYTE *)"Cancel";
 
     if (buttons == SYS_MESSAGEBOX_RETRY_CANCEL) {
-        const BOOL retry = AutoRequest(NULL, bodyText, &positive, &negative, 0, 0, 400, 0);
+        const BOOL retry = AutoRequest(NULL, &lines[0], &positive, &negative, 0, 0, 400, height);
         return retry ? SYS_MESSAGEBOX_RESULT_RETRY : SYS_MESSAGEBOX_RESULT_CANCEL;
     }
-    AutoRequest(NULL, bodyText, NULL, NULL, 0, 0, 400, 0);
+    AutoRequest(NULL, &lines[0], NULL, NULL, 0, 0, 400, height);
     return SYS_MESSAGEBOX_RESULT_OK;
 }
 

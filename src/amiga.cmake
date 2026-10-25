@@ -4,6 +4,10 @@
 set(MINIGL_INCLUDE_DIR "${PISTORM3D}/SDK/minigl-shared-library/include")
 set(MINIGL_LIBRARY_DIR "${PISTORM3D}/SDK/lib")
 
+# CrtTypeInfo.cpp is an MSVC CRT shim with a local type_info destructor; the
+# Amiga build has no RTTI and does not use it.
+list(REMOVE_ITEM GAME_SOURCES ${GAME_DIR}/CrtTypeInfo.cpp)
+
 # ---- Domain A: game layout -------------------------------------------------
 # The flag set that defines the original 32-bit/MSVC layout. M0.5 passed on the
 # cross-compiled ABI (build/amiga/m0-layout.log), so -malign-int is now part of
@@ -40,6 +44,9 @@ add_library(opencmr2_platform OBJECT
     platform/msvcrt.cpp
     platform/amiga/amiga_sys.cpp
     platform/amiga/amiga_platform.cpp
+    render/minigl/gfx_minigl.cpp
+    input/input_amiga.cpp
+    audio/audio_ahi.cpp
     port/intdiv.cpp
     platform/amiga/minigl_abi_check.cpp)
 target_include_directories(opencmr2_platform PUBLIC
@@ -53,7 +60,8 @@ target_include_directories(opencmr2_platform PRIVATE ${MINIGL_INCLUDE_DIR})
 add_library(opencmr2_amiga_stubs OBJECT
     video/movie_stub.cpp
     net/net_stub.cpp
-    platform/amiga/amiga_diagnostics.cpp)
+    platform/amiga/amiga_diagnostics.cpp
+    render/amiga_enhancement_stubs.cpp)
 target_include_directories(opencmr2_amiga_stubs PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
 
@@ -70,7 +78,10 @@ target_include_directories(amiga_stub_link_check PRIVATE ${CMAKE_CURRENT_SOURCE_
 # A scaffold that proves the cross toolchain, libnix startup and linker before
 # the game is wired in. M1 replaces it with the CMain entry point and the
 # MiniGL/OS facade; M0.9 exercises MiniGL in its own smoke target.
-add_executable(opencmr2 platform/amiga/main_amiga.cpp)
+add_executable(opencmr2
+    platform/amiga/main_amiga.cpp
+    $<TARGET_OBJECTS:cmr2_game>
+    $<TARGET_OBJECTS:opencmr2_amiga_stubs>)
 target_compile_definitions(opencmr2 PRIVATE OPENCMR2_AMIGA_STACK=${OPENCMR2_AMIGA_STACK})
 target_link_libraries(opencmr2 PRIVATE opencmr2_domain_a opencmr2_platform)
 target_link_directories(opencmr2 PRIVATE ${MINIGL_LIBRARY_DIR})

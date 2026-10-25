@@ -9,14 +9,14 @@
 #include "port/gfx.h"
 #include "port/sys.h"
 
-void Gfx_Clear(DWORD flags, DWORD color, float z)
+void Gfx_Clear(uint32_t flags, uint32_t color, float z)
 {
     (void)flags;
     (void)color;
     (void)z;
 }
 
-void Gfx_Present(BOOL vsync)
+void Gfx_Present(int vsync)
 {
     (void)vsync;
 }

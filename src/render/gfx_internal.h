@@ -5,6 +5,7 @@
 #define OPENCMR2_GFX_INTERNAL_H
 
 #include "port/gfx.h"
+#include "port/types.h"
 
 #include <stdint.h>
 

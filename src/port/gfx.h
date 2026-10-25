@@ -13,7 +13,8 @@
 #ifndef OPENCMR2_PORT_GFX_H
 #define OPENCMR2_PORT_GFX_H
 
-#include "port/types.h"
+#include <stdint.h>
+
 #include "port/align.h"
 
 #ifdef __cplusplus
@@ -43,15 +44,15 @@ typedef struct OPENCMR2_PORT_ALIGN4 GfxColorValue {
 
 /* Colours are 0xAARRGGBB. */
 #define GFX_RGBA(r, g, b, a) \
-    ((DWORD)((((a) & 0xff) << 24) | (((r) & 0xff) << 16) | (((g) & 0xff) << 8) | ((b) & 0xff)))
+    ((uint32_t)((((a) & 0xff) << 24) | (((r) & 0xff) << 16) | (((g) & 0xff) << 8) | ((b) & 0xff)))
 
 /* 3D vertex: position, normal, diffuse, specular, two texture coordinate
    sets (Direct3D FVF 0x2d2, 48 bytes). Lit and transformed by the device. */
 typedef struct OPENCMR2_PORT_ALIGN4 GfxVertex {
     float x, y, z;
     float nx, ny, nz;
-    DWORD diffuse;
-    DWORD specular;
+    uint32_t diffuse;
+    uint32_t specular;
     float u0, v0;
     float u1, v1;
 } GfxVertex;
@@ -60,8 +61,8 @@ typedef struct OPENCMR2_PORT_ALIGN4 GfxVertex {
    texture coordinate set (D3DTLVERTEX, 32 bytes). */
 typedef struct OPENCMR2_PORT_ALIGN4 GfxTLVertex {
     float sx, sy, sz, rhw;
-    DWORD color;
-    DWORD specular;
+    uint32_t color;
+    uint32_t specular;
     float tu, tv;
 } GfxTLVertex;
 
@@ -94,7 +95,7 @@ typedef struct OPENCMR2_PORT_ALIGN4 GfxMaterial {
 } GfxMaterial;
 
 typedef struct OPENCMR2_PORT_ALIGN4 GfxViewport {
-    DWORD x, y, width, height;
+    uint32_t x, y, width, height;
     float minZ, maxZ;
 } GfxViewport;
 
@@ -224,9 +225,9 @@ unsigned long long Gfx_PrepareWindow(void);
 const char *Gfx_GetRendererName(void);
 /* Creates the GPU device on first use and sets the back buffer size and
    window mode (it may be called again to change them). */
-BOOL Gfx_SetVideoMode(int width, int height, BOOL fullscreen);
+int Gfx_SetVideoMode(int width, int height, int fullscreen);
 /* Switches the window between fullscreen and windowed, keeping the mode. */
-void Gfx_SetFullscreen(BOOL fullscreen);
+void Gfx_SetFullscreen(int fullscreen);
 void Gfx_Shutdown(void);
 
 /* Resolutions to offer, smallest first. */
@@ -240,15 +241,15 @@ void Gfx_GetDefaultDisplayMode(int *width, int *height);
 /* A frame is BeginScene...EndScene blocks (any number) and one Present. */
 void Gfx_BeginScene(void);
 void Gfx_EndScene(void);
-void Gfx_Present(BOOL vsync);
+void Gfx_Present(int vsync);
 /* Movie presentation: stretch the back buffer to the entire drawable area. */
-void Gfx_PresentStretched(BOOL vsync);
+void Gfx_PresentStretched(int vsync);
 
 enum GfxClearFlags {
     GFX_CLEAR_TARGET = 1,
     GFX_CLEAR_ZBUFFER = 2
 };
-void Gfx_Clear(DWORD flags, DWORD color, float z);
+void Gfx_Clear(uint32_t flags, uint32_t color, float z);
 void Gfx_SetViewport(const GfxViewport *viewport);
 void Gfx_GetViewport(GfxViewport *viewport);
 /* The size of the screen the game draws the back buffer in: its viewports,
@@ -281,39 +282,39 @@ void Gfx_GetTransform(int type, GfxMatrix *matrix);
 
 void Gfx_SetLight(int index, const GfxLight *light);
 void Gfx_GetLight(int index, GfxLight *light);
-void Gfx_EnableLight(int index, BOOL enable);
+void Gfx_EnableLight(int index, int enable);
 void Gfx_SetMaterial(const GfxMaterial *material);
 
 /* One setter per render state the game uses; the values are Direct3D's. */
-void Gfx_SetLighting(BOOL enable);
-void Gfx_SetAmbient(DWORD color);
-void Gfx_SetSpecular(BOOL enable);
-void Gfx_SetLocalViewer(BOOL enable);
-void Gfx_SetNormalizeNormals(BOOL enable);
-void Gfx_SetColorVertex(BOOL enable);
+void Gfx_SetLighting(int enable);
+void Gfx_SetAmbient(uint32_t color);
+void Gfx_SetSpecular(int enable);
+void Gfx_SetLocalViewer(int enable);
+void Gfx_SetNormalizeNormals(int enable);
+void Gfx_SetColorVertex(int enable);
 void Gfx_SetDiffuseMaterialSource(int source);
 void Gfx_SetSpecularMaterialSource(int source);
 void Gfx_SetAmbientMaterialSource(int source);
 void Gfx_SetEmissiveMaterialSource(int source);
 
-void Gfx_SetFog(BOOL enable);
-void Gfx_SetFogColor(DWORD color);
+void Gfx_SetFog(int enable);
+void Gfx_SetFogColor(uint32_t color);
 void Gfx_SetFogVertexMode(int mode);
 void Gfx_SetFogTableMode(int mode);
 void Gfx_SetFogStart(float start);
 void Gfx_SetFogEnd(float end);
 
-void Gfx_SetDepthTest(BOOL enable);
-void Gfx_SetDepthWrite(BOOL enable);
+void Gfx_SetDepthTest(int enable);
+void Gfx_SetDepthWrite(int enable);
 void Gfx_SetDepthFunc(int compare);
 void Gfx_SetCullMode(int cull);
-void Gfx_SetAlphaBlend(BOOL enable);
+void Gfx_SetAlphaBlend(int enable);
 void Gfx_SetSrcBlend(int blend);
 void Gfx_SetDestBlend(int blend);
-void Gfx_SetAlphaTest(BOOL enable);
+void Gfx_SetAlphaTest(int enable);
 void Gfx_SetAlphaFunc(int compare);
-void Gfx_SetAlphaRef(DWORD reference);
-void Gfx_SetTextureFactor(DWORD color);
+void Gfx_SetAlphaRef(uint32_t reference);
+void Gfx_SetTextureFactor(uint32_t color);
 
 /* Texture stages 0 and 1; stage 2 is accepted and ignored (no draw uses
    more than two). */
@@ -329,7 +330,7 @@ void Gfx_SetStageMinFilter(int stage, int filter);
 void Gfx_SetStageMagFilter(int stage, int filter);
 void Gfx_SetStageMipFilter(int stage, int filter);
 void Gfx_SetStageMaxMipLevel(int stage, int level);
-void Gfx_SetStageTexCoordIndex(int stage, DWORD index);
+void Gfx_SetStageTexCoordIndex(int stage, uint32_t index);
 void Gfx_SetStageTextureTransform(int stage, int flags);
 /* index: 0 = m00, 1 = m01, 2 = m10, 3 = m11 */
 void Gfx_SetStageBumpEnvMat(int stage, int index, float value);
@@ -338,22 +339,22 @@ void Gfx_SetStageBumpEnvLOffset(int stage, float value);
 
 /* ---- geometry ---------------------------------------------------------------- */
 
-GfxVertexBuffer *Gfx_CreateVertexBuffer(DWORD vertexCount);
+GfxVertexBuffer *Gfx_CreateVertexBuffer(uint32_t vertexCount);
 void Gfx_DestroyVertexBuffer(GfxVertexBuffer *buffer);
 /* The whole buffer, for writing; contents are kept between locks. */
 GfxVertex *Gfx_LockVertexBuffer(GfxVertexBuffer *buffer);
 void Gfx_UnlockVertexBuffer(GfxVertexBuffer *buffer);
 
-void Gfx_DrawPrimitiveVB(int primitive, GfxVertexBuffer *buffer, DWORD firstVertex, DWORD vertexCount);
+void Gfx_DrawPrimitiveVB(int primitive, GfxVertexBuffer *buffer, uint32_t firstVertex, uint32_t vertexCount);
 /* Indices are relative to firstVertex. */
-void Gfx_DrawIndexedPrimitiveVB(int primitive, GfxVertexBuffer *buffer, DWORD firstVertex, DWORD vertexCount,
-                                const WORD *indices, DWORD indexCount);
-void Gfx_DrawPrimitive(int primitive, const GfxVertex *vertices, DWORD vertexCount);
-void Gfx_DrawIndexedPrimitive(int primitive, const GfxVertex *vertices, DWORD vertexCount, const WORD *indices,
-                              DWORD indexCount);
-void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, DWORD vertexCount);
-void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *vertices, DWORD vertexCount, const WORD *indices,
-                                DWORD indexCount);
+void Gfx_DrawIndexedPrimitiveVB(int primitive, GfxVertexBuffer *buffer, uint32_t firstVertex, uint32_t vertexCount,
+                                const uint16_t *indices, uint32_t indexCount);
+void Gfx_DrawPrimitive(int primitive, const GfxVertex *vertices, uint32_t vertexCount);
+void Gfx_DrawIndexedPrimitive(int primitive, const GfxVertex *vertices, uint32_t vertexCount, const uint16_t *indices,
+                              uint32_t indexCount);
+void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount);
+void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount, const uint16_t *indices,
+                                uint32_t indexCount);
 
 /* ---- textures -------------------------------------------------------------- */
 
@@ -374,10 +375,10 @@ enum GfxPixelFormatFlags {
 
 /* Layout of a format, for the game's pixel code (DDPIXELFORMAT's flags). */
 typedef struct GfxPixelFormat {
-    DWORD flags;
-    DWORD bitsPerPixel;
-    DWORD redMask, greenMask, blueMask, alphaMask;   /* bump: dU, dV, luminance masks */
-    DWORD fourCC;                                     /* compressed formats: 'DXT1', 'DXT5' */
+    uint32_t flags;
+    uint32_t bitsPerPixel;
+    uint32_t redMask, greenMask, blueMask, alphaMask;   /* bump: dU, dV, luminance masks */
+    uint32_t fourCC;                                     /* compressed formats: 'DXT1', 'DXT5' */
 } GfxPixelFormat;
 void Gfx_GetPixelFormat(int format, GfxPixelFormat *out);
 
@@ -393,20 +394,20 @@ enum GfxTextureFlags {
 };
 
 /* mipLevels counts the top level (1 = no mipmaps). */
-GfxTexture *Gfx_CreateTexture(int width, int height, int format, int mipLevels, DWORD flags);
+GfxTexture *Gfx_CreateTexture(int width, int height, int format, int mipLevels, uint32_t flags);
 void Gfx_DestroyTexture(GfxTexture *texture);
 int Gfx_GetTextureMipCount(GfxTexture *texture);
 
 typedef struct GfxLockedRect {
     void *pixels;
-    LONG pitch;               /* bytes per row (per row of 4x4 blocks if compressed) */
-    DWORD width, height;      /* of the mip level */
+    int32_t pitch;               /* bytes per row (per row of 4x4 blocks if compressed) */
+    uint32_t width, height;      /* of the mip level */
     GfxPixelFormat format;
 } GfxLockedRect;
 
 /* Locks a mip level of a face for reading and writing; the texture is
    updated on the GPU when it is unlocked. */
-BOOL Gfx_LockTexture(GfxTexture *texture, int face, int mip, GfxLockedRect *out);
+int Gfx_LockTexture(GfxTexture *texture, int face, int mip, GfxLockedRect *out);
 void Gfx_UnlockTexture(GfxTexture *texture, int face, int mip);
 
 /* Draws replacement wherever texture is drawn (NULL: texture itself), with
@@ -437,7 +438,7 @@ GfxTexture *Gfx_GetCubeFace(GfxTexture *cube, int face);
    and returns, in pixels (width * height colours, 0xAARRGGBB, rows top to
    bottom), the copy taken at the end of the previous frame. Returns 0 when
    there is none yet for a rectangle of that size. */
-BOOL Gfx_ReadBackBuffer(int x, int y, int width, int height, DWORD *pixels);
+int Gfx_ReadBackBuffer(int x, int y, int width, int height, uint32_t *pixels);
 
 #ifdef __cplusplus
 }
