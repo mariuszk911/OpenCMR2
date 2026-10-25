@@ -3011,14 +3011,8 @@ void StageObject_AddCarSoundTimeSeconds(int index, int seconds);
 unsigned char RallyDataStageIndex(void);
 int Frontend_StoreSelectedDeviceOption(int index);
 void Menu_QueueDefaultAction(void);
-unsigned char CGameInfo::GetConfiguredPlayerCount(void);
-unsigned char CGameInfo::IsConfiguredMultiplayer(void);
-unsigned char CGameInfo::GetConfiguredGameMode(void);
-unsigned char CGameInfo::GetConfiguredDifficulty(void);
-unsigned char CGameInfo::GetGameModeOptionBit19(void);
-unsigned char CGameInfo::GetSoundOptionBit30(void);
-unsigned int CGameInfo::GetActiveCheatMask(void);
-unsigned int CGameInfo::GetNetworkOptionBit11(void);
+// PORT: AMIGA: these static members are declared in GameInfo.h. GCC 6.5
+// rejects qualified declarations at namespace scope, so the repeats are gone.
 unsigned int RallyData_GetSelectionBits10To11(void);
 unsigned char RallyData_GetSelectionFlag28(void);
 unsigned int RallyData_GetSetupModeBits(void);

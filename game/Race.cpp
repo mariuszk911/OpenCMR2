@@ -2296,9 +2296,9 @@ BYTE RallyData_IsFirstAvailableStageSelected(void);
 void RallyTiming_ResetOverallPlayerTimes(void);
 void RallyTiming_ResetDriverSplitState(void);
 void RallyTiming_RebuildChampionshipPositionMap(void);
-void CFrontend::ClearFrontendPlayerInputCounters(void);
+// PORT: AMIGA: declared in Frontend.h and Game.h. GCC 6.5 rejects qualified
+// declarations at namespace scope, so the repeats are gone.
 void NetRace_InitializeRaceSoundVolumes(void);
-void CGame::SaveRaceCallbackDepth(void);
 void Surface_LoadStageFonts(void);
 BYTE SurfaceText_LoadRegionalStringTable(void);
 void NetPlayers_RebuildStageResults(int, int, int);

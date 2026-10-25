@@ -702,9 +702,11 @@ void CGraphics::BltTexture(Texture *pTexture, int surfaceIndex)
 
 // Moves an 8-bit channel value into a 16-bit pixel channel whose top bit is
 // `depth` bits above bit 7 (negative: below).
+// PORT: AMIGA: integer depth arithmetic; GCC 6.5 resolves abs(short) to the
+// double overload, which is not a valid shift count.
 #define PACK_CHANNEL(mask, depth, v)                                                \
-    ((depth) >= 0 ? (((mask) >> abs(depth)) & (v)) << abs(depth)                    \
-                  : (((mask) << abs(depth)) & (v)) >> abs(depth))
+    ((depth) >= 0 ? (((mask) >> (depth)) & (v)) << (depth)                          \
+                  : (((mask) << -(depth)) & (v)) >> -(depth))
 
 extern const float g_netOne;
 extern const float g_netZero;
@@ -6126,22 +6128,24 @@ Texture *CGraphics::LoadTGATexture(BYTE *pTGA, Texture *pTexture)
                     a = p[3];
                 else
                     a = 0xff;
+                // PORT: AMIGA: integer depth arithmetic; abs(short) selects
+                // the double overload under GCC 6.5.
                 if (aDepth >= 0)
-                    a = ((aMask >> ((aDepth) < 0 ? -(aDepth) : (aDepth))) & a) << abs(aDepth);
+                    a = ((aMask >> (aDepth)) & a) << (aDepth);
                 else
-                    a = ((aMask << abs(aDepth)) & a) >> abs(aDepth);
+                    a = ((aMask << -(aDepth)) & a) >> -(aDepth);
                 if (rDepth >= 0)
-                    r = ((rMask >> abs(rDepth)) & r) << abs(rDepth);
+                    r = ((rMask >> (rDepth)) & r) << (rDepth);
                 else
-                    r = ((rMask << abs(rDepth)) & r) >> abs(rDepth);
+                    r = ((rMask << -(rDepth)) & r) >> -(rDepth);
                 if (gDepth >= 0)
-                    g = ((gMask >> abs(gDepth)) & g) << abs(gDepth);
+                    g = ((gMask >> (gDepth)) & g) << (gDepth);
                 else
-                    g = ((gMask << abs(gDepth)) & g) >> abs(gDepth);
+                    g = ((gMask << -(gDepth)) & g) >> -(gDepth);
                 if (bDepth >= 0)
-                    b = ((bMask >> abs(bDepth)) & b) << abs(bDepth);
+                    b = ((bMask >> (bDepth)) & b) << (bDepth);
                 else
-                    b = ((bMask << abs(bDepth)) & b) >> abs(bDepth);
+                    b = ((bMask << -(bDepth)) & b) >> -(bDepth);
                 *pDst16++ = (WORD)(r | g | b | a);
             }
             if (y != height - 1)

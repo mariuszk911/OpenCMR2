@@ -50,6 +50,13 @@ void Crt_SplitPath(const char *path, char *drive, char *dir, char *fname, char *
 #define _snprintf snprintf
 #define _vsnprintf vsnprintf
 
+/* GCC 6.5 does not implement MSVC's __forceinline keyword. Clang keeps it;
+   on GCC the only user is a small static function, where plain inline is
+   enough (and -O2 inlines it). */
+#if defined(__GNUC__) && !defined(__clang__)
+#define __forceinline inline
+#endif
+
 #define _MAX_PATH 260
 #define _MAX_DRIVE 3
 #define _MAX_DIR 256
