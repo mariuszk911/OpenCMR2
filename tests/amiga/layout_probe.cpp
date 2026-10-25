@@ -157,6 +157,11 @@
     X(SysEvent_align, alignof(SysEvent)) \
     X(SysEvent_type, offsetof(SysEvent, type)) \
     X(SysEvent_repeat, offsetof(SysEvent, repeat)) \
+    X(SysStepClock_size, sizeof(SysStepClock)) \
+    X(SysStepClock_align, alignof(SysStepClock)) \
+    X(SysStepClock_last, offsetof(SysStepClock, last)) \
+    X(SysStepClock_remainder, offsetof(SysStepClock, remainder)) \
+    X(SysStepClock_started, offsetof(SysStepClock, started)) \
     X(InputJoystickState_size, sizeof(InputJoystickState)) \
     X(InputJoystickState_align, alignof(InputJoystickState)) \
     X(InputJoystickState_lX, offsetof(InputJoystickState, lX)) \

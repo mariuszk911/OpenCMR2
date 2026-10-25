@@ -2,6 +2,7 @@
 // (CMain::Initialize, which was WinMain's body).
 
 #include "platform/platform.h"
+#include "port/types.h"
 #include "port/sys.h"
 #include "diagnostics/timing.h"
 #include "main.h"

@@ -38,6 +38,7 @@ set_source_files_properties(${GAME_QIFIST_UNITS} TARGET_DIRECTORY cmr2_game
 # runtime behaviour the game calls.
 add_library(opencmr2_platform OBJECT
     platform/msvcrt.cpp
+    platform/amiga/amiga_sys.cpp
     port/intdiv.cpp
     platform/amiga/minigl_abi_check.cpp)
 target_include_directories(opencmr2_platform PUBLIC
@@ -86,3 +87,8 @@ target_include_directories(amiga_smoke PRIVATE
     ${AHI_SDK}/Developer/Include/C)
 target_link_directories(amiga_smoke PRIVATE ${MINIGL_LIBRARY_DIR})
 target_link_libraries(amiga_smoke PRIVATE minigl)
+
+# M1 Sys time/logging smoke: Domain B, no MiniGL. Not staged.
+add_executable(amiga_sys_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_time_test.c
+    platform/amiga/amiga_sys.cpp)
+target_include_directories(amiga_sys_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

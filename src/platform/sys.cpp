@@ -3,6 +3,7 @@
 #include "platform/platform.h"
 #include "platform/testing.h"
 #include "port/sys.h"
+#include "port/sys_steps.h"
 #include "port/gfx.h"
 
 #include <stdarg.h>
@@ -774,18 +775,7 @@ extern "C" double Sys_GetTicksPrecise(void)
 
 extern "C" int Sys_TakeSteps(SysStepClock *clock, int rate, int max)
 {
-    const DWORD now = Sys_GetTicks();
-    const DWORD elapsed = now - clock->last;
-    clock->last = now;
-    if (!clock->started || elapsed > 250) {
-        clock->started = 1;
-        clock->remainder = 0;
-        return 1;
-    }
-    const DWORD units = clock->remainder + elapsed * (DWORD)rate;
-    clock->remainder = units % 1000;
-    const int steps = (int)(units / 1000);
-    return steps < max ? steps : max;
+    return Sys_TakeStepsAt(clock, Sys_GetTicks(), rate, max);
 }
 
 extern "C" unsigned int Sys_GetUnixTime(void)

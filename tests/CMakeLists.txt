@@ -112,6 +112,12 @@ add_executable(amiga_stubs_test amiga_stubs.cpp
 target_include_directories(amiga_stubs_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_stubs COMMAND amiga_stubs_test)
 
+# Portable Sys time logic: the fixed-step clock and the Amiga E-clock/DateStamp
+# conversions. The timer.device calls are target-only.
+add_executable(sys_time_test sys_time.cpp)
+target_include_directories(sys_time_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME sys_time COMMAND sys_time_test)
+
 add_executable(net_session_test net_session.cpp)
 target_link_libraries(net_session_test PRIVATE opencmr2_net)
 target_compile_options(net_session_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")
