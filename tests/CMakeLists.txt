@@ -85,6 +85,16 @@ target_include_directories(wave_format_be_test PRIVATE ${PROJECT_SOURCE_DIR}/src
 target_compile_definitions(wave_format_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 add_test(NAME wave_format_be COMMAND wave_format_be_test)
 
+# M1 stubs: a black movie frame, an unavailable network and no-op Amiga
+# profiling. The Amiga target compiles the same translation units.
+add_executable(amiga_stubs_test amiga_stubs.cpp
+    ${PROJECT_SOURCE_DIR}/src/video/movie_stub.cpp
+    ${PROJECT_SOURCE_DIR}/src/net/net_stub.cpp
+    ${PROJECT_SOURCE_DIR}/src/platform/amiga/amiga_diagnostics.cpp
+    ${PROJECT_SOURCE_DIR}/src/diagnostics/observer.cpp)
+target_include_directories(amiga_stubs_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME amiga_stubs COMMAND amiga_stubs_test)
+
 add_executable(net_session_test net_session.cpp)
 target_link_libraries(net_session_test PRIVATE opencmr2_net)
 target_compile_options(net_session_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")

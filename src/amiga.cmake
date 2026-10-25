@@ -44,6 +44,26 @@ target_include_directories(opencmr2_platform PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
 target_include_directories(opencmr2_platform PRIVATE ${MINIGL_INCLUDE_DIR})
 
+# ---- M1 stubs (Domain B) ---------------------------------------------------
+# Compiled by the default build so the target compiler checks them now, but
+# not linked into the M0 scaffold: the movie stub calls Gfx_*, which arrives
+# with the MiniGL executor in M1. M1 links this library into the executable.
+add_library(opencmr2_amiga_stubs OBJECT
+    video/movie_stub.cpp
+    net/net_stub.cpp
+    platform/amiga/amiga_diagnostics.cpp)
+target_include_directories(opencmr2_amiga_stubs PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
+
+# The stubs are not in the M0 link. Build them, and link them once here with
+# throwaway Gfx/Sys definitions, so their new/delete and libnix dependencies
+# are proven on the target before M1 wires the real services.
+add_executable(amiga_stub_link_check
+    ${PROJECT_SOURCE_DIR}/tests/amiga/stub_link_check.c
+    $<TARGET_OBJECTS:opencmr2_amiga_stubs>)
+set_target_properties(amiga_stub_link_check PROPERTIES LINKER_LANGUAGE CXX)
+target_include_directories(amiga_stub_link_check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 # ---- M0 executable ---------------------------------------------------------
 # A scaffold that proves the cross toolchain, libnix startup and linker before
 # the game is wired in. M1 replaces it with the CMain entry point and the
