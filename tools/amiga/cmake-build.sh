@@ -11,7 +11,20 @@ set -eu
 : "${STACK:=262144}"
 : "${JOBS:=4}"
 
-cmake -S "$REPO" -B "$REPO/build/amiga" -G Ninja \
+BUILD_DIR="$REPO/build/amiga"
+
+# CMake caches absolute paths. The wrapper mounts the repository at /src inside
+# Docker and uses the host path natively, so a tree built in the other mode
+# cannot be reused; drop it instead of failing with a stale-cache error.
+if [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
+    cached=$(sed -n 's/^CMAKE_CACHEFILE_DIR:INTERNAL=//p' "$BUILD_DIR/CMakeCache.txt")
+    if [ -n "$cached" ] && [ "$cached" != "$BUILD_DIR" ]; then
+        printf 'cmake-build: %s was configured for %s; removing it\n' "$BUILD_DIR" "$cached" >&2
+        rm -rf "$BUILD_DIR"
+    fi
+fi
+
+cmake -S "$REPO" -B "$BUILD_DIR" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$REPO/cmake/amigaos.toolchain.cmake" \
     -DAMIGAOS=ON \
     -DPISTORM3D="$PISTORM3D" \
@@ -21,4 +34,4 @@ cmake -S "$REPO" -B "$REPO/build/amiga" -G Ninja \
     -DOPENCMR2_AMIGA_STACK="$STACK" \
     -DCMAKE_BUILD_TYPE=
 
-cmake --build "$REPO/build/amiga" --parallel "$JOBS"
+cmake --build "$BUILD_DIR" --parallel "$JOBS"

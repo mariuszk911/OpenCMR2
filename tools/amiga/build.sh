@@ -8,8 +8,8 @@
 # Do not invoke the cross compiler for a project build; use this script.
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPO=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+REPO=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd -P)
 
 IMAGE=${IMAGE:-opencmr2/amiga-toolchain:latest}
 CPU=${CPU:-68040}
@@ -57,7 +57,7 @@ done
 [ -d "$PISTORM3D_ROOT" ] || fail "PiStorm3D SDK not found: $PISTORM3D_ROOT (set PISTORM3D)"
 case "$PISTORM3D_ROOT" in
     /*) ;;
-    *) PISTORM3D_ROOT=$(CDPATH= cd -- "$PISTORM3D_ROOT" && pwd) ;;
+    *) PISTORM3D_ROOT=$(CDPATH= cd -- "$PISTORM3D_ROOT" && pwd -P) ;;
 esac
 
 SDK="$PISTORM3D_ROOT/SDK"
