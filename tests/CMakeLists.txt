@@ -123,6 +123,11 @@ add_executable(amiga_paths_test amiga_paths.cpp)
 target_include_directories(amiga_paths_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_paths COMMAND amiga_paths_test)
 
+# opencmr2.ini parsing and line-preserving rewriting for the Amiga Sys layer.
+add_executable(amiga_settings_test amiga_settings.cpp)
+target_include_directories(amiga_settings_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME amiga_settings COMMAND amiga_settings_test)
+
 add_executable(net_session_test net_session.cpp)
 target_link_libraries(net_session_test PRIVATE opencmr2_net)
 target_compile_options(net_session_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")

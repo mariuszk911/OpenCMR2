@@ -6,6 +6,7 @@
 #include "port/sys.h"
 #include "port/sys_steps.h"
 #include "platform/amiga/amiga_paths.h"
+#include "platform/amiga/amiga_settings.h"
 #include "platform/amiga/amiga_sys.h"
 #include "platform/amiga/amiga_sys_time.h"
 
@@ -23,7 +24,9 @@
 #include <proto/dos.h>
 #include <proto/timer.h>
 
+#include <map>
 #include <new>
+#include <string>
 
 // proto/timer.h declares these; libnix supplies SysBase and DOSBase.
 struct Device *TimerBase;
@@ -43,6 +46,9 @@ char s_commandLine[1024];
 char s_dataDir[256] = "PROGDIR:Data";
 char s_userDir[256] = "PROGDIR:";
 char s_lastMissing[512];
+
+std::map<std::string, std::string> *s_settings;
+bool s_settingsLoaded;
 
 const int kMaxListedFiles = 256;
 const int kListedNameSize = AMIGA_PATH_PART_MAX;
@@ -270,6 +276,116 @@ void SortNames(char names[][kListedNameSize], int count)
     }
 }
 
+bool ReadTextFile(const char *path, std::string *contents)
+{
+    FILE *file = fopen(path, "rb");
+    if (file == NULL)
+        return false;
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return false;
+    }
+    const long size = ftell(file);
+    if (size < 0) {
+        fclose(file);
+        return false;
+    }
+    rewind(file);
+    contents->resize((size_t)size);
+    size_t read = 0;
+    if (size > 0)
+        read = fread(&(*contents)[0], 1, (size_t)size, file);
+    const int closed = fclose(file);
+    return closed == 0 && read == (size_t)size;
+}
+
+bool WriteTextFile(const std::string &path, const std::string &contents)
+{
+    FILE *file = fopen(path.c_str(), "wb");
+    if (file == NULL)
+        return false;
+    size_t written = 0;
+    if (!contents.empty())
+        written = fwrite(contents.data(), 1, contents.size(), file);
+    const int closed = fclose(file);
+    return closed == 0 && written == contents.size();
+}
+
+bool SettingsPath(std::string *path)
+{
+    char native[kNativePathSize];
+    if (!RootFile(native, sizeof(native), s_userDir, "opencmr2.ini"))
+        return false;
+    *path = native;
+    return true;
+}
+
+void EnsureSettingsLoaded(void)
+{
+    if (s_settingsLoaded)
+        return;
+    s_settingsLoaded = true;
+    if (s_settings == NULL)
+        s_settings = new std::map<std::string, std::string>();
+    std::string path;
+    std::string contents;
+    if (!SettingsPath(&path) || !ReadTextFile(path.c_str(), &contents))
+        return;
+    AmigaSettings::Parse(contents, *s_settings);
+}
+
+const char *GetSettingText(const char *name)
+{
+    if (name == NULL)
+        return NULL;
+    EnsureSettingsLoaded();
+    const std::map<std::string, std::string>::const_iterator it =
+        s_settings->find(AmigaSettings::Lower(name));
+    return it != s_settings->end() ? it->second.c_str() : NULL;
+}
+
+bool SaveSetting(const std::string &section, const std::string &key, const std::string &value)
+{
+    std::string path;
+    if (!SettingsPath(&path))
+        return false;
+    std::string contents;
+    if (!ReadTextFile(path.c_str(), &contents)) {
+        Sys_Log("settings: cannot read %s (IoErr %ld)", path.c_str(), (long)IoErr());
+        return false;
+    }
+    std::string output;
+    if (!AmigaSettings::Rewrite(contents, section, key, value, &output)) {
+        Sys_Log("settings: value contains a line break");
+        return false;
+    }
+    const std::string temporary = path + ".tmp";
+    if (!WriteTextFile(temporary, output)) {
+        Sys_Log("settings: cannot write %s (IoErr %ld)", temporary.c_str(), (long)IoErr());
+        DeleteFile((STRPTR)temporary.c_str());
+        return false;
+    }
+    if (!Rename((STRPTR)temporary.c_str(), (STRPTR)path.c_str())) {
+        const LONG error = IoErr();
+        if (error != ERROR_OBJECT_EXISTS) {
+            Sys_Log("settings: cannot rename %s (IoErr %ld)", temporary.c_str(), (long)error);
+            DeleteFile((STRPTR)temporary.c_str());
+            return false;
+        }
+        if (!DeleteFile((STRPTR)path.c_str())) {
+            Sys_Log("settings: cannot replace %s (IoErr %ld)", path.c_str(), (long)IoErr());
+            DeleteFile((STRPTR)temporary.c_str());
+            return false;
+        }
+        if (!Rename((STRPTR)temporary.c_str(), (STRPTR)path.c_str())) {
+            Sys_Log("settings: cannot rename %s (IoErr %ld)", temporary.c_str(), (long)IoErr());
+            DeleteFile((STRPTR)temporary.c_str());
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 struct SysFile {
@@ -293,8 +409,10 @@ extern "C" void AmigaSys_SetDataDir(const char *path)
 
 extern "C" void AmigaSys_SetUserDir(const char *path)
 {
-    if (path != NULL && path[0] != '\0')
+    if (path != NULL && path[0] != '\0') {
         CopyPath(s_userDir, sizeof(s_userDir), path);
+        s_settingsLoaded = false;
+    }
 }
 
 extern "C" uint32_t Sys_GetTicks(void)
@@ -523,6 +641,52 @@ extern "C" void Sys_ListFiles(const char *directory, const char *pattern,
         if (!callback(names[i], context))
             break;
     }
+}
+
+extern "C" const char *Sys_GetInstallSetting(const char *name)
+{
+    const std::string key = AmigaSettings::Lower(name != NULL ? name : "");
+    if (key == "game_hdpath" || key == "game_cdpath")
+        return ".";
+    if (key == "install_version")
+        return "Full";
+    if (key == "language") {
+        const char *value = GetSettingText("install.language");
+        return value != NULL ? value : "English";
+    }
+    if (key == "sku_type") {
+        const char *value = GetSettingText("install.sku");
+        return value != NULL ? value : "EUROPE";
+    }
+    return "";
+}
+
+extern "C" int Sys_GetOption(const char *name, int fallback)
+{
+    const char *value = GetSettingText(name);
+    return value != NULL ? (int)strtol(value, NULL, 0) : fallback;
+}
+
+extern "C" const char *Sys_GetOptionText(const char *name, const char *fallback)
+{
+    const char *value = GetSettingText(name);
+    return value != NULL ? value : fallback;
+}
+
+extern "C" int Sys_SetOption(const char *name, int value)
+{
+    if (name == NULL)
+        return 0;
+    const std::string key = AmigaSettings::Lower(name);
+    const size_t dot = key.find('.');
+    if (dot == std::string::npos)
+        return 0;
+    char text[32];
+    snprintf(text, sizeof(text), "%d", value);
+    EnsureSettingsLoaded();
+    const bool saved = SaveSetting(key.substr(0, dot), key.substr(dot + 1), text);
+    (*s_settings)[key] = text;
+    return saved ? 1 : 0;
 }
 
 extern "C" void Sys_Sleep(uint32_t ms)

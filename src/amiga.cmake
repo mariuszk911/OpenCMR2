@@ -96,3 +96,7 @@ target_include_directories(amiga_sys_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_executable(amiga_sys_file_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_file_test.c
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_sys_file_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_executable(amiga_sys_settings_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_settings_test.c
+    platform/amiga/amiga_sys.cpp)
+target_include_directories(amiga_sys_settings_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
