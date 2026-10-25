@@ -25,7 +25,8 @@
 #define SMOKE_SECONDS 2
 #define RAWKEY_ESC 0x45
 
-static struct AHIRequest g_ahi;
+static struct MsgPort *g_ahi_port;
+static struct AHIRequest *g_ahi_req;
 static struct timerequest g_timer;
 static int g_ahi_open;
 static int g_timer_open;
@@ -108,11 +109,26 @@ static void OnIdle(void)
 
 static int OpenAhi(void)
 {
-    memset(&g_ahi, 0, sizeof(g_ahi));
-    g_ahi.ahir_Version = 4;
-    if (OpenDevice((CONST_STRPTR)"ahi.device", AHI_DEFAULT_UNIT,
-                   (struct IORequest *)&g_ahi, 0) != 0) {
+    g_ahi_port = CreateMsgPort();
+    if (g_ahi_port == NULL) {
+        printf("smoke: AHI port failed\n");
+        return 0;
+    }
+    g_ahi_req = (struct AHIRequest *)CreateIORequest(g_ahi_port, sizeof(struct AHIRequest));
+    if (g_ahi_req == NULL) {
+        printf("smoke: AHI request failed\n");
+        DeleteMsgPort(g_ahi_port);
+        g_ahi_port = NULL;
+        return 0;
+    }
+    g_ahi_req->ahir_Version = 4;
+    if (OpenDevice((CONST_STRPTR)"ahi.device", AHI_NO_UNIT,
+                   (struct IORequest *)g_ahi_req, 0) != 0) {
         printf("smoke: AHI open failed\n");
+        DeleteIORequest((struct IORequest *)g_ahi_req);
+        g_ahi_req = NULL;
+        DeleteMsgPort(g_ahi_port);
+        g_ahi_port = NULL;
         return 0;
     }
     g_ahi_open = 1;
@@ -149,9 +165,17 @@ static void CloseAll(void)
         printf("smoke: timer.device closed\n");
     }
     if (g_ahi_open) {
-        CloseDevice((struct IORequest *)&g_ahi);
+        CloseDevice((struct IORequest *)g_ahi_req);
         g_ahi_open = 0;
         printf("smoke: AHI closed\n");
+    }
+    if (g_ahi_req != NULL) {
+        DeleteIORequest((struct IORequest *)g_ahi_req);
+        g_ahi_req = NULL;
+    }
+    if (g_ahi_port != NULL) {
+        DeleteMsgPort(g_ahi_port);
+        g_ahi_port = NULL;
     }
 }
 
