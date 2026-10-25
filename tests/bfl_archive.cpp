@@ -38,6 +38,18 @@ void PutDisk32(unsigned char *p, DWORD value)
 #endif
 }
 
+void *Lookup(unsigned char *buffer, unsigned int size, const char *name)
+{
+    char query[16];
+    GenericFile file;
+
+    std::strcpy(query, name);
+    file.buffer = buffer;
+    file.fileSize = size;
+    file.didFileLoad = TRUE;
+    return CGenericFileLoader::FindFileInArchive(&file, query, NULL);
+}
+
 } // namespace
 
 // The fixture calls only FindFileInArchive; these stubs satisfy the other
@@ -120,6 +132,37 @@ int main()
     char missing[] = "missing";
     Check(CGenericFileLoader::FindFileInArchive(&file, missing, &id) == NULL,
           "missing name is not found");
+
+    // Malformed and truncated archives must be rejected without reading
+    // outside the buffer.
+    unsigned char bad[sizeof(buffer)];
+    std::memcpy(bad, buffer, sizeof(bad));
+    Check(Lookup(bad, 3, "hello") == NULL, "fileSize below the trailer is rejected");
+
+    std::memcpy(bad, buffer, sizeof(bad));
+    PutDisk32(bad + directoryEnd, directoryEnd + 1);
+    Check(Lookup(bad, sizeof(bad), "hello") == NULL,
+          "directory offset past the trailer is rejected");
+
+    std::memcpy(bad, buffer, sizeof(bad));
+    PutDisk32(bad + directoryEnd, directoryEnd - 2);
+    Check(Lookup(bad, sizeof(bad), "hello") == NULL,
+          "truncated entry header is rejected");
+
+    std::memcpy(bad, buffer, sizeof(bad));
+    PutDisk32(bad + directoryOffset + 8, 260);
+    Check(Lookup(bad, sizeof(bad), "hello") == NULL,
+          "nameLength above the name buffer is rejected");
+
+    std::memcpy(bad, buffer, sizeof(bad));
+    PutDisk32(bad + directoryOffset + 8, 60);
+    Check(Lookup(bad, sizeof(bad), "hello") == NULL,
+          "nameLength past the directory is rejected");
+
+    std::memcpy(bad, buffer, sizeof(bad));
+    PutDisk32(bad + directoryOffset + 4, sizeof(bad));
+    Check(Lookup(bad, sizeof(bad), "hello") == NULL,
+          "data offset past the file is rejected");
 
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

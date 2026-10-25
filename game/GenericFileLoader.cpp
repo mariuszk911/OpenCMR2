@@ -53,29 +53,49 @@ static_assert(sizeof(ArchiveEntry) == 12, "BFL directory stride");
 // FUNCTION: CMR2 0x004a9c70
 void *CGenericFileLoader::FindFileInArchive(GenericFile *pFile, char *name, DWORD *pId)
 {
+    BYTE *pBuffer;
     BYTE *pEntry;
+    BYTE *pDirectoryEnd;
     DWORD directoryOffset;
+    DWORD remaining;
     int offset;
     unsigned int nameLen;
     unsigned int pad;
     char entryName[260];
 
+    // PORT: AMIGA: a malformed or truncated archive must not read outside the
+    // file buffer.
+    if (pFile == NULL || pFile->buffer == NULL || pFile->fileSize < 4)
+        return NULL;
     _strlwr(name);
+    pBuffer = (BYTE *)pFile->buffer;
+    pDirectoryEnd = pBuffer + pFile->fileSize - 4;
     // PORT: AMIGA: the directory offset and ArchiveEntry fields are
     // little-endian on disk. Read them without casting the entry.
-    directoryOffset = ReadLE32((BYTE *)pFile->buffer + pFile->fileSize - 4);
-    pEntry = (BYTE *)pFile->buffer + directoryOffset;
-    while (pEntry < (BYTE *)pFile->buffer + pFile->fileSize - 4) {
+    directoryOffset = ReadLE32(pDirectoryEnd);
+    if (directoryOffset > (DWORD)(pDirectoryEnd - pBuffer))
+        return NULL;
+    pEntry = pBuffer + directoryOffset;
+    while (pEntry < pDirectoryEnd) {
+        remaining = (DWORD)(pDirectoryEnd - pEntry);
+        if (remaining < sizeof(ArchiveEntry))
+            return NULL;
         if (pId != NULL)
             *pId = ReadLE32(pEntry);
         nameLen = ReadLE32(pEntry + 8);
         offset = (int)ReadLE32(pEntry + 4);
         pEntry += sizeof(ArchiveEntry);
+        remaining -= sizeof(ArchiveEntry);
+        if (nameLen > remaining || nameLen >= sizeof(entryName))
+            return NULL;
         memcpy(entryName, pEntry, nameLen);
         entryName[nameLen] = '\0';
-        if (strcmp(entryName, name) == 0)
-            return (BYTE *)pFile->buffer + offset;
-        pad = (int)nameLen % 4;
+        if (strcmp(entryName, name) == 0) {
+            if (offset < 0 || (DWORD)offset >= pFile->fileSize)
+                return NULL;
+            return pBuffer + offset;
+        }
+        pad = nameLen % 4;
         if (pad != 0)
             pEntry += nameLen - pad + 4;
         else
