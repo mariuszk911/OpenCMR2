@@ -7,3 +7,5 @@
 *.swo
 *.py[cod]
 __pycache__/
+SDKs/
+.kilo/

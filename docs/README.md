@@ -13,6 +13,7 @@ These guides describe the maintained workflow and current project scope.
 | [Raw-access audit](64bit-raw-access.md) | Generated i386/x86-64 layout review and remaining unresolved accesses. |
 | [Network play](NETWORK.md) | LAN, VPN and internet setup, protocol and tests. |
 | [Video](VIDEO.md) | Bink decoder scope and validation. |
+| [AmigaOS/PiStorm port](AMIGA_PORT.md) | Target requirements, build contract, ABI boundaries and MiniGL mapping. |
 | [Releases and Windows builds](WINDOWS.md) | Release packages and cross-building Windows from Linux. |
 
 Frozen regression inputs and their provenance remain in
