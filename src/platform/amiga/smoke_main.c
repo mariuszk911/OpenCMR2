@@ -18,12 +18,12 @@
 #include <devices/timer.h>
 #include <devices/ahi.h>
 #include <proto/exec.h>
+#include <proto/dos.h>
 #include <proto/minigl.h>
 
 #define SMOKE_WIDTH  640
 #define SMOKE_HEIGHT 480
 #define SMOKE_SECONDS 2
-#define RAWKEY_ESC 0x45
 
 static struct MsgPort *g_ahi_port;
 static struct AHIRequest *g_ahi_req;
@@ -52,6 +52,24 @@ static void LogStack(const char *phase)
     }
 }
 
+static int ScreenshotExists(const char *path)
+{
+    BPTR file = Open((STRPTR)path, MODE_OLDFILE);
+    LONG size;
+
+    if (file == 0)
+        return 0;
+    if (Seek(file, 0, OFFSET_END) == -1) {
+        Close(file);
+        return 0;
+    }
+    /* AmigaDOS Seek returns the position before the seek, so this second call
+     * returns the EOF offset without moving the file. */
+    size = Seek(file, 0, OFFSET_CURRENT);
+    Close(file);
+    return size > 0;
+}
+
 static int ReadTime(ULONG *secs, ULONG *micros)
 {
     if (!g_timer_open)
@@ -66,17 +84,20 @@ static int ReadTime(ULONG *secs, ULONG *micros)
 
 static ULONG ElapsedSeconds(ULONG secs, ULONG micros)
 {
+    ULONG whole;
+
     if (secs < g_start_secs)
         return 0;
-    if (secs == g_start_secs && micros < g_start_micros)
-        return 0;
-    return secs - g_start_secs;
+    whole = secs - g_start_secs;
+    if (whole > 0 && micros < g_start_micros)
+        whole--;
+    return whole;
 }
 
 static void OnKey(char key)
 {
     printf("smoke: key %d\n", (int)(unsigned char)key);
-    if ((unsigned char)key == RAWKEY_ESC || (unsigned char)key == 27) {
+    if ((unsigned char)key == 27) {
         printf("smoke: escape\n");
         g_exit_requested = 1;
         mglExit();
@@ -220,13 +241,17 @@ int main(int argc, char **argv)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     mglUnlockDisplay();
     mglSwitchDisplay();
-    if (mglLockDisplay()) {
-        mglWriteShotPPM((char *)shot);
-        mglUnlockDisplay();
-        printf("smoke: screenshot %s\n", shot);
-    } else {
+    if (!mglLockDisplay()) {
         printf("smoke: screenshot lock failed\n");
+        goto fail;
     }
+    mglWriteShotPPM((char *)shot);
+    mglUnlockDisplay();
+    if (!ScreenshotExists(shot)) {
+        printf("smoke: screenshot missing or empty: %s\n", shot);
+        goto fail;
+    }
+    printf("smoke: screenshot %s\n", shot);
 
     fflush(stdout);
     printf("smoke: entering main loop\n");
