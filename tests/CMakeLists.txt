@@ -118,6 +118,11 @@ add_executable(sys_time_test sys_time.cpp)
 target_include_directories(sys_time_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME sys_time COMMAND sys_time_test)
 
+# Pure game-path helpers for the Amiga Sys layer.
+add_executable(amiga_paths_test amiga_paths.cpp)
+target_include_directories(amiga_paths_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME amiga_paths COMMAND amiga_paths_test)
+
 add_executable(net_session_test net_session.cpp)
 target_link_libraries(net_session_test PRIVATE opencmr2_net)
 target_compile_options(net_session_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")

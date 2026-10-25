@@ -9,6 +9,10 @@ extern "C" {
 /* Stores the command line returned by Sys_GetCommandLine. */
 void AmigaSys_SetCommandLine(const char *line);
 
+/* Game data and user directories. Defaults: PROGDIR:Data and PROGDIR:. */
+void AmigaSys_SetDataDir(const char *path);
+void AmigaSys_SetUserDir(const char *path);
+
 #ifdef __cplusplus
 }
 #endif
