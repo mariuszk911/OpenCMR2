@@ -48,6 +48,12 @@ add_executable(disk_ownership_test disk_ownership.cpp
 target_include_directories(disk_ownership_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME disk_ownership COMMAND disk_ownership_test)
 
+# M0.7 port-owned slice: file offsets and pointer writes stay little-endian.
+add_executable(disk_endian_test disk_endian.cpp
+    ${PROJECT_SOURCE_DIR}/src/port/disk.cpp)
+target_include_directories(disk_endian_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME disk_endian COMMAND disk_endian_test)
+
 # The -malign-int workaround keeps 64-bit division in a Domain B TU; these
 # helpers must be bit-exact against the original expressions.
 add_executable(intdiv_test intdiv.cpp ${PROJECT_SOURCE_DIR}/src/port/intdiv.cpp)

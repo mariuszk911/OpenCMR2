@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "port/align.h"
+#include "port/endian.h"
 
 struct OPENCMR2_PORT_ALIGN4 DiskRun {
     unsigned short disk, native, size;
@@ -32,12 +33,11 @@ struct OPENCMR2_PORT_ALIGN4 DiskLayout {
     int pointerCount;
 };
 
-/* The 32-bit value at offset off of a file record. -1 means none. */
+/* The little-endian 32-bit value at offset off of a file record. -1 means
+ * none. Big-endian targets swap here; little-endian targets are a no-op. */
 static inline uint32_t Disk_Offset(const void *record, unsigned off)
 {
-    uint32_t value;
-    memcpy(&value, (const char *)record + off, sizeof(value));
-    return value;
+    return ReadLE32((const char *)record + off);
 }
 
 /* Reports an offset that is not a record of the array it should point into. */

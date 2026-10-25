@@ -59,7 +59,7 @@ void Disk_Pack(void *record, const void *native, const DiskLayout *layout)
         uintptr_t pointer;
         memcpy(&pointer, (const char *)native + layout->pointers[i].native, sizeof(pointer));
         uint32_t low = (uint32_t)pointer;
-        memcpy((char *)record + layout->pointers[i].disk, &low, sizeof(low));
+        WriteLE32((char *)record + layout->pointers[i].disk, low);
     }
 }
 

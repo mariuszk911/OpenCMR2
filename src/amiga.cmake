@@ -16,11 +16,12 @@ target_compile_options(opencmr2_domain_a INTERFACE
     "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/port/msvcrt.h")
 
 # Not linked into the M0 scaffold yet: M1 adds the platform services, then the
-# executable links this library. port/disk.cpp joins after M0.8 removes its
-# host allocation-size calls.
+# executable links this library. port/disk.cpp is Domain A too; M0.8 removed
+# its host allocation-size calls.
 add_library(cmr2_game OBJECT
     ${GAME_SOURCES}
     diagnostics/observer.cpp
+    port/disk.cpp
     port/replay_disk.cpp)
 # M0 does not link the game yet, so keep it out of the default `all` target.
 # M1 removes this once the platform services exist and the executable links it.
