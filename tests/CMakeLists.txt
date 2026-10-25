@@ -119,6 +119,10 @@ target_include_directories(sys_time_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME sys_time COMMAND sys_time_test)
 
 # Pure game-path helpers for the Amiga Sys layer.
+add_executable(amiga_keys_test amiga_keys.cpp)
+target_include_directories(amiga_keys_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME amiga_keys COMMAND amiga_keys_test)
+
 add_executable(amiga_paths_test amiga_paths.cpp)
 target_include_directories(amiga_paths_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_paths COMMAND amiga_paths_test)

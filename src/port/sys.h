@@ -96,8 +96,7 @@ int Sys_MessageBox(const char *title, const char *text, int buttons);
 
 /* Logs a line to stderr and opencmr2.log in the user directory. */
 void Sys_Log(const char *format, ...);
-/* Logs the failure and terminates the process. The host also shows a message
-   box; the Amiga requester lands with the Intuition/IDCMP slice. */
+/* Logs the failure, shows a message box and terminates the process. */
 void Sys_Fatal(const char *format, ...);
 /* Exits the process now with the given code (no game shutdown). */
 void Sys_Exit(int code);

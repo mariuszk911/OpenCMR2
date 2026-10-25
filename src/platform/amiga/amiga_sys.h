@@ -18,6 +18,10 @@ const char *AmigaSys_GetUserDir(void);
    missing. Returns 1 when the file exists or was written. */
 int AmigaSys_EnsureSettingsFile(void);
 
+/* Registers the Intuition window whose IDCMP port feeds Sys_PollEvent/
+   Sys_WaitEvent. The MiniGL executor calls this after creating its context. */
+void AmigaSys_SetWindow(void *window);
+
 #ifdef __cplusplus
 }
 #endif

@@ -106,3 +106,7 @@ add_executable(amiga_platform_test ${PROJECT_SOURCE_DIR}/tests/amiga/platform_te
     platform/amiga/amiga_platform.cpp
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_platform_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
+    platform/amiga/amiga_sys.cpp)
+target_include_directories(amiga_event_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

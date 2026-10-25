@@ -5,6 +5,7 @@
 // cannot boot on this file alone yet.
 #include "port/sys.h"
 #include "port/sys_steps.h"
+#include "platform/amiga/amiga_keys.h"
 #include "platform/amiga/amiga_paths.h"
 #include "platform/amiga/amiga_settings.h"
 #include "platform/amiga/amiga_sys.h"
@@ -20,8 +21,10 @@
 #include <exec/ports.h>
 #include <devices/timer.h>
 #include <dos/dos.h>
+#include <intuition/intuition.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
+#include <proto/intuition.h>
 #include <proto/timer.h>
 
 #include <map>
@@ -30,6 +33,7 @@
 
 // proto/timer.h declares these; libnix supplies SysBase and DOSBase.
 struct Device *TimerBase;
+struct IntuitionBase *IntuitionBase;
 
 namespace {
 
@@ -55,6 +59,7 @@ const int kListedNameSize = AMIGA_PATH_PART_MAX;
 const size_t kNativePathSize = 640;
 bool s_listFull;
 bool s_logWriteFailed;
+struct Window *s_inputWindow;
 
 int EClockNow(uint64_t *value)
 {
@@ -384,6 +389,39 @@ bool SaveSetting(const std::string &section, const std::string &key, const std::
         }
     }
     return true;
+}
+
+int EnsureIntuition(void)
+{
+    if (IntuitionBase != NULL)
+        return 1;
+    IntuitionBase = (struct IntuitionBase *)OpenLibrary((STRPTR)"intuition.library", 39);
+    if (IntuitionBase == NULL)
+        Sys_Log("intuition.library: OpenLibrary failed");
+    return IntuitionBase != NULL;
+}
+
+struct IntuiText *BuildBodyText(char *body, struct IntuiText *lines, int maxLines)
+{
+    int count = 0;
+    char *line = body;
+    while (line != NULL && count < maxLines) {
+        char *end = strchr(line, '\n');
+        if (end != NULL)
+            *end = '\0';
+        lines[count].FrontPen = 1;
+        lines[count].BackPen = 0;
+        lines[count].DrawMode = JAM2;
+        lines[count].LeftEdge = 0;
+        lines[count].TopEdge = 0;
+        lines[count].IText = (UBYTE *)line;
+        lines[count].NextText = NULL;
+        if (count > 0)
+            lines[count - 1].NextText = &lines[count];
+        ++count;
+        line = end != NULL ? end + 1 : NULL;
+    }
+    return count > 0 ? &lines[0] : NULL;
 }
 
 } // namespace
@@ -739,6 +777,157 @@ extern "C" void Sys_Sleep(uint32_t ms)
                 (long)s_timerRequest.tr_node.io_Error);
 }
 
+extern "C" void AmigaSys_SetWindow(void *window)
+{
+    s_inputWindow = (struct Window *)window;
+}
+
+extern "C" int Sys_PollEvent(SysEvent *event)
+{
+    struct IntuiMessage *message;
+
+    if (event == NULL || s_inputWindow == NULL || s_inputWindow->UserPort == NULL)
+        return 0;
+    while ((message = (struct IntuiMessage *)GetMsg(s_inputWindow->UserPort)) != NULL) {
+        const ULONG messageClass = message->Class;
+        int handled = 0;
+
+        if (messageClass == IDCMP_CLOSEWINDOW) {
+            event->type = SYS_EVENT_QUIT;
+            event->key = 0;
+            event->character = 0;
+            event->repeat = 0;
+            handled = 1;
+        } else if (messageClass == IDCMP_ACTIVEWINDOW) {
+            event->type = SYS_EVENT_FOCUS_GAINED;
+            event->key = 0;
+            event->character = 0;
+            event->repeat = 0;
+            handled = 1;
+        } else if (messageClass == IDCMP_INACTIVEWINDOW) {
+            event->type = SYS_EVENT_FOCUS_LOST;
+            event->key = 0;
+            event->character = 0;
+            event->repeat = 0;
+            handled = 1;
+        } else if (messageClass == IDCMP_RAWKEY) {
+            // Releases are not events: the game polls the held-key state.
+            const int dik = AmigaKey_ToDIK(message->Code);
+            if (dik != 0 && (message->Code & 0x80) == 0) {
+                event->type = SYS_EVENT_KEY_DOWN;
+                event->key = dik;
+                event->character = 0;
+                event->repeat = (message->Qualifier & IEQUALIFIER_REPEAT) != 0;
+                handled = 1;
+            }
+        } else if (messageClass == IDCMP_VANILLAKEY) {
+            event->type = SYS_EVENT_TEXT;
+            event->key = 0;
+            event->character = message->Code;
+            event->repeat = 0;
+            handled = 1;
+        }
+        ReplyMsg((struct Message *)message);
+        if (handled)
+            return 1;
+    }
+    return 0;
+}
+
+extern "C" int Sys_WaitEvent(SysEvent *event)
+{
+    if (event == NULL)
+        return 0;
+    if (s_inputWindow == NULL || s_inputWindow->UserPort == NULL) {
+        // No MiniGL window yet: idle instead of spinning the event loop.
+        Sys_Sleep(20);
+        return 0;
+    }
+    if (Sys_PollEvent(event))
+        return 1;
+    WaitPort(s_inputWindow->UserPort);
+    return Sys_PollEvent(event);
+}
+
+extern "C" int Sys_CreateWindow(const char *title, int fullscreen)
+{
+    // MiniGL owns the window and screen; the renderer creates them when it
+    // initializes the context. The game only needs to know it may continue.
+    (void)title;
+    (void)fullscreen;
+    return 1;
+}
+
+extern "C" void Sys_DestroyWindow(void)
+{
+    // Do not close a window owned by MiniGL; just stop reading its port.
+    s_inputWindow = NULL;
+}
+
+extern "C" void Sys_ShowCursor(int show)
+{
+    // The MiniGL/input slice owns the pointer; hiding it here would need the
+    // window's pointer sprite and is deferred with mouse capture.
+    (void)show;
+}
+
+extern "C" void Sys_GetDesktopSize(int *width, int *height)
+{
+    if (width == NULL || height == NULL)
+        return;
+    if (!EnsureIntuition()) {
+        *width = 640;
+        *height = 480;
+        return;
+    }
+    struct Screen *screen = LockPubScreen(NULL);
+    if (screen == NULL) {
+        Sys_Log("intuition: no default public screen");
+        *width = 640;
+        *height = 480;
+        return;
+    }
+    *width = screen->Width;
+    *height = screen->Height;
+    UnlockPubScreen(NULL, screen);
+}
+
+extern "C" int Sys_MessageBox(const char *title, const char *text, int buttons)
+{
+    char body[kNativePathSize];
+    struct IntuiText lines[16];
+    struct IntuiText positive;
+    struct IntuiText negative;
+
+    if (title == NULL)
+        title = "OpenCMR2";
+    if (text == NULL)
+        text = "";
+    if (!EnsureIntuition())
+        return buttons == SYS_MESSAGEBOX_RETRY_CANCEL ? SYS_MESSAGEBOX_RESULT_CANCEL
+                                                       : SYS_MESSAGEBOX_RESULT_OK;
+    CopyPath(body, sizeof(body), text);
+    struct IntuiText *bodyText = BuildBodyText(body, lines, 16);
+    if (bodyText == NULL)
+        return SYS_MESSAGEBOX_RESULT_OK;
+
+    memset(&positive, 0, sizeof(positive));
+    positive.FrontPen = 1;
+    positive.DrawMode = JAM2;
+    positive.IText = (UBYTE *)"Retry";
+    memset(&negative, 0, sizeof(negative));
+    negative.FrontPen = 1;
+    negative.DrawMode = JAM2;
+    negative.IText = (UBYTE *)"Cancel";
+
+    if (buttons == SYS_MESSAGEBOX_RETRY_CANCEL) {
+        const BOOL retry = AutoRequest(NULL, bodyText, &positive, &negative, 0, 0, 400, 0);
+        return retry ? SYS_MESSAGEBOX_RESULT_RETRY : SYS_MESSAGEBOX_RESULT_CANCEL;
+    }
+    AutoRequest(NULL, bodyText, NULL, NULL, 0, 0, 400, 0);
+    return SYS_MESSAGEBOX_RESULT_OK;
+}
+
 extern "C" void Sys_Log(const char *format, ...)
 {
     char line[1024];
@@ -777,13 +966,17 @@ extern "C" void Sys_Fatal(const char *format, ...)
     vsnprintf(line, sizeof(line), format, args);
     va_end(args);
     Sys_Log("fatal: %s", line);
-    // The requester lands with the Intuition/IDCMP slice of M1.
+    Sys_MessageBox("OpenCMR2", line, SYS_MESSAGEBOX_OK);
     Sys_Exit(1);
 }
 
 extern "C" void Sys_Exit(int code)
 {
     CloseTime();
+    if (IntuitionBase != NULL) {
+        CloseLibrary((struct Library *)IntuitionBase);
+        IntuitionBase = NULL;
+    }
     if (s_logHandle != 0) {
         Close(s_logHandle);
         s_logHandle = 0;
