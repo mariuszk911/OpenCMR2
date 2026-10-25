@@ -1,5 +1,6 @@
 #include "port/sys.h"
 #include "port/vector_sprite.h"
+#include "port/endian.h"
 #include <stdio.h>
 #include "FloatToInt.h"
 #include <stddef.h>
@@ -990,8 +991,11 @@ TGAImageInfo *CGraphics::ParseTGAHeader(BYTE *pData)
 {
     TGAHeader *pHeader = (TGAHeader *)pData;
 
-    if (pHeader == NULL || pHeader->colourMapType != 0 || pHeader->xOrigin != 0 || pHeader->yOrigin != 0 ||
-        (pHeader->descriptor & 0x70) != 0 || pHeader->imageType == 3 || pHeader->imageType != 2)
+    // PORT: AMIGA: the TGA origin and dimensions are little-endian on disk;
+    // read them without mutating the file buffer, which reloads reuse.
+    if (pHeader == NULL || pHeader->colourMapType != 0 || ReadLE16(&pHeader->xOrigin) != 0 ||
+        ReadLE16(&pHeader->yOrigin) != 0 || (pHeader->descriptor & 0x70) != 0 ||
+        pHeader->imageType == 3 || pHeader->imageType != 2)
         return NULL;
 
     if (pHeader->bitsPerPixel == 24) {
@@ -1003,8 +1007,9 @@ TGAImageInfo *CGraphics::ParseTGAHeader(BYTE *pData)
             return NULL;
         m_tgaImageInfo.bytesPerPixel = 4;
     }
-    m_tgaImageInfo.width = pHeader->width;
-    m_tgaImageInfo.height = pHeader->height;
+    // PORT: AMIGA: the TGA dimensions are little-endian on disk.
+    m_tgaImageInfo.width = ReadLE16(&pHeader->width);
+    m_tgaImageInfo.height = ReadLE16(&pHeader->height);
     m_tgaImageInfo.pixels = pData + pHeader->idLength + sizeof(TGAHeader);
     return &m_tgaImageInfo;
 }
@@ -2609,8 +2614,19 @@ Texture *CGraphics::LoadDDSTexture(DDSFile *pDDS, Texture *pTexture)
     int width;
     int height;
 
-    width = pDDS->desc.dwWidth;
-    height = pDDS->desc.dwHeight;
+    header = pDDS->desc;
+    // PORT: AMIGA: the DDS header fields this loader uses are little-endian on
+    // disk; convert a local copy so reloads still see the original bytes.
+    header.dwFlags = ReadLE32(&header.dwFlags);
+    header.dwWidth = ReadLE32(&header.dwWidth);
+    header.dwHeight = ReadLE32(&header.dwHeight);
+    header.dwLinearSize = ReadLE32(&header.dwLinearSize);
+    header.ddpfPixelFormat.dwFourCC = ReadLE32(&header.ddpfPixelFormat.dwFourCC);
+    header.ddpfPixelFormat.dwRGBBitCount = ReadLE32(&header.ddpfPixelFormat.dwRGBBitCount);
+    header.ddpfPixelFormat.dwRGBAlphaBitMask = ReadLE32(&header.ddpfPixelFormat.dwRGBAlphaBitMask);
+
+    width = header.dwWidth;
+    height = header.dwHeight;
     if (width != 2 && width != 4 && width != 8 && width != 16 && width != 32 && width != 64 &&
         width != 128 && width != 256 && width != 512 && width != 1024 && width != 2048)
         _splitpath(pTexture->name, NULL, NULL, CFrontend::m_stringDest, NULL);
@@ -2618,7 +2634,6 @@ Texture *CGraphics::LoadDDSTexture(DDSFile *pDDS, Texture *pTexture)
         height != 128 && height != 256 && height != 512 && height != 1024 && height != 2048)
         _splitpath(pTexture->name, NULL, NULL, CFrontend::m_stringDest, NULL);
 
-    header = pDDS->desc;
     if (header.ddpfPixelFormat.dwFourCC == MAKEFOURCC('D', 'X', 'T', '1'))
         pTexture->flags |= 0x4000;
     else if (header.ddpfPixelFormat.dwFourCC == MAKEFOURCC('D', 'X', 'T', '5'))
@@ -2679,7 +2694,7 @@ Texture *CGraphics::LoadDDSTexture(DDSFile *pDDS, Texture *pTexture)
     }
 
     if (!(pTexture->flags & 0x20) || !(g_pGraphics->field913_0x3bc & 0x10)) {
-        CreateTextureSurface(pTexture, pDDS->desc.dwWidth, pDDS->desc.dwHeight, pTexture->flags);
+        CreateTextureSurface(pTexture, header.dwWidth, header.dwHeight, pTexture->flags);
         Gfx_CopyTexture(pTexture->pSurface, pTemp);
         Gfx_DestroyTexture(pTemp);
         pTemp = NULL;
@@ -2687,7 +2702,7 @@ Texture *CGraphics::LoadDDSTexture(DDSFile *pDDS, Texture *pTexture)
         tmpTexture.pSurface = Gfx_CreateTexture(header.dwWidth, header.dwHeight, m_pTextureManager->textureInfo2->gfxFormat, 1,
                                                 GFX_TEXTURE_STAGING);
         Gfx_CopyTexture(tmpTexture.pSurface, pTemp);
-        CreateTextureSurface(pTexture, pDDS->desc.dwWidth, pDDS->desc.dwHeight, pTexture->flags);
+        CreateTextureSurface(pTexture, header.dwWidth, header.dwHeight, pTexture->flags);
         GenerateBumpMap(&tmpTexture, pTexture);
         Gfx_DestroyTexture(tmpTexture.pSurface);
         tmpTexture.pSurface = NULL;
@@ -2699,7 +2714,7 @@ Texture *CGraphics::LoadDDSTexture(DDSFile *pDDS, Texture *pTexture)
         GetMipMapSurfaces(pTexture);
     if ((g_pGraphics->field913_0x3bc & 3) && (pTexture->flags & 0x10))
         m_unk0x0065fa2c += GetMipMapPixelCount(pTexture);
-    m_unk0x0065fa2c += pDDS->desc.dwHeight * pDDS->desc.dwWidth;
+    m_unk0x0065fa2c += header.dwHeight * header.dwWidth;
     if ((g_pGraphics->field913_0x3bc & 3) && (pTexture->flags & 0x10))
         BltMipMaps(pTexture);
     if (!(pTexture->flags & 0x1000))
