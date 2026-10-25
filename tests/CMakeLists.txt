@@ -54,6 +54,21 @@ add_executable(disk_endian_test disk_endian.cpp
 target_include_directories(disk_endian_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME disk_endian COMMAND disk_endian_test)
 
+# M0.7 swap-table check. The forced big-endian branch runs on the LE host so
+# the generated offsets and the Pack/Unpack round trip are covered here.
+add_executable(disk_swaps_test disk_swaps.cpp
+    ${PROJECT_SOURCE_DIR}/src/port/disk.cpp)
+target_include_directories(disk_swaps_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/game
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/port/compat)
+target_compile_options(disk_swaps_test PRIVATE
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+    -fms-extensions)
+target_compile_definitions(disk_swaps_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+add_test(NAME disk_swaps COMMAND disk_swaps_test)
+
 # The -malign-int workaround keeps 64-bit division in a Domain B TU; these
 # helpers must be bit-exact against the original expressions.
 add_executable(intdiv_test intdiv.cpp ${PROJECT_SOURCE_DIR}/src/port/intdiv.cpp)

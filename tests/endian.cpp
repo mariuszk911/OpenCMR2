@@ -40,6 +40,13 @@ static int TestStoredByteOrder()
     REQUIRE(bytes[0] == 0xaa && bytes[1] == 0x00 && bytes[2] == 0x00 &&
             bytes[3] == 0x80 && bytes[4] == 0x3f && bytes[5] == 0xaa);
 
+    memset(bytes, 0xaa, sizeof(bytes));
+    WriteLE64(bytes + 1, 0x0123456789abcdefull);
+    REQUIRE(bytes[0] == 0xaa && bytes[1] == 0xef && bytes[2] == 0xcd && bytes[3] == 0xab &&
+            bytes[4] == 0x89 && bytes[5] == 0x67 && bytes[6] == 0x45 && bytes[7] == 0x23 &&
+            bytes[8] == 0x01 && bytes[9] == 0xaa);
+    REQUIRE(ReadLE64(bytes + 1) == 0x0123456789abcdefull);
+
     /* Literal little-endian input, read from an unaligned address. */
     {
         static const unsigned char raw16[] = {0xff, 0x34, 0x12};
@@ -78,6 +85,12 @@ static int TestUnalignedRoundTrips()
 
         {
             const float value = -1.5f - (float)offset;
+            memset(buffer, 0xcd, sizeof(buffer));
+            WriteLE64(buffer + offset, 0xfedcba9876543210ull);
+            REQUIRE(ReadLE64(buffer + offset) == 0xfedcba9876543210ull);
+            if (offset > 0) REQUIRE(buffer[offset - 1] == 0xcd);
+            REQUIRE(buffer[offset + 8] == 0xcd);
+
             memset(buffer, 0xcd, sizeof(buffer));
             WriteLEFloat(buffer + offset, value);
             REQUIRE(FloatBits(ReadLEFloat(buffer + offset)) == FloatBits(value));

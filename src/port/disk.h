@@ -24,6 +24,14 @@ struct OPENCMR2_PORT_ALIGN4 DiskPointer {
     unsigned short disk, native;
 };
 
+/* A scalar field to byte-swap on big-endian: file offset, native offset and
+ * width (2, 4 or 8). Pointer offsets stay in DiskPointer. */
+struct DiskSwap {
+    unsigned short disk;
+    unsigned short native;
+    unsigned char size;
+};
+
 struct OPENCMR2_PORT_ALIGN4 DiskLayout {
     unsigned short diskSize;
     unsigned short nativeSize;
@@ -31,6 +39,8 @@ struct OPENCMR2_PORT_ALIGN4 DiskLayout {
     int runCount;
     const DiskPointer *pointers;
     int pointerCount;
+    const DiskSwap *swaps;
+    int swapCount;
 };
 
 /* The little-endian 32-bit value at offset off of a file record. -1 means

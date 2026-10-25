@@ -110,6 +110,16 @@ static inline float ReadLEFloat(const void *source)
     return value;
 }
 
+static inline uint64_t ReadLE64(const void *source)
+{
+    uint64_t value;
+    memcpy(&value, source, sizeof(value));
+#if OPENCMR2_ENDIAN_NEEDS_SWAP
+    value = Swap64(value);
+#endif
+    return value;
+}
+
 static inline void WriteLE16(void *destination, uint16_t value)
 {
 #if OPENCMR2_ENDIAN_NEEDS_SWAP
@@ -122,6 +132,14 @@ static inline void WriteLE32(void *destination, uint32_t value)
 {
 #if OPENCMR2_ENDIAN_NEEDS_SWAP
     value = Swap32(value);
+#endif
+    memcpy(destination, &value, sizeof(value));
+}
+
+static inline void WriteLE64(void *destination, uint64_t value)
+{
+#if OPENCMR2_ENDIAN_NEEDS_SWAP
+    value = Swap64(value);
 #endif
     memcpy(destination, &value, sizeof(value));
 }

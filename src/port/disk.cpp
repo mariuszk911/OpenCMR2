@@ -35,6 +35,45 @@ size_t FindBuffer(void *buffer)
     return s_buffers.size();
 }
 
+#if OPENCMR2_ENDIAN_NEEDS_SWAP
+void ApplyUnpackSwaps(void *record, const DiskSwap *swaps, int count)
+{
+    for (int i = 0; i < count; i++) {
+        unsigned char *field = (unsigned char *)record + swaps[i].native;
+        if (swaps[i].size == 2) {
+            uint16_t value = ReadLE16(field);
+            memcpy(field, &value, sizeof(value));
+        } else if (swaps[i].size == 4) {
+            uint32_t value = ReadLE32(field);
+            memcpy(field, &value, sizeof(value));
+        } else if (swaps[i].size == 8) {
+            uint64_t value = ReadLE64(field);
+            memcpy(field, &value, sizeof(value));
+        }
+    }
+}
+
+void ApplyPackSwaps(void *record, const DiskSwap *swaps, int count)
+{
+    for (int i = 0; i < count; i++) {
+        unsigned char *field = (unsigned char *)record + swaps[i].disk;
+        if (swaps[i].size == 2) {
+            uint16_t value;
+            memcpy(&value, field, sizeof(value));
+            WriteLE16(field, value);
+        } else if (swaps[i].size == 4) {
+            uint32_t value;
+            memcpy(&value, field, sizeof(value));
+            WriteLE32(field, value);
+        } else if (swaps[i].size == 8) {
+            uint64_t value;
+            memcpy(&value, field, sizeof(value));
+            WriteLE64(field, value);
+        }
+    }
+}
+#endif
+
 } // namespace
 
 void Disk_Unpack(void *native, const void *record, const DiskLayout *layout)
@@ -46,6 +85,9 @@ void Disk_Unpack(void *native, const void *record, const DiskLayout *layout)
     }
     for (int i = 0; i < layout->pointerCount; i++)
         memset((char *)native + layout->pointers[i].native, 0, sizeof(void *));
+#if OPENCMR2_ENDIAN_NEEDS_SWAP
+    ApplyUnpackSwaps(native, layout->swaps, layout->swapCount);
+#endif
 }
 
 void Disk_Pack(void *record, const void *native, const DiskLayout *layout)
@@ -61,6 +103,9 @@ void Disk_Pack(void *record, const void *native, const DiskLayout *layout)
         uint32_t low = (uint32_t)pointer;
         WriteLE32((char *)record + layout->pointers[i].disk, low);
     }
+#if OPENCMR2_ENDIAN_NEEDS_SWAP
+    ApplyPackSwaps(record, layout->swaps, layout->swapCount);
+#endif
 }
 
 void Disk_AttachToBuffer(const void *fileData, void *native)

@@ -22,7 +22,7 @@ int main()
         static const DiskRun runs[] = {{0, 0, 4}};
         static const DiskPointer pointers[] = {{4, 4}};
         static const DiskLayout layout = {
-            8, 16, runs, 1, pointers, 1
+            8, 16, runs, 1, pointers, 1, nullptr, 0
         };
         unsigned char native[16] = {0};
         unsigned char record[8] = {0};
