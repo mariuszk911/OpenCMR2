@@ -45,19 +45,19 @@ int main()
     longPart[sizeof(longPart) - 1] = '\0';
     Check(AmigaPath_Split(longPart, &path) == 0, "oversized component is rejected");
 
-    Check(AmigaPath_Split("a/b/c", &path) == 1 && AmigaPath_Join(out, sizeof(out), "DH20:", &path, 0, path.count),
+    Check(AmigaPath_Split("a/b/c", &path) == 1 && AmigaPath_Join(out, sizeof(out), "PROGDIR:", &path, 0, path.count),
           "join a relative path to an assign");
-    Check(std::strcmp(out, "DH20:a/b/c") == 0, "assign join result");
+    Check(std::strcmp(out, "PROGDIR:a/b/c") == 0, "assign join result");
 
     Check(AmigaPath_Join(out, sizeof(out), "Work:Games/CMR2", &path, 0, path.count),
           "join to a volume path");
     Check(std::strcmp(out, "Work:Games/CMR2/a/b/c") == 0, "volume join result");
 
-    Check(AmigaPath_Join(out, sizeof(out), "DH20:Data/", &path, 0, path.count),
+    Check(AmigaPath_Join(out, sizeof(out), "PROGDIR:Data/", &path, 0, path.count),
           "join to a directory with a trailing slash");
-    Check(std::strcmp(out, "DH20:Data/a/b/c") == 0, "trailing slash join result");
+    Check(std::strcmp(out, "PROGDIR:Data/a/b/c") == 0, "trailing slash join result");
 
-    Check(AmigaPath_Join(out, 4, "DH20:", &path, 0, path.count) == 0,
+    Check(AmigaPath_Join(out, 4, "PROGDIR:", &path, 0, path.count) == 0,
           "short output buffer is rejected");
 
     Check(AmigaPath_Match("Slot1.SAV", "*.sav"), "extension match ignores case");

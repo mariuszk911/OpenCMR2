@@ -1,7 +1,7 @@
 /*
  * M1 Sys time/logging smoke for AmigaOS. Not staged; run from a Shell:
  *
- *     DH20:amiga_sys_test > DH20:sys_time.log
+ *     amiga_sys_test > sys_time.log
  *
  * It exercises timer.device (ReadEClock), Sleep, the fixed-step clock,
  * DateStamp and the log file. An emulator run is emulator evidence, not

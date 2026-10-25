@@ -1,13 +1,13 @@
 /*
- * M1 platform lifecycle smoke for AmigaOS. Run from a Shell:
+ * M1 platform lifecycle smoke for AmigaOS. Run the binary from its drawer;
+ * the test derives its own path, so no volume name is hardcoded.
  *
- *     DH20:amiga_platform_test
- *
- * DH20: must contain gamedata/ with the required files and platform-user/.
+ * The drawer must contain gamedata/ with the required files and platform-user/.
  * An emulator run is emulator evidence, not PiStorm evidence.
  */
 #include "platform/amiga/amiga_platform.h"
 #include "port/sys.h"
+#include "test_paths.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -22,9 +22,15 @@ static int Fail(const char *what)
 
 int main(int argc, char **argv)
 {
-    static char *fallback[] = {
-        (char *)"amiga_platform_test", (char *)"--data", (char *)"DH20:gamedata",
-        (char *)"--user-dir", (char *)"DH20:platform-user", NULL,
+    char data[512];
+    char user[512];
+    if (!TestPath(data, sizeof(data), "gamedata") ||
+        !TestPath(user, sizeof(user), "platform-user"))
+        return Fail("test drawer path");
+
+    char *fallback[] = {
+        (char *)"amiga_platform_test", (char *)"--data", data,
+        (char *)"--user-dir", user, NULL,
     };
 
     if (argc < 2) {
@@ -33,9 +39,9 @@ int main(int argc, char **argv)
     }
     if (!AmigaPlatform_Init(argc, argv))
         return Fail("init");
-    if (strcmp(AmigaPlatform_GetDataDir(), "DH20:gamedata") != 0)
+    if (strcmp(AmigaPlatform_GetDataDir(), data) != 0)
         return Fail("data directory");
-    if (strcmp(AmigaPlatform_GetUserDir(), "DH20:platform-user") != 0)
+    if (strcmp(AmigaPlatform_GetUserDir(), user) != 0)
         return Fail("user directory");
     if (!Sys_FileExists("Game/Bigfiles/common.bfl"))
         return Fail("data file through the Sys layer");

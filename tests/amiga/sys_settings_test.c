@@ -1,13 +1,13 @@
 /*
- * M1 Sys settings smoke for AmigaOS. Run from a Shell:
+ * M1 Sys settings smoke for AmigaOS. Run the binary from its drawer; the
+ * test derives its own path, so no volume name is hardcoded.
  *
- *     DH20:amiga_sys_settings_test > DH20:sys_settings.log
- *
- * DH20: must contain syssettings-user/opencmr2.ini. An emulator run is
+ * The drawer must contain syssettings-user/opencmr2.ini. An emulator run is
  * emulator evidence, not PiStorm evidence.
  */
 #include "platform/amiga/amiga_sys.h"
 #include "port/sys.h"
+#include "test_paths.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -22,7 +22,10 @@ static int Fail(const char *what)
 
 int main(void)
 {
-    AmigaSys_SetUserDir("DH20:syssettings-user");
+    char user[512];
+    if (!TestPath(user, sizeof(user), "syssettings-user"))
+        return Fail("test drawer path");
+    AmigaSys_SetUserDir(user);
 
     if (strcmp(Sys_GetInstallSetting("Language"), "French") != 0)
         return Fail("install.language");
@@ -32,7 +35,7 @@ int main(void)
         return Fail("Game_HDPath");
     if (Sys_GetOption("video.fullscreen", 1) != 0)
         return Fail("read video.fullscreen");
-    if (strcmp(Sys_GetOptionText("paths.data", ""), "DH20:game-data") != 0)
+    if (strcmp(Sys_GetOptionText("paths.data", ""), "game-data") != 0)
         return Fail("read paths.data");
 
     if (!Sys_SetOption("video.fullscreen", 1))

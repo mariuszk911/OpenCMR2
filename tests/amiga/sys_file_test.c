@@ -1,13 +1,13 @@
 /*
- * M1 Sys files/paths smoke for AmigaOS. Run from a Shell:
+ * M1 Sys files/paths smoke for AmigaOS. Run the binary from its drawer;
+ * the test derives its own path, so no volume name is hardcoded.
  *
- *     DH20:amiga_sys_file_test > DH20:sys_file.log
- *
- * The DH20: drawer must contain sysfile-user/ and sysfile-data/FrontEnd/Menu.TGA.
+ * The drawer must contain sysfile-user/ and sysfile-data/FrontEnd/Menu.TGA.
  * An emulator run is emulator evidence, not PiStorm evidence.
  */
 #include "platform/amiga/amiga_sys.h"
 #include "port/sys.h"
+#include "test_paths.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -37,10 +37,15 @@ static int Collect(const char *name, void *context)
 int main(void)
 {
     char buffer[16];
+    char user[512];
+    char data[512];
 
-    AmigaSys_SetUserDir("DH20:sysfile-user");
-    AmigaSys_SetDataDir("DH20:sysfile-data");
-    Sys_Log("sys_file: begin");
+    if (!TestPath(user, sizeof(user), "sysfile-user") ||
+        !TestPath(data, sizeof(data), "sysfile-data"))
+        return Fail("test drawer path");
+    AmigaSys_SetUserDir(user);
+    AmigaSys_SetDataDir(data);
+    Sys_Log("sys_file: begin user=%s data=%s", user, data);
 
     // A data file through a differently-spelled, DOS-style game path.
     SysFile *file = Sys_OpenFile("frontend\\menu.tga", SYS_FILE_READ);
@@ -53,15 +58,19 @@ int main(void)
     Sys_CloseFile(file);
 
     // Native Amiga paths bypass the data-directory join and normalize '\'.
-    file = Sys_OpenFile("DH20:sysfile-data/frontend\\menu.tga", SYS_FILE_READ);
+    char native[600];
+    snprintf(native, sizeof(native), "%s/frontend\\menu.tga", data);
+    file = Sys_OpenFile(native, SYS_FILE_READ);
     if (file == NULL)
         return Fail("open native path");
     if (Sys_ReadFile(file, buffer, sizeof(buffer)) != 6 || memcmp(buffer, "MENU42", 6) != 0)
         return Fail("read native path");
     Sys_CloseFile(file);
 
+    char nativeList[600];
+    snprintf(nativeList, sizeof(nativeList), "%s/FrontEnd", data);
     listedCount = 0;
-    Sys_ListFiles("DH20:sysfile-data/FrontEnd", "*", Collect, NULL);
+    Sys_ListFiles(nativeList, "*", Collect, NULL);
     if (listedCount != 1 || strcmp(listed[0], "Menu.TGA") != 0)
         return Fail("list native path");
 

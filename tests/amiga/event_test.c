@@ -1,7 +1,7 @@
 /*
  * M1 Sys event translation smoke for AmigaOS. Run from a Shell:
  *
- *     DH20:amiga_event_test
+ *     amiga_event_test
  *
  * The test uses a fake Window/UserPort, so no Intuition window is opened; the
  * desktop query does use the default public screen.
