@@ -39,6 +39,7 @@ set_source_files_properties(${GAME_QIFIST_UNITS} TARGET_DIRECTORY cmr2_game
 add_library(opencmr2_platform OBJECT
     platform/msvcrt.cpp
     platform/amiga/amiga_sys.cpp
+    platform/amiga/amiga_platform.cpp
     port/intdiv.cpp
     platform/amiga/minigl_abi_check.cpp)
 target_include_directories(opencmr2_platform PUBLIC
@@ -100,3 +101,8 @@ target_include_directories(amiga_sys_file_test PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 add_executable(amiga_sys_settings_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_settings_test.c
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_sys_settings_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_executable(amiga_platform_test ${PROJECT_SOURCE_DIR}/tests/amiga/platform_test.c
+    platform/amiga/amiga_platform.cpp
+    platform/amiga/amiga_sys.cpp)
+target_include_directories(amiga_platform_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -12,6 +12,11 @@ void AmigaSys_SetCommandLine(const char *line);
 /* Game data and user directories. Defaults: PROGDIR:Data and PROGDIR:. */
 void AmigaSys_SetDataDir(const char *path);
 void AmigaSys_SetUserDir(const char *path);
+const char *AmigaSys_GetDataDir(void);
+const char *AmigaSys_GetUserDir(void);
+/* Creates opencmr2.ini in the user directory with the v1 defaults if it is
+   missing. Returns 1 when the file exists or was written. */
+int AmigaSys_EnsureSettingsFile(void);
 
 #ifdef __cplusplus
 }

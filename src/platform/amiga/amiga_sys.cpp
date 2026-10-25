@@ -415,6 +415,44 @@ extern "C" void AmigaSys_SetUserDir(const char *path)
     }
 }
 
+extern "C" const char *AmigaSys_GetDataDir(void)
+{
+    return s_dataDir;
+}
+
+extern "C" const char *AmigaSys_GetUserDir(void)
+{
+    return s_userDir;
+}
+
+extern "C" int AmigaSys_EnsureSettingsFile(void)
+{
+    std::string path;
+    if (!SettingsPath(&path))
+        return 0;
+    BPTR lock = Lock((STRPTR)path.c_str(), SHARED_LOCK);
+    if (lock != 0) {
+        UnLock(lock);
+        return 1;
+    }
+    static const char defaults[] =
+        "; OpenCMR2 settings\n"
+        "\n"
+        "[install]\n"
+        "language = English\n"
+        "sku = EUROPE\n"
+        "\n"
+        "[video]\n"
+        "fullscreen = 1\n"
+        "vsync = 1\n";
+    if (!WriteTextFile(path, defaults)) {
+        Sys_Log("settings: cannot create %s (IoErr %ld)", path.c_str(), (long)IoErr());
+        return 0;
+    }
+    s_settingsLoaded = false;
+    return 1;
+}
+
 extern "C" uint32_t Sys_GetTicks(void)
 {
     uint64_t now;
