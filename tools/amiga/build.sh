@@ -21,10 +21,11 @@ PISTORM3D_ROOT=${PISTORM3D:-"$REPO/SDKs/PiStorm3D"}
 
 usage() {
     cat <<'EOF'
-usage: tools/amiga/build.sh [--clean] [--info]
+usage: tools/amiga/build.sh [--clean] [--info] [--probe]
 
   --clean   remove build/amiga and dist/amiga before configuring
   --info    print the resolved mode, image, compiler, CMake, SDK and flags
+  --probe   run the M0.4 compiler/toolchain probes instead of building
 
 Environment overrides:
   PISTORM3D  PiStorm3D SDK root (default: SDKs/PiStorm3D)
@@ -44,10 +45,12 @@ fail() {
 
 clean=0
 info=0
+probe=0
 for arg in "$@"; do
     case "$arg" in
         --clean) clean=1 ;;
         --info) info=1 ;;
+        --probe) probe=1 ;;
         --help|-h) usage; exit 0 ;;
         *) printf 'build.sh: unknown option: %s\n' "$arg" >&2; usage >&2; exit 2 ;;
     esac
@@ -161,6 +164,27 @@ fix_ownership() {
         fi
     done
 }
+
+if [ "$probe" = 1 ]; then
+    if [ "$MODE" = native ]; then
+        REPO="$REPO" PISTORM3D="$PISTORM3D_ROOT" CPU="$CPU" FPU="$FPU" OPT="$OPT" JOBS="$JOBS" \
+            sh "$REPO/tools/amiga/probe.sh"
+    else
+        fix_ownership
+        docker_cmd run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -e REPO=/src \
+            -e PISTORM3D=/pistorm3d \
+            -e CPU="$CPU" -e FPU="$FPU" -e OPT="$OPT" -e JOBS="$JOBS" \
+            -v "$REPO":/src \
+            -v "$PISTORM3D_ROOT":/pistorm3d:ro \
+            -w /src \
+            "$IMAGE" \
+            sh /src/tools/amiga/probe.sh
+    fi
+    exit 0
+fi
 
 if [ "$MODE" = native ]; then
     REPO="$REPO" PISTORM3D="$PISTORM3D_ROOT" CPU="$CPU" FPU="$FPU" OPT="$OPT" STACK="$STACK" JOBS="$JOBS" \

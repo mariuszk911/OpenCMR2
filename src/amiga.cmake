@@ -12,8 +12,7 @@ add_library(opencmr2_domain_a INTERFACE)
 target_compile_options(opencmr2_domain_a INTERFACE
     $<$<COMPILE_LANGUAGE:C>:-x c>
     "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/port/types.h"
-    "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/port/msvcrt.h"
-    -fms-extensions)
+    "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/port/msvcrt.h")
 
 # Not linked into the M0 scaffold yet: M1 adds the platform services, then the
 # executable links this library. port/disk.cpp joins after M0.8 removes its
