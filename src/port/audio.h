@@ -12,6 +12,7 @@
 #define OPENCMR2_PORT_AUDIO_H
 
 #include "port/types.h"
+#include "port/endian.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -83,6 +84,20 @@ typedef struct AudioWaveFormat {
     WORD cbSize;
 } AudioWaveFormat;
 #pragma pack(pop)
+
+/* The fmt chunk is little-endian on disk. ReadLE* is a no-op on little-endian
+ * hosts; on big-endian it converts the in-place fields. cbSize is included but
+ * is normally zero here because the 16-byte read ends before it. */
+static inline void AudioWaveFormatFromLE(AudioWaveFormat *format)
+{
+    format->wFormatTag = ReadLE16(&format->wFormatTag);
+    format->nChannels = ReadLE16(&format->nChannels);
+    format->nSamplesPerSec = ReadLE32(&format->nSamplesPerSec);
+    format->nAvgBytesPerSec = ReadLE32(&format->nAvgBytesPerSec);
+    format->nBlockAlign = ReadLE16(&format->nBlockAlign);
+    format->wBitsPerSample = ReadLE16(&format->wBitsPerSample);
+    format->cbSize = ReadLE16(&format->cbSize);
+}
 
 /* Decodes whole Microsoft ADPCM blocks (format from the file) into 16-bit
    PCM. Returns the number of bytes written; stops when dst is full. */

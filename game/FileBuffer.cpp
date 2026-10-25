@@ -74,6 +74,8 @@ void *CFileBuffer::GetGenericFileBuffer(char *fileName, BOOL isLocalFile)
     iHeaderSize = gzread(unk0x004bdee0, &pFileHeaderOut, 8);
     if (iHeaderSize == 8U && pFileHeaderOut.ident[0] == 0x43 && pFileHeaderOut.ident[1] == 0x4d && pFileHeaderOut.ident[2] == 0x50 && pFileHeaderOut.ident[3] == 0x52)
     {
+        // PORT: AMIGA: BFL archiveSize is little-endian on disk.
+        pFileHeaderOut.archiveSize = ReadLE32(&pFileHeaderOut.archiveSize);
         if (pFileHeaderOut.archiveSize == 0xffffffff)
             return NULL;
 

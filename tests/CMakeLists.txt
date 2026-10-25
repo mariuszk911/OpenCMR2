@@ -75,6 +75,16 @@ add_executable(intdiv_test intdiv.cpp ${PROJECT_SOURCE_DIR}/src/port/intdiv.cpp)
 target_include_directories(intdiv_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME intdiv COMMAND intdiv_test)
 
+# M0.7 core-slice fixture: WAV fmt fields are little-endian on disk.
+add_executable(wave_format_test wave_format.cpp)
+target_include_directories(wave_format_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME wave_format COMMAND wave_format_test)
+
+add_executable(wave_format_be_test wave_format_be.cpp)
+target_include_directories(wave_format_be_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(wave_format_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+add_test(NAME wave_format_be COMMAND wave_format_be_test)
+
 add_executable(net_session_test net_session.cpp)
 target_link_libraries(net_session_test PRIVATE opencmr2_net)
 target_compile_options(net_session_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")

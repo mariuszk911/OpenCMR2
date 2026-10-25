@@ -235,6 +235,9 @@ static BOOL Wave_FindChunk(SysFile *file, DWORD id, DWORD start, DWORD end, Wave
     while (pos + 8 <= end) {
         if (Sys_SeekFile(file, pos, SYS_SEEK_SET) == 0xffffffff || Sys_ReadFile(file, header, 8) != 8)
             return FALSE;
+        // PORT: AMIGA: RIFF chunk id and size are little-endian on disk.
+        header[0] = ReadLE32(&header[0]);
+        header[1] = ReadLE32(&header[1]);
         if (header[0] == id) {
             pChunk->ckid = header[0];
             pChunk->cksize = header[1];
@@ -259,6 +262,10 @@ HRESULT ReadMMIO(SysFile *hmmioIn, WaveChunk *pckInRIFF, AudioWaveFormat **ppwfx
 
     if (Sys_SeekFile(hmmioIn, 0, SYS_SEEK_SET) != 0 || Sys_ReadFile(hmmioIn, riff, 12) != 12)
         return -1;
+    // PORT: AMIGA: the RIFF header words are little-endian on disk.
+    riff[0] = ReadLE32(&riff[0]);
+    riff[1] = ReadLE32(&riff[1]);
+    riff[2] = ReadLE32(&riff[2]);
     if (riff[0] != MAKEFOURCC('R', 'I', 'F', 'F') || riff[2] != MAKEFOURCC('W', 'A', 'V', 'E'))
         return -1;
     pckInRIFF->ckid = riff[0];
@@ -275,11 +282,15 @@ HRESULT ReadMMIO(SysFile *hmmioIn, WaveChunk *pckInRIFF, AudioWaveFormat **ppwfx
     memset(&format, 0, sizeof(format));
     if (Sys_ReadFile(hmmioIn, &format, 16) != 16)
         return -1;
+    // PORT: AMIGA: normalize the WAVEFORMAT fields before comparing them.
+    AudioWaveFormatFromLE(&format);
 
     cbExtraBytes = 0;
     if (format.wFormatTag != AUDIO_WAVE_FORMAT_PCM && ckIn.cksize >= 18) {
         if (Sys_ReadFile(hmmioIn, &cbExtraBytes, sizeof(WORD)) != sizeof(WORD))
             return -1;
+        // PORT: AMIGA: cbSize is little-endian on disk.
+        cbExtraBytes = ReadLE16(&cbExtraBytes);
     }
     *ppwfxInfo = (AudioWaveFormat *)new BYTE[sizeof(AudioWaveFormat) + cbExtraBytes];
     memcpy(*ppwfxInfo, &format, 16);
@@ -756,21 +767,24 @@ BOOL Sound_LoadWave(char *name, BYTE flags, GenericFile *pFile)
         return FALSE;
 
     if (strncmp((char *)pWave + 8, g_strWave, 4) == 0) {
-        channels = *(WORD *)(pWave + 0x16);
-        rate = *(DWORD *)(pWave + 0x18);
-        bits = *(WORD *)(pWave + 0x22);
+        // PORT: AMIGA: the canonical WAV fields in this fast path are
+        // little-endian on disk.
+        channels = ReadLE16(pWave + 0x16);
+        rate = ReadLE32(pWave + 0x18);
+        bits = ReadLE16(pWave + 0x22);
         pData = pWave + 0x2c;
+        DWORD dataSize = ReadLE32(pWave + 0x28);
         if ((flags & 1) == 0 || !g_sound3DEnabled) {
             if (!Sound_CreatePcmSampleBuffer(g_unk0x005a2844, &g_soundBuffers[Sound_GetLoadedSampleCount()], rate, bits, channels, 0,
-                              *(DWORD *)(pWave + 0x28)))
+                              dataSize))
                 return FALSE;
-            Sound_CopyBufferData(g_soundBuffers[Sound_GetLoadedSampleCount()], 0, pData, *(DWORD *)(pWave + 0x28));
+            Sound_CopyBufferData(g_soundBuffers[Sound_GetLoadedSampleCount()], 0, pData, dataSize);
         } else {
             if (!Sound_CreatePcmSampleBuffer(g_unk0x005a2844, &g_soundBuffers[Sound_GetLoadedSampleCount()], rate, bits, channels, 1,
-                              *(DWORD *)(pWave + 0x28)))
+                              dataSize))
                 return FALSE;
             // PORT: no separate 3D interface.
-            if (!Sound_CopyBufferData(g_soundBuffers[Sound_GetLoadedSampleCount()], 0, pData, *(DWORD *)(pWave + 0x28)))
+            if (!Sound_CopyBufferData(g_soundBuffers[Sound_GetLoadedSampleCount()], 0, pData, dataSize))
                 return FALSE;
         }
     }
