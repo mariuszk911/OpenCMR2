@@ -41,6 +41,13 @@ target_compile_definitions(layout_probe_shared PRIVATE
     OPENCMR2_LAYOUT_PRINT OPENCMR2_LAYOUT_SHARED_ONLY)
 add_test(NAME layout_probe_shared COMMAND layout_probe_shared)
 
+# M0.8: native copies are released by their owning file buffer, without a
+# malloc_usable_size/_msize/malloc_size dependency.
+add_executable(disk_ownership_test disk_ownership.cpp
+    ${PROJECT_SOURCE_DIR}/src/port/disk.cpp)
+target_include_directories(disk_ownership_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME disk_ownership COMMAND disk_ownership_test)
+
 add_executable(net_session_test net_session.cpp)
 target_link_libraries(net_session_test PRIVATE opencmr2_net)
 target_compile_options(net_session_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")

@@ -78,6 +78,10 @@ void *CFileBuffer::GetGenericFileBuffer(char *fileName, BOOL isLocalFile)
             return NULL;
 
         lpBuffer = AllocateLockedBuffer(pFileHeaderOut.archiveSize);
+        // PORT: AMIGA: record the owning buffer so port/disk.cpp can release
+        // attached native copies without malloc_usable_size.
+        if (lpBuffer != NULL)
+            Disk_RegisterBuffer(lpBuffer, pFileHeaderOut.archiveSize);
         CGenericFileLoader::m_fileSize = pFileHeaderOut.archiveSize;
         gzread(unk0x004bdee0, lpBuffer, pFileHeaderOut.archiveSize);
         bIsBFL = true;
@@ -104,6 +108,10 @@ void *CFileBuffer::GetGenericFileBuffer(char *fileName, BOOL isLocalFile)
         Sys_CloseFile(file);
         if (fileSizeRead != fileSize)
             return NULL;
+        // PORT: AMIGA: register only a buffer that is actually returned; a
+        // short read leaves no stale entry in port/disk.cpp's registry.
+        if (lpBuffer != NULL)
+            Disk_RegisterBuffer(lpBuffer, fileSize);
     }
 
     return lpBuffer;

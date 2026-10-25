@@ -80,7 +80,16 @@ void Disk_Pack(void *record, const void *native, const DiskLayout *layout);
 /* Frees native storage together with the game buffer that holds fileData:
  * CFileBuffer::FreeGenericFileBuffer of that buffer frees it. */
 void Disk_AttachToBuffer(const void *fileData, void *native);
-/* Called with every game buffer about to be freed. */
+/* Records the exact size of a file buffer that can own attached native
+ * copies. CFileBuffer::GetGenericFileBuffer calls this before returning the
+ * buffer; the size replaces malloc_usable_size on targets without it. A
+ * second call for the same buffer updates the size. */
+void Disk_RegisterBuffer(void *buffer, size_t size);
+/* Called with every game buffer about to be freed. Releases the native copies
+ * attached to that buffer and forgets its registration; the caller then frees
+ * the buffer itself. Attachments are owned by the registered buffer that
+ * contained their file data, so a buffer that never owned any releases
+ * nothing; Disk_AttachToBuffer reports data outside every registered buffer. */
 void Disk_ReleaseBuffer(void *buffer);
 
 #endif
