@@ -85,6 +85,23 @@ target_include_directories(wave_format_be_test PRIVATE ${PROJECT_SOURCE_DIR}/src
 target_compile_definitions(wave_format_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 add_test(NAME wave_format_be COMMAND wave_format_be_test)
 
+# M0.7 BFL directory. The normal build parses a little-endian fixture; the
+# forced variant pre-swaps it to prove every field is decoded as little-endian.
+foreach(bfl_variant bfl_archive bfl_archive_be)
+    add_executable(${bfl_variant}_test bfl_archive.cpp
+        ${PROJECT_SOURCE_DIR}/game/GenericFileLoader.cpp)
+    target_include_directories(${bfl_variant}_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/game
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/port/compat)
+    target_compile_options(${bfl_variant}_test PRIVATE
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+        -fms-extensions)
+    add_test(NAME ${bfl_variant} COMMAND ${bfl_variant}_test)
+endforeach()
+target_compile_definitions(bfl_archive_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # M1 stubs: a black movie frame, an unavailable network and no-op Amiga
 # profiling. The Amiga target compiles the same translation units.
 add_executable(amiga_stubs_test amiga_stubs.cpp

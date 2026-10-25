@@ -1,5 +1,6 @@
 #include "GenericFileLoader.h"
 #include "FileBuffer.h"
+#include "port/endian.h"
 #include <string.h>
 
 GenericFile CGenericFileLoader::m_genericFile;
@@ -47,23 +48,28 @@ struct ArchiveEntry {
     int offset;             // 0x4 of the file data from the archive start
     DWORD nameLength;       // 0x8 of the name that follows, padded to 4 bytes
 };
+static_assert(sizeof(ArchiveEntry) == 12, "BFL directory stride");
 
 // FUNCTION: CMR2 0x004a9c70
 void *CGenericFileLoader::FindFileInArchive(GenericFile *pFile, char *name, DWORD *pId)
 {
     BYTE *pEntry;
+    DWORD directoryOffset;
     int offset;
     unsigned int nameLen;
     unsigned int pad;
     char entryName[260];
 
     _strlwr(name);
-    pEntry = (BYTE *)pFile->buffer + *(int *)((BYTE *)pFile->buffer + pFile->fileSize - 4);
+    // PORT: AMIGA: the directory offset and ArchiveEntry fields are
+    // little-endian on disk. Read them without casting the entry.
+    directoryOffset = ReadLE32((BYTE *)pFile->buffer + pFile->fileSize - 4);
+    pEntry = (BYTE *)pFile->buffer + directoryOffset;
     while (pEntry < (BYTE *)pFile->buffer + pFile->fileSize - 4) {
         if (pId != NULL)
-            *pId = ((ArchiveEntry *)pEntry)->id;
-        nameLen = ((ArchiveEntry *)pEntry)->nameLength;
-        offset = ((ArchiveEntry *)pEntry)->offset;
+            *pId = ReadLE32(pEntry);
+        nameLen = ReadLE32(pEntry + 8);
+        offset = (int)ReadLE32(pEntry + 4);
         pEntry += sizeof(ArchiveEntry);
         memcpy(entryName, pEntry, nameLen);
         entryName[nameLen] = '\0';
