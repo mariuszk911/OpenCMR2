@@ -5,6 +5,7 @@
 #include "GameInfo.h"
 #include "Frontend.h"
 #include "port/sys.h"
+#include "port/intdiv.h"
 #include <math.h>
 #include <stdio.h>
 
@@ -1193,7 +1194,8 @@ static void MenuScreen_Size(int realX, int realY, int *pX, int *pY)
         *pY = (int)lround(X87S_DIV(X87S_MUL((double)baseY, 100.0), scale));
         // No narrower than the original's screen: the menus keep its widths.
         if ((long long)*pY * realX < (long long)baseX * realY)
-            *pY = (int)(((long long)baseX * realY + realX - 1) / realX);
+            // PORT: AMIGA: keep the 64-bit division in Domain B.
+            *pY = Port_MulAddDiv(baseX, realY, realX - 1, realX);
         *pX = (int)lround(X87S_DIV(X87S_MUL((double)*pY, realX), realY));
     }
 }
@@ -1290,7 +1292,8 @@ int MenuScreen_GetLargestScale(void)
     if (realX <= 0 || realY <= 0)
         return 100;
     baseX = Sprite_HighResolutionSet() ? 1024 : 640;
-    return (int)((long long)baseX * 3 / 4 * 100 * realX / ((long long)baseX * realY));
+    // PORT: AMIGA: keep the 64-bit division chain in Domain B.
+    return Port_MenuScale(baseX, realX, realY);
 }
 
 void MenuScreen_GetDisplaySize(int *pWidth, int *pHeight)

@@ -17,6 +17,7 @@
 #include "Sprite.h"
 #include "RegKey.h"
 #include "FixedPoint.h"
+#include "port/intdiv.h"
 #include <stdlib.h>
 #include <stddef.h>
 #include "FrontendDraw.h"
@@ -4670,8 +4671,10 @@ static int g_menuPathPointFine[2];
 // or more pixels of a larger screen.
 static void FrontendAnimation_PlaceOnScreen(const int *pFine, int dx, int dy, short *pX, short *pY)
 {
-    long long x = (long long)g_pGraphics->resX * pFine[0] / 640 + ((long long)dx << 16);
-    long long y = (long long)g_pGraphics->resY * pFine[1] / 480 + ((long long)dy << 16);
+    // PORT: AMIGA: the 64-bit division is a Domain B helper; the shifted
+    // additions stay 64-bit in game code.
+    long long x = (long long)Port_MulDiv(g_pGraphics->resX, pFine[0], 640) + ((long long)dx << 16);
+    long long y = (long long)Port_MulDiv(g_pGraphics->resY, pFine[1], 480) + ((long long)dy << 16);
 
     *pX = (short)(x >> 16);
     *pY = (short)(y >> 16);

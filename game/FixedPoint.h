@@ -1,6 +1,8 @@
 #ifndef _FIXED_POINT_H
 #define _FIXED_POINT_H
 
+#include "port/intdiv.h"
+
 // 16.16 fixed point helpers. The original game used inline assembly for the
 // 64-bit intermediates (MSVC 6 would otherwise call _allmul/_allshr/_alldiv).
 // PORT: the helpers are portable C with the assembly's exact results: 64-bit
@@ -27,7 +29,8 @@ inline int FixMulShift32(int a, int b)
 
 inline int FixDiv(int a, int b)
 {
-    return (int)((long long)a * 65536 / b);
+    // PORT: AMIGA: GCC 6.5 ICEs on 64-bit division in a -malign-int TU.
+    return Port_MulDiv(a, 65536, b);
 }
 
 
@@ -198,7 +201,8 @@ inline short FixAtan2(int y, int x)
         num = y;
         den = x;
     }
-    index = (unsigned int)(int)((long long)num * 65536 / den) >> 7;
+    // PORT: AMIGA: keep the 64-bit division in Domain B.
+    index = (unsigned int)Port_MulDiv(num, 65536, den) >> 7;
     // |y| == |x| reads one entry past g_atanTable, the low word of
     // g_tanTable[0] in the original's memory layout.
     angle = index < 512 ? g_atanTable[index] : (unsigned short)g_tanTable[0];
@@ -212,7 +216,8 @@ inline short FixAtan2(int y, int x)
 // out = in * (1 / len)
 inline void FixVecScaleRecip(FixVector *out, FixVector *src, int len)
 {
-    int recip = (int)((1LL << 32) / len);
+    // PORT: AMIGA: keep the 64-bit division in Domain B.
+    int recip = Port_Recip32(len);
 
     out->x = FixMulBits(src->x, recip);
     out->y = FixMulBits(src->y, recip);

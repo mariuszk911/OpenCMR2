@@ -749,8 +749,9 @@ static int View_GetShownFarPlane(BYTE view)
     if (g_viewShownFarPlanes[view] <= 0 || elapsed < 0 || elapsed > 250)
         g_viewShownFarPlanes[view] = target;
     else
+        // PORT: AMIGA: keep the 64-bit division in Domain B.
         g_viewShownFarPlanes[view] +=
-            (int)((long long)(target - g_viewShownFarPlanes[view]) * elapsed / (elapsed + 500));
+            Port_MulDiv(target - g_viewShownFarPlanes[view], elapsed, elapsed + 500);
     return g_viewShownFarPlanes[view];
 }
 

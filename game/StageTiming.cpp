@@ -1,4 +1,5 @@
 #include "AIReferenceRoute.h"
+#include "port/intdiv.h"
 #include "FloatToInt.h"
 #include "TyreWear.h"
 #include "StageObjectCount.h"
@@ -4444,7 +4445,7 @@ extern double g_minus65536;
 // FUNCTION: CMR2 0x00455f00
 void StageTiming_BlendCarPaintDecalRows(StageTimingSpread *pCar, int *pOut)
 {
-    __int64 v;
+    unsigned int v;
     int t;
     int a8;
     int r8;
@@ -4472,8 +4473,9 @@ void StageTiming_BlendCarPaintDecalRows(StageTimingSpread *pCar, int *pOut)
     int i;
 
     v = (unsigned int)RallyData_GetRouteAvailabilityState();
-    v = FTOI(__int64, X87S_MUL((double)v, CGraphics::m_65536));
-    t = (int)v;
+    // PORT: AMIGA: GCC 6.5 ICEs on the 64-bit float-to-int conversion with
+    // -malign-int; the helper keeps it in Domain B and returns the low 32 bits.
+    t = Port_DoubleToInt64Low(X87S_MUL((double)v, CGraphics::m_65536));
     // The original computes this and discards it (inline __asm FixMul is opaque
     // to MSVC6, so it cannot be eliminated); reproduced to match the codegen.
     FixMul(0x20000, t);

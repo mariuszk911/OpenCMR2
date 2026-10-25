@@ -61,6 +61,7 @@ add_library(opencmr2_platform STATIC
     platform/keys.cpp
     platform/msvcrt.cpp
     port/disk.cpp
+    port/intdiv.cpp
     port/replay_disk.cpp
     $<TARGET_OBJECTS:cmr2_game>)
 target_sources(opencmr2_platform PRIVATE diagnostics/observer.cpp diagnostics/timing.cpp)

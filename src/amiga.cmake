@@ -37,6 +37,7 @@ set_source_files_properties(${GAME_QIFIST_UNITS} TARGET_DIRECTORY cmr2_game
 # runtime behaviour the game calls.
 add_library(opencmr2_platform OBJECT
     platform/msvcrt.cpp
+    port/intdiv.cpp
     platform/amiga/minigl_abi_check.cpp)
 target_include_directories(opencmr2_platform PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
