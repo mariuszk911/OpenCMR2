@@ -1,14 +1,33 @@
 set(GAME_DIR ${PROJECT_SOURCE_DIR}/game)
 
-# Small standalone decoder, also usable by tests without SDL or game data.
-add_library(opencmr2_bink STATIC video/bink_decoder.cpp)
-target_include_directories(opencmr2_bink PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-
-# The decompiled game. zlib is C, as in the original (ZlibZutil.cpp is C++).
+# Shared by the host and Amiga targets. zlib is C, as in the original
+# (ZlibZutil.cpp is C++). The QIFIST units are the ones the original built
+# with /QIfist, so their float-to-integer conversions round to nearest.
 file(GLOB GAME_SOURCES CONFIGURE_DEPENDS ${GAME_DIR}/*.cpp)
 file(GLOB ZLIB_C_SOURCES CONFIGURE_DEPENDS ${GAME_DIR}/Zlib*.cpp)
 list(REMOVE_ITEM ZLIB_C_SOURCES ${GAME_DIR}/ZlibZutil.cpp)
 set_source_files_properties(${ZLIB_C_SOURCES} PROPERTIES LANGUAGE C)
+
+# The original builds these with /QIfist: their float-to-integer conversions
+# (FTOI, game/FloatToInt.h) round to nearest like x87 FISTP instead of
+# truncating. Same list as CMR2Decomp's scripts/build.py.
+set(GAME_QIFIST_UNITS
+    Race StageUI TimingUtils Frontend FrontendScreens Game GameInfo Graphics Sprite Car Sound
+    CarPhysics HudDash CarEffects TrackCollision RallyData Mesh Sector StageTiming StageObjects
+    SceneNode FixedPoint RallyTiming NetRace)
+list(TRANSFORM GAME_QIFIST_UNITS PREPEND ${GAME_DIR}/)
+list(TRANSFORM GAME_QIFIST_UNITS APPEND .cpp)
+
+# The Amiga target has its own domain split and no SDL, MiniGL host backends,
+# shaders, tests or embedded assets.
+if(AMIGAOS)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/amiga.cmake)
+    return()
+endif()
+
+# Small standalone decoder, also usable by tests without SDL or game data.
+add_library(opencmr2_bink STATIC video/bink_decoder.cpp)
+target_include_directories(opencmr2_bink PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Built as objects: the game and the platform layer call each other, so both
 # go into one archive (opencmr2_platform) and link on every toolchain.
@@ -33,15 +52,6 @@ set_source_files_properties(
     TARGET_DIRECTORY cmr2_game
     PROPERTIES COMPILE_OPTIONS "-Wcast-function-type-strict;-Werror=cast-function-type-strict")
 
-# The original builds these with /QIfist: their float-to-integer conversions
-# (FTOI, game/FloatToInt.h) round to nearest like x87 FISTP instead of
-# truncating. Same list as CMR2Decomp's scripts/build.py.
-set(GAME_QIFIST_UNITS
-    Race StageUI TimingUtils Frontend FrontendScreens Game GameInfo Graphics Sprite Car Sound
-    CarPhysics HudDash CarEffects TrackCollision RallyData Mesh Sector StageTiming StageObjects
-    SceneNode FixedPoint RallyTiming NetRace)
-list(TRANSFORM GAME_QIFIST_UNITS PREPEND ${GAME_DIR}/)
-list(TRANSFORM GAME_QIFIST_UNITS APPEND .cpp)
 set_source_files_properties(${GAME_QIFIST_UNITS} TARGET_DIRECTORY cmr2_game
     PROPERTIES COMPILE_DEFINITIONS CMR2_QIFIST)
 
