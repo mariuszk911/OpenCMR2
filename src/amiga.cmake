@@ -53,3 +53,16 @@ target_compile_definitions(opencmr2 PRIVATE OPENCMR2_AMIGA_STACK=${OPENCMR2_AMIG
 target_link_libraries(opencmr2 PRIVATE opencmr2_domain_a opencmr2_platform)
 target_link_directories(opencmr2 PRIVATE ${MINIGL_LIBRARY_DIR})
 target_link_libraries(opencmr2 PRIVATE minigl)
+
+# ---- M0.9 startup smoke harness (Domain B) --------------------------------
+# Standalone: MiniGL 29.1, timer.device and AHI, no game or port-layer code.
+set(AHI_SDK "${PROJECT_SOURCE_DIR}/SDKs/m68k-amigaos-ahi")
+if(NOT EXISTS "${AHI_SDK}/Developer/Include/C/devices/ahi.h")
+    message(FATAL_ERROR "OpenCMR2: AHI SDK headers not found under ${AHI_SDK}/Developer/Include/C")
+endif()
+add_executable(amiga_smoke platform/amiga/smoke_main.c)
+target_include_directories(amiga_smoke PRIVATE
+    ${MINIGL_INCLUDE_DIR}
+    ${AHI_SDK}/Developer/Include/C)
+target_link_directories(amiga_smoke PRIVATE ${MINIGL_LIBRARY_DIR})
+target_link_libraries(amiga_smoke PRIVATE minigl)
