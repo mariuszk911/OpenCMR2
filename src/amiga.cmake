@@ -5,11 +5,12 @@ set(MINIGL_INCLUDE_DIR "${PISTORM3D}/SDK/minigl-shared-library/include")
 set(MINIGL_LIBRARY_DIR "${PISTORM3D}/SDK/lib")
 
 # ---- Domain A: game layout -------------------------------------------------
-# The flag set that defines the original 32-bit/MSVC layout. -malign-int is
-# deliberately absent: M0.5 decides whether the compiler can deliver it, and
-# only this interface target may gain it afterwards. Domain B must never see it.
+# The flag set that defines the original 32-bit/MSVC layout. M0.5 passed on the
+# cross-compiled ABI (build/amiga/m0-layout.log), so -malign-int is now part of
+# Domain A. Domain B must never see it.
 add_library(opencmr2_domain_a INTERFACE)
 target_compile_options(opencmr2_domain_a INTERFACE
+    -malign-int
     $<$<COMPILE_LANGUAGE:C>:-x c>
     "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/port/types.h"
     "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/port/msvcrt.h")

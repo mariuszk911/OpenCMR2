@@ -14,6 +14,7 @@
 #define OPENCMR2_PORT_GFX_H
 
 #include "port/types.h"
+#include "port/align.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,18 +26,18 @@ typedef struct GfxTexture GfxTexture;
 typedef struct GfxVertexBuffer GfxVertexBuffer;
 
 /* Row-vector matrix, Direct3D layout: v' = v * M, translation in _41.._43. */
-typedef struct GfxMatrix {
+typedef struct OPENCMR2_PORT_ALIGN4 GfxMatrix {
     float _11, _12, _13, _14;
     float _21, _22, _23, _24;
     float _31, _32, _33, _34;
     float _41, _42, _43, _44;
 } GfxMatrix;
 
-typedef struct GfxVector {
+typedef struct OPENCMR2_PORT_ALIGN4 GfxVector {
     float x, y, z;
 } GfxVector;
 
-typedef struct GfxColorValue {
+typedef struct OPENCMR2_PORT_ALIGN4 GfxColorValue {
     float r, g, b, a;
 } GfxColorValue;
 
@@ -46,7 +47,7 @@ typedef struct GfxColorValue {
 
 /* 3D vertex: position, normal, diffuse, specular, two texture coordinate
    sets (Direct3D FVF 0x2d2, 48 bytes). Lit and transformed by the device. */
-typedef struct GfxVertex {
+typedef struct OPENCMR2_PORT_ALIGN4 GfxVertex {
     float x, y, z;
     float nx, ny, nz;
     DWORD diffuse;
@@ -57,7 +58,7 @@ typedef struct GfxVertex {
 
 /* Pre-transformed 2D vertex: screen position, depth, 1/w, colours, one
    texture coordinate set (D3DTLVERTEX, 32 bytes). */
-typedef struct GfxTLVertex {
+typedef struct OPENCMR2_PORT_ALIGN4 GfxTLVertex {
     float sx, sy, sz, rhw;
     DWORD color;
     DWORD specular;
@@ -71,7 +72,7 @@ enum GfxLightType {
     GFX_LIGHT_PARALLELPOINT = 4
 };
 
-typedef struct GfxLight {
+typedef struct OPENCMR2_PORT_ALIGN4 GfxLight {
     int type;
     GfxColorValue diffuse;
     GfxColorValue specular;
@@ -84,7 +85,7 @@ typedef struct GfxLight {
     float theta, phi;
 } GfxLight;
 
-typedef struct GfxMaterial {
+typedef struct OPENCMR2_PORT_ALIGN4 GfxMaterial {
     GfxColorValue diffuse;
     GfxColorValue ambient;
     GfxColorValue specular;
@@ -92,7 +93,7 @@ typedef struct GfxMaterial {
     float power;
 } GfxMaterial;
 
-typedef struct GfxViewport {
+typedef struct OPENCMR2_PORT_ALIGN4 GfxViewport {
     DWORD x, y, width, height;
     float minZ, maxZ;
 } GfxViewport;

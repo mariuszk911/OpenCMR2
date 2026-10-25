@@ -15,6 +15,7 @@
 #define OPENCMR2_PORT_INPUT_H
 
 #include "port/types.h"
+#include "port/align.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,12 +51,12 @@ typedef struct InputEffect InputEffect;
 /* POV value when centred. */
 #define INPUT_POV_CENTERED 0xffffffff
 
-typedef struct InputMouseState {
+typedef struct OPENCMR2_PORT_ALIGN4 InputMouseState {
     LONG lX, lY, lZ;            /* movement since the last read */
     BYTE rgbButtons[8];
 } InputMouseState;
 
-typedef struct InputJoystickState {
+typedef struct OPENCMR2_PORT_ALIGN4 InputJoystickState {
     LONG lX, lY, lZ;
     LONG lRx, lRy, lRz;
     LONG rglSlider[2];
@@ -63,7 +64,7 @@ typedef struct InputJoystickState {
     BYTE rgbButtons[128];
 } InputJoystickState;
 
-typedef struct InputCaps {
+typedef struct OPENCMR2_PORT_ALIGN4 InputCaps {
     DWORD axes;
     DWORD buttons;
     DWORD povs;

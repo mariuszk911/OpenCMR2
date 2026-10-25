@@ -13,16 +13,17 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include "port/align.h"
 
-struct DiskRun {
+struct OPENCMR2_PORT_ALIGN4 DiskRun {
     unsigned short disk, native, size;
 };
 
-struct DiskPointer {
+struct OPENCMR2_PORT_ALIGN4 DiskPointer {
     unsigned short disk, native;
 };
 
-struct DiskLayout {
+struct OPENCMR2_PORT_ALIGN4 DiskLayout {
     unsigned short diskSize;
     unsigned short nativeSize;
     const DiskRun *runs;

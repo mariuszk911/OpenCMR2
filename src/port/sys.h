@@ -12,6 +12,7 @@
 #define OPENCMR2_PORT_SYS_H
 
 #include "port/types.h"
+#include "port/align.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,7 +52,7 @@ enum SysEventType {
     SYS_EVENT_TOGGLE_FULLSCREEN /* Alt+Enter; the Enter key is kept from the game */
 };
 
-typedef struct SysEvent {
+typedef struct OPENCMR2_PORT_ALIGN4 SysEvent {
     int type;
     int key;
     int character;

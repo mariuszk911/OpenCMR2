@@ -20,6 +20,27 @@ add_executable(endian_test endian.cpp endian_c.c endian_forced_big.cpp)
 target_include_directories(endian_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME endian COMMAND endian_test)
 
+# M0.5 layout reference. The linux-x86 build prints the original 32-bit
+# sizeof/offsetof values; the 68k probe records the same expressions.
+add_executable(layout_probe amiga/layout_probe.cpp)
+target_include_directories(layout_probe PRIVATE
+    ${PROJECT_SOURCE_DIR}/game
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/port/compat)
+target_compile_options(layout_probe PRIVATE
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+    -fms-extensions)
+target_compile_definitions(layout_probe PRIVATE OPENCMR2_LAYOUT_PRINT)
+add_test(NAME layout_probe COMMAND layout_probe)
+
+add_executable(layout_probe_shared amiga/layout_probe.cpp)
+target_include_directories(layout_probe_shared PRIVATE
+    ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/src/port/compat)
+target_compile_definitions(layout_probe_shared PRIVATE
+    OPENCMR2_LAYOUT_PRINT OPENCMR2_LAYOUT_SHARED_ONLY)
+add_test(NAME layout_probe_shared COMMAND layout_probe_shared)
+
 add_executable(net_session_test net_session.cpp)
 target_link_libraries(net_session_test PRIVATE opencmr2_net)
 target_compile_options(net_session_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")
