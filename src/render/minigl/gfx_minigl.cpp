@@ -161,6 +161,7 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
         MiniGLClose();
         return 0;
     }
+    Sys_Log("gfx: MiniGL %dx%d context ready", width, height);
     s_width = width;
     s_height = height;
     s_fullscreen = fullscreen != 0;
@@ -486,6 +487,13 @@ extern "C" void Gfx_GetPixelFormat(int format, GfxPixelFormat *out)
 {
     if (out == NULL)
         return;
+    if (format == GFX_FORMAT_BC1 || format == GFX_FORMAT_BC3) {
+        static int logged;
+        if (!logged) {
+            logged = 1;
+            Sys_Log("gfx: DXT1/DXT5 advertised");
+        }
+    }
     memset(out, 0, sizeof(*out));
     switch (format) {
     case GFX_FORMAT_BGRX8:

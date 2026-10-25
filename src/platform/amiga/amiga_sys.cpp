@@ -531,12 +531,80 @@ int ResolveReading(const char *path, char *out, size_t size)
     return 0;
 }
 
+// Native Amiga paths (volume/assign: or /...) come from the game's install
+// paths and must bypass the data-directory join. Backslashes are normalized.
+int IsNativePath(const char *path)
+{
+    if (path == NULL || path[0] == '\0')
+        return 0;
+    if (path[0] == '/')
+        return 1;
+    const char *colon = strchr(path, ':');
+    return colon != NULL && colon != path && colon - path > 1;
+}
+
+int NormalizeNativePath(const char *path, char *out, size_t size)
+{
+    const size_t length = strlen(path);
+    if (length + 1 > size)
+        return 0;
+    for (size_t i = 0; i <= length; ++i)
+        out[i] = path[i] == '\\' ? '/' : path[i];
+    return 1;
+}
+
+int CreateNativeParentDirs(char *path)
+{
+    for (char *p = path + 1; *p != '\0'; ++p) {
+        if (*p != '/')
+            continue;
+        *p = '\0';
+        BPTR lock = Lock((STRPTR)path, SHARED_LOCK);
+        if (lock != 0) {
+            UnLock(lock);
+        } else if (!CreateDir((STRPTR)path)) {
+            const LONG error = IoErr();
+            lock = Lock((STRPTR)path, SHARED_LOCK);
+            if (lock == 0) {
+                *p = '/';
+                Sys_Log("CreateDir %s failed (IoErr %ld)", path, (long)error);
+                return 0;
+            }
+            UnLock(lock);
+        }
+        *p = '/';
+    }
+    return 1;
+}
+
 extern "C" int Sys_ResolvePath(const char *path, int forWriting, char *out, size_t outSize)
 {
     AmigaGamePath parts;
 
     if (path == NULL || out == NULL || outSize == 0)
         return 0;
+    char native[kNativePathSize];
+    if (IsNativePath(path)) {
+        if (!NormalizeNativePath(path, native, sizeof(native))) {
+            if (!forWriting)
+                RememberMissing(path);
+            return 0;
+        }
+        if (forWriting) {
+            if (!CreateNativeParentDirs(native))
+                return 0;
+            CopyPath(out, outSize, native);
+            return 1;
+        }
+        BPTR lock = Lock((STRPTR)native, SHARED_LOCK);
+        if (lock == 0) {
+            RememberMissing(path);
+            return 0;
+        }
+        UnLock(lock);
+        CopyPath(out, outSize, native);
+        return 1;
+    }
     if (!AmigaPath_Split(path, &parts)) {
         if (!forWriting)
             RememberMissing(path);
@@ -668,7 +736,14 @@ extern "C" int Sys_DeleteFile(const char *path)
     AmigaGamePath parts;
     char native[kNativePathSize];
 
-    if (path == NULL || !AmigaPath_Split(path, &parts))
+    if (path == NULL)
+        return 0;
+    if (IsNativePath(path)) {
+        if (!NormalizeNativePath(path, native, sizeof(native)))
+            return 0;
+        return DeleteFile((STRPTR)native) ? 1 : 0;
+    }
+    if (!AmigaPath_Split(path, &parts))
         return 0;
     if (!AmigaPath_Join(native, sizeof(native), s_userDir, &parts, 0, parts.count))
         return 0;
@@ -694,6 +769,18 @@ extern "C" void Sys_ListFiles(const char *directory, const char *pattern,
     if (callback == NULL)
         return;
     s_listFull = false;
+    if (directory != NULL && IsNativePath(directory)) {
+        char native[kNativePathSize];
+        if (!NormalizeNativePath(directory, native, sizeof(native)))
+            return;
+        CollectDir(native, match, names, &count);
+        SortNames(names, count);
+        for (int i = 0; i < count; ++i) {
+            if (!callback(names[i], context))
+                break;
+        }
+        return;
+    }
     if (directory != NULL && directory[0] != '\0') {
         if (!AmigaPath_Split(directory, &parts))
             return;

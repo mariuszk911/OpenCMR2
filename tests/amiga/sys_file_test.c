@@ -52,6 +52,19 @@ int main(void)
         return Fail("read data file");
     Sys_CloseFile(file);
 
+    // Native Amiga paths bypass the data-directory join and normalize '\'.
+    file = Sys_OpenFile("DH20:sysfile-data/frontend\\menu.tga", SYS_FILE_READ);
+    if (file == NULL)
+        return Fail("open native path");
+    if (Sys_ReadFile(file, buffer, sizeof(buffer)) != 6 || memcmp(buffer, "MENU42", 6) != 0)
+        return Fail("read native path");
+    Sys_CloseFile(file);
+
+    listedCount = 0;
+    Sys_ListFiles("DH20:sysfile-data/FrontEnd", "*", Collect, NULL);
+    if (listedCount != 1 || strcmp(listed[0], "Menu.TGA") != 0)
+        return Fail("list native path");
+
     // Writing creates the parent directory in the user drawer. Create the
     // names in reverse order so the listing has to sort them.
     file = Sys_OpenFile("Saves/zz.sav", SYS_FILE_WRITE);
@@ -82,6 +95,7 @@ int main(void)
         return Fail("read after seek");
     Sys_CloseFile(file);
 
+    listedCount = 0;
     Sys_ListFiles("Saves", "*.sav", Collect, NULL);
     if (listedCount != 2 || strcmp(listed[0], "slot1.sav") != 0 ||
         strcmp(listed[1], "zz.sav") != 0) {
