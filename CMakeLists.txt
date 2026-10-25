@@ -21,6 +21,13 @@ endif()
 
 option(OPENCMR2_SANITIZE "Build with AddressSanitizer and UBSan" OFF)
 option(OPENCMR2_VENDORED_SDL "Download and build SDL3 instead of using an installed one" ${ANDROID})
+option(AMIGAOS "Build the native AmigaOS 68k target" OFF)
+
+# Target identity for the fork-owned platform layer. The host builds leave
+# both macros undefined, so no ad-hoc #ifdef in the sources decides this.
+if(AMIGAOS)
+    add_compile_definitions(OPENCMR2_AMIGA BIGENDIAN)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

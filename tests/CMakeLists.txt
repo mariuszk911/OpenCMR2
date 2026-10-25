@@ -14,6 +14,12 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND CMAKE_SYSTEM_PROCESSOR MATCHES "i[3-6]86|x86"
     add_test(NAME fixedpoint_equiv COMMAND fixedpoint_equiv)
 endif()
 
+# Little-endian helpers (src/port/endian.h). Built from both C and C++ because
+# the header is shared by the game and the OS glue.
+add_executable(endian_test endian.cpp endian_c.c endian_forced_big.cpp)
+target_include_directories(endian_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME endian COMMAND endian_test)
+
 add_executable(net_session_test net_session.cpp)
 target_link_libraries(net_session_test PRIVATE opencmr2_net)
 target_compile_options(net_session_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")
