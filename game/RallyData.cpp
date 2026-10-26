@@ -4021,11 +4021,15 @@ void RallyData_LoadCurrentRallyWeatherTextures(void)
     int index;
 
     *(BYTE *)&g_weatherMaps.count = 0;
-    for (i = 0; i < 5; i++) {
+    // PORT: AMIGA: the original cleared five entries, writing maps[4] (the
+    // storage of rects[0..1]) and rects[8..9] (slots[0..3]). Clear the same
+    // bytes within each array's bounds.
+    for (i = 0; i < 4; i++) {
         g_weatherMaps.maps[i] = NULL;
         g_weatherMaps.rects[i * 2] = 0;
         g_weatherMaps.rects[i * 2 + 1] = 0;
     }
+    memset(g_weatherMaps.slots, 0, 4);
     stage = (BYTE)RallyDataStageIndex() >> 2;
     if (stage < 2)
         *(BYTE *)&g_weatherMaps.count = 4;
