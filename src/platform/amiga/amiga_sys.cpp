@@ -77,7 +77,10 @@ unsigned char s_keyState[256];
 /* input.device adapter. The handler is the authoritative key down/up source:
  * a sampled IDCMP state can lose a release or a tap shorter than one frame.
  * It runs at interrupt level, so it only touches these arrays and the window
- * flag; all device-management calls happen in task context below. */
+ * flag; all device-management calls happen in task context below. An IDCMP
+ * release also clears the held state (see PollEvent) so a synthetic or
+ * otherwise missed handler release cannot leave a control held forever; the
+ * tap latch is left alone to expire normally. */
 struct MsgPort *s_inputDevicePort;
 struct IOStdReq *s_inputDeviceRequest;
 struct Interrupt s_inputDeviceHandler;
@@ -827,7 +830,13 @@ static void LogConfigFile(const char *native, BPTR handle)
     if (strstr(native, "Controller.rcf") == NULL && strstr(native, "GameInfo.rcf") == NULL)
         return;
     memset(head, 0, sizeof(head));
-    size = Seek(handle, 0, OFFSET_END);
+    /* AmigaDOS Seek returns the previous position, so the second call is the
+     * offset at EOF. The old one-call form logged size=0 for every file and
+     * skipped the slot-map read. */
+    if (Seek(handle, 0, OFFSET_END) < 0)
+        size = 0;
+    else
+        size = Seek(handle, 0, OFFSET_CURRENT);
     Seek(handle, 0, OFFSET_BEGINNING);
     got = Read(handle, head, sizeof(head));
     Seek(handle, 0, OFFSET_BEGINNING);
@@ -1306,6 +1315,13 @@ static int PollEvent(SysEvent *event, int *consumed)
         } else if (messageClass == IDCMP_RAWKEY) {
             // Releases are not events: the game polls the held-key state.
             const int dik = AmigaKey_UpdateState(s_keyState, message->Code);
+            if (dik != 0 && (message->Code & 0x80) != 0) {
+                // Fallback for a release the input.device handler did not
+                // observe (for example a synthetic or dropped event).
+                Disable();
+                s_inputHeld[dik] = 0;
+                Enable();
+            }
             if (dik != 0 && (message->Qualifier & IEQUALIFIER_REPEAT) == 0)
                 Sys_Log("input: rawkey %02lx %s dik %d",
                         (unsigned long)(message->Code & 0x7f),

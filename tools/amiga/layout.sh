@@ -92,5 +92,5 @@ if [ -f "$HOST_FULL" ] && [ -f "$HOST_SHARED" ]; then
 fi
 
 note ""
-note "Target execution is still pending a PiStorm run (M0.9); these values come"
-note "from the cross-compiled object, not from the target."
+note "These values come from the cross-compiled object; the emitted probe is the"
+note "target check. A PiStorm run is recorded in build/amiga/m0-layout-target.log."

@@ -29,6 +29,17 @@ int main()
               std::strcmp(path.parts[1], "menu.tga") == 0,
           "drive component and separators");
 
+    // The game builds the saved controller path with a leading ".\".
+    Check(AmigaPath_Split(".\\Configuration\\Controller.rcf", &path) == 1,
+          "split controller config path");
+    Check(path.count == 2 && std::strcmp(path.parts[0], "Configuration") == 0 &&
+              std::strcmp(path.parts[1], "Controller.rcf") == 0,
+          "controller config components");
+    Check(AmigaPath_Join(out, sizeof(out), "PROGDIR:", &path, 0, path.count),
+          "join controller config path");
+    Check(std::strcmp(out, "PROGDIR:Configuration/Controller.rcf") == 0,
+          "controller config join result");
+
     Check(AmigaPath_Split("a//b/./c/../d", &path) == 1, "split mixed separators");
     Check(path.count == 3 && std::strcmp(path.parts[0], "a") == 0 &&
               std::strcmp(path.parts[1], "b") == 0 && std::strcmp(path.parts[2], "d") == 0,
