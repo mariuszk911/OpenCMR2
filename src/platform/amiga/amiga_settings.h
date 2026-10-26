@@ -10,7 +10,6 @@
 #define OPENCMR2_AMIGA_SETTINGS_H
 
 #include <map>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -29,11 +28,14 @@ inline std::string Lower(const std::string &text)
 inline void Parse(const std::string &contents, std::map<std::string, std::string> &settings)
 {
     settings.clear();
-    std::istringstream input(contents);
-    std::string line;
     std::string section;
 
-    while (std::getline(input, line)) {
+    size_t position = 0;
+    while (position < contents.size()) {
+        const size_t newline = contents.find('\n', position);
+        std::string line = contents.substr(position, newline == std::string::npos ? std::string::npos
+                                                                                  : newline - position);
+        position = newline == std::string::npos ? contents.size() : newline + 1;
         std::string text = line;
         while (!text.empty() &&
                (text.back() == '\n' || text.back() == '\r' || text.back() == ' '))
@@ -69,15 +71,18 @@ inline bool Rewrite(const std::string &contents, const std::string &section,
     if (value.find_first_of("\r\n") != std::string::npos)
         return false;
 
-    std::istringstream input(contents);
     const std::string setting = key + " = " + value;
     std::vector<std::string> lines;
-    std::string line;
     std::string current;
     size_t headerEnd = std::string::npos;
     bool written = false;
 
-    while (std::getline(input, line)) {
+    size_t position = 0;
+    while (position < contents.size()) {
+        const size_t newline = contents.find('\n', position);
+        std::string line = contents.substr(position, newline == std::string::npos ? std::string::npos
+                                                                                  : newline - position);
+        position = newline == std::string::npos ? contents.size() : newline + 1;
         if (!line.empty() && line.back() == '\r')
             line.pop_back();
         const size_t start = line.find_first_not_of(" \t");
