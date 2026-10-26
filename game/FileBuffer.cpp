@@ -85,7 +85,12 @@ void *CFileBuffer::GetGenericFileBuffer(char *fileName, BOOL isLocalFile)
         if (lpBuffer != NULL)
             Disk_RegisterBuffer(lpBuffer, pFileHeaderOut.archiveSize);
         CGenericFileLoader::m_fileSize = pFileHeaderOut.archiveSize;
-        gzread(unk0x004bdee0, lpBuffer, pFileHeaderOut.archiveSize);
+        const int bflRead = gzread(unk0x004bdee0, lpBuffer, pFileHeaderOut.archiveSize);
+        // PORT: AMIGA: make a short archive read visible; the directory is
+        // useless when the buffer is incomplete.
+        if (bflRead != (int)pFileHeaderOut.archiveSize)
+            Sys_Log("bfl: %s read %ld/%lu", hostPath, (long)bflRead,
+                    (unsigned long)pFileHeaderOut.archiveSize);
         bIsBFL = true;
     }
 
@@ -93,6 +98,8 @@ void *CFileBuffer::GetGenericFileBuffer(char *fileName, BOOL isLocalFile)
 
     if (!bIsBFL)
     {
+        // PORT: AMIGA: a non-BFL result here means the header check failed.
+        Sys_Log("file: %s is not a BFL (header %ld)", hostPath, (long)iHeaderSize);
         file = Sys_OpenFile(_fileName, SYS_FILE_READ);
         if (file == NULL)
             return NULL;
