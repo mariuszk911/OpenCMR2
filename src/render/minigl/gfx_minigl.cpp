@@ -812,6 +812,9 @@ void PutPixelRGBA(unsigned char *dst, const unsigned char *src, int format)
         dst[0] = src[2]; dst[1] = src[1]; dst[2] = src[0]; dst[3] = src[3];
         break;
     case GFX_FORMAT_BGRX8:
+    case GFX_FORMAT_BUMP_DUDVL:
+        // A bump texel is du, dv, luminance (3 bytes), read as the host
+        // executors do: blue, green, red, opaque.
         dst[0] = src[2]; dst[1] = src[1]; dst[2] = src[0]; dst[3] = 0xff;
         break;
     default:
@@ -929,18 +932,23 @@ unsigned char *TextureToRGBA(const GfxTexture *texture)
                     DecodeBC1Block(block, pixels, 16);
                 else
                     DecodeBC3Block(block, pixels, 16);
-                for (unsigned int y = 0; y < 4; ++y) {
-                    unsigned char *dst = rgba + (by * 4 + y) * width * 4 + bx * 16;
-                    memcpy(dst, pixels + y * 16, 16);
+                // Edge blocks of a texture whose size is not a multiple of
+                // four only cover part of the 4x4 block.
+                const unsigned int rows = height - by * 4 < 4 ? height - by * 4 : 4;
+                const unsigned int columns = width - bx * 4 < 4 ? width - bx * 4 : 4;
+                for (unsigned int y = 0; y < rows; ++y) {
+                    unsigned char *dst = rgba + ((by * 4 + y) * width + bx * 4) * 4;
+                    memcpy(dst, pixels + y * 16, columns * 4);
                 }
             }
         }
     } else {
+        const unsigned int srcBytes = texture->format == GFX_FORMAT_BUMP_DUDVL ? 3 : 4;
         for (unsigned int y = 0; y < height; ++y) {
             const unsigned char *src = texture->data + y * texture->pitch;
             unsigned char *dst = rgba + y * width * 4;
             for (unsigned int x = 0; x < width; ++x) {
-                PutPixelRGBA(dst + x * 4, src + x * 4, texture->format);
+                PutPixelRGBA(dst + x * 4, src + x * srcBytes, texture->format);
             }
         }
     }
