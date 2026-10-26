@@ -2,7 +2,6 @@
 #include <string.h>
 #include "Texture.h"
 #include "Graphics.h"
-#include "port/sys.h"
 
 // GLOBAL: CMR2 0x00520c98
 char g_ddsSuffix[] = ".dds";
@@ -46,9 +45,6 @@ Texture* CTexture::FindLoadTexture(GenericFile* pFile, char* textureName, bool *
             pTexture->pArchive = pFile;
             return pTexture;
         }
-        // PORT: AMIGA: distinguish an archive miss from an archive load failure.
-        Sys_Log("texture: %s not in archive (size %lu)", textureName,
-                (unsigned long)pFile->fileSize);
     }
     return CGraphics::LoadDDSThenTGATexture(textureName, flag);
 }

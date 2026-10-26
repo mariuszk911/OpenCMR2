@@ -1,5 +1,4 @@
 #include "Frontend.h"
-#include "port/sys.h"
 #include "FloatToInt.h"
 #include "Game.h"
 #include "FileBuffer.h"
@@ -270,10 +269,6 @@ BOOL CFrontend::IsTextureHeightSupported(unsigned int param_1)
 // FUNCTION: CMR2 0x004a9700
 BOOL CFrontend::HasDXT1TextureSupport(void)
 {
-    // PORT: AMIGA: the chosen frontend archive depends on this; log the flags.
-    Sys_Log("frontend: DXT1 %d/%d DXT5 %d/%d",
-            CGraphics::m_hasTexFormatDXT1_16, CGraphics::m_hasTexFormatDXT1_32,
-            CGraphics::m_hasTexFormatDXT5_16, CGraphics::m_hasTexFormatDXT5_32);
     if (!CGraphics::m_hasTexFormatDXT1_16 && !CGraphics::m_hasTexFormatDXT1_32)
         return FALSE;
 
