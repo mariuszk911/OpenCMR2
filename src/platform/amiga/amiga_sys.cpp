@@ -1555,8 +1555,14 @@ extern "C" void AmigaSys_Shutdown(void)
         CloseLibrary((struct Library *)IntuitionBase);
         IntuitionBase = NULL;
     }
-    // The log is flushed per line; closing its dos handle on the normal return
-    // path is left to the OS.
+    // AmigaOS does not close a process's dos handles at exit; an open log stays
+    // locked until reboot (the IoErr 202 fallback in Sys_Log). s_logTried stays
+    // set, so a later Sys_Log (atexit handlers) writes to stderr only.
+    if (s_logHandle != 0) {
+        if (!Close(s_logHandle))
+            fprintf(stderr, "opencmr2: closing the log failed (IoErr %ld)\n", (long)IoErr());
+        s_logHandle = 0;
+    }
 }
 
 extern "C" void Sys_Exit(int code)
