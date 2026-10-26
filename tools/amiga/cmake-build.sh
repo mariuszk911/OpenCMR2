@@ -8,7 +8,7 @@ set -eu
 : "${CPU:=68040}"
 : "${FPU:=68881}"
 : "${OPT:=-O2}"
-: "${STACK:=262144}"
+: "${STACK:=2097152}"
 : "${JOBS:=4}"
 
 BUILD_DIR="$REPO/build/amiga"

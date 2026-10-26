@@ -15,13 +15,13 @@ set(AMIGAOS ON CACHE BOOL "Build the native AmigaOS 68k target" FORCE)
 set(OPENCMR2_AMIGA_CPU "68040" CACHE STRING "Amiga CPU selected with -m")
 set(OPENCMR2_AMIGA_FPU "68881" CACHE STRING "Amiga FPU selected with -m")
 set(OPENCMR2_AMIGA_OPT "-O2" CACHE STRING "Optimisation flags for the Amiga target")
-set(OPENCMR2_AMIGA_STACK "262144" CACHE STRING "Initial Amiga stack size in bytes")
+set(OPENCMR2_AMIGA_STACK "2097152" CACHE STRING "Amiga stack size swapped in by libnix swapstack.o")
 
 # Shared by both compilation domains. -fwrapv, -fno-strict-aliasing,
 # -fsigned-char and -ffp-contract=off come from the top-level file for every
-# target. GCC 6.5 implements -fexcess-precision=standard for C only; for C++
-# it reports "sorry, unimplemented", so C++ uses -ffloat-store instead and
-# M0.4 records whether it actually changes the generated code.
+# target. Match the working reVC AmigaOS port: plain hard-float, no
+# -ffloat-store/-fexcess-precision; only suppress the builtin *f math names so
+# the libnix *f overrides are not rewritten.
 set(OPENCMR2_AMIGA_COMMON_FLAGS "-m${OPENCMR2_AMIGA_CPU} -m${OPENCMR2_AMIGA_FPU} -mhard-float -mcrt=nix20 -fno-omit-frame-pointer")
-set(CMAKE_C_FLAGS_INIT "${OPENCMR2_AMIGA_COMMON_FLAGS} -fexcess-precision=standard -fno-builtin-sin -fno-builtin-cos ${OPENCMR2_AMIGA_OPT}")
-set(CMAKE_CXX_FLAGS_INIT "${OPENCMR2_AMIGA_COMMON_FLAGS} -ffloat-store -fno-builtin-sin -fno-builtin-cos ${OPENCMR2_AMIGA_OPT}")
+set(CMAKE_C_FLAGS_INIT "${OPENCMR2_AMIGA_COMMON_FLAGS} -fno-builtin-sin -fno-builtin-cos -fno-builtin-sinf -fno-builtin-cosf ${OPENCMR2_AMIGA_OPT}")
+set(CMAKE_CXX_FLAGS_INIT "${OPENCMR2_AMIGA_COMMON_FLAGS} -fno-builtin-sin -fno-builtin-cos -fno-builtin-sinf -fno-builtin-cosf ${OPENCMR2_AMIGA_OPT}")

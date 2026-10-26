@@ -4,14 +4,24 @@
 set(MINIGL_INCLUDE_DIR "${PISTORM3D}/SDK/minigl-shared-library/include")
 set(MINIGL_LIBRARY_DIR "${PISTORM3D}/SDK/lib")
 
+# libnix swapstack.o plus the __stack size. The Shell stack is too small for the
+# C++ game and the STL-heavy Sys layer; the reference Amiga port uses the same
+# mechanism. Every executable that runs game/Sys code gets this.
+execute_process(COMMAND ${CMAKE_C_COMPILER} -mcrt=nix20 -print-file-name=swapstack.o
+                OUTPUT_VARIABLE OPENCMR2_SWAPSTACK_OBJ OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT EXISTS "${OPENCMR2_SWAPSTACK_OBJ}")
+    message(FATAL_ERROR "libnix swapstack.o not found")
+endif()
+set(OPENCMR2_AMIGA_STACK_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/platform/amiga/amiga_stack.c)
+function(opencmr2_amiga_stack target)
+    target_sources(${target} PRIVATE ${OPENCMR2_AMIGA_STACK_SOURCE})
+    target_compile_definitions(${target} PRIVATE OPENCMR2_AMIGA_STACK=${OPENCMR2_AMIGA_STACK})
+    target_link_libraries(${target} PRIVATE ${OPENCMR2_SWAPSTACK_OBJ})
+endfunction()
+
 # CrtTypeInfo.cpp is an MSVC CRT shim with a local type_info destructor; the
 # Amiga build has no RTTI and does not use it.
 list(REMOVE_ITEM GAME_SOURCES ${GAME_DIR}/CrtTypeInfo.cpp)
-
-# GCC 6.5 -O2 has produced illegal-instruction failures in the Sys C++/STL
-# code on 68040; keep this file at -O1 until objdump evidence clears it.
-set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/platform/amiga/amiga_sys.cpp
-    PROPERTIES COMPILE_OPTIONS "-O1")
 
 # ---- Domain A: game layout -------------------------------------------------
 # The flag set that defines the original 32-bit/MSVC layout. M0.5 passed on the
@@ -87,6 +97,7 @@ add_executable(opencmr2
     platform/amiga/main_amiga.cpp
     $<TARGET_OBJECTS:cmr2_game>
     $<TARGET_OBJECTS:opencmr2_amiga_stubs>)
+opencmr2_amiga_stack(opencmr2)
 target_compile_definitions(opencmr2 PRIVATE OPENCMR2_AMIGA_STACK=${OPENCMR2_AMIGA_STACK})
 target_link_libraries(opencmr2 PRIVATE opencmr2_domain_a opencmr2_platform)
 target_link_directories(opencmr2 PRIVATE ${MINIGL_LIBRARY_DIR})
@@ -109,20 +120,25 @@ target_link_libraries(amiga_smoke PRIVATE minigl)
 add_executable(amiga_sys_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_time_test.c
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_sys_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_sys_test)
 
 add_executable(amiga_sys_file_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_file_test.c
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_sys_file_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_sys_file_test)
 
 add_executable(amiga_sys_settings_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_settings_test.c
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_sys_settings_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_sys_settings_test)
 
 add_executable(amiga_platform_test ${PROJECT_SOURCE_DIR}/tests/amiga/platform_test.c
     platform/amiga/amiga_platform.cpp
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_platform_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_platform_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_event_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_event_test)

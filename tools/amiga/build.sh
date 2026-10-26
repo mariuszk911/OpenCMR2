@@ -15,7 +15,7 @@ IMAGE=${IMAGE:-opencmr2/amiga-toolchain:latest}
 CPU=${CPU:-68040}
 FPU=${FPU:-68881}
 OPT=${OPT:--O2}
-STACK=${STACK:-262144}
+STACK=${STACK:-2097152}
 JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}
 PISTORM3D_ROOT=${PISTORM3D:-"$REPO/SDKs/PiStorm3D"}
 
@@ -34,7 +34,7 @@ Environment overrides:
   CPU        Amiga CPU for -m (default: 68040)
   FPU        Amiga FPU for -m (default: 68881)
   OPT        optimisation flags (default: -O2)
-  STACK      initial stack size in bytes (default: 262144)
+  STACK      swapstack size in bytes (default: 2097152)
   JOBS       parallel build jobs (default: host CPU count)
 EOF
 }
