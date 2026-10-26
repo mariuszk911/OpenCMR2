@@ -46,7 +46,7 @@ GfxTLVertex g_spriteVerts3[1024 * 4];
 
 void Graphics_InvalidateTextureStageCache(void);
 
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
 // PORT: AMIGA: one-shot car setup bar diagnostics, armed by the frontend draw.
 extern unsigned int g_carSetupDiagnosticProgressStart;
 extern unsigned int g_carSetupDiagnosticProgressEnd;
@@ -227,7 +227,7 @@ void Sprite_DrawLayer(int layer)
     Gfx_SetStageMinFilter(0, GFX_FILTER_LINEAR);
     Gfx_SetStageMagFilter(0, GFX_FILTER_LINEAR);
     Graphics_InvalidateTextureStageCache();
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     // PORT: AMIGA: expire unmatched texture watches after this layer's first
     // flush so a missing asset cannot add checks to every later sprite frame.
     if (layer == 1 && g_carSetupDiagnosticTextureMask != 0) {
@@ -651,7 +651,7 @@ void Tri2D_DrawLayer(int layer)
         }
         break;
     default:
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
         // PORT: AMIGA: consume the bar range at the layer-1 boundary, including
         // an empty flush, so a later frame can never misattribute its triangles.
         if (g_carSetupDiagnosticProgressFlushPending) {

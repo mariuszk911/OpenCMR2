@@ -30,7 +30,7 @@ void Mesh_ReuploadAll(void);
 void Scene_RestoreLights(void);
 void Sound_RestartMusicAfterDeviceCreation(void);
 
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
 // PORT: AMIGA: one-shot car setup diagnostics armed on a palette change.
 extern Texture *g_carSetupDiagnosticTextures[3];
 extern unsigned int g_carSetupDiagnosticTextureMask;
@@ -6598,7 +6598,7 @@ void CGraphics::ConfigureTextureStageBlendMode(int stage, Texture *pTexture)
 // FUNCTION: CMR2 0x004a4850
 void CGraphics::ApplyTextureStageChange(int stage, Texture *pTexture)
 {
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     // PORT: AMIGA: report when selected car art reaches the stage-0 binding path.
     if (stage == 0 && pTexture != NULL && g_carSetupDiagnosticTextureMask != 0) {
         unsigned int matchingMask = 0;

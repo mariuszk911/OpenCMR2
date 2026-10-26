@@ -61,7 +61,7 @@ int g_creditsStartTime;
 // GLOBAL: CMR2 0x008196e8
 int g_screenPaletteIds[23];
 
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
 // PORT: AMIGA: one-shot diagnostics for car setup texture selection/binding
 // and the layer-1 progress-bar triangles. Armed only when the cursor changes.
 Texture *g_carSetupDiagnosticTextures[3];
@@ -3681,7 +3681,7 @@ void FrontendScroller_InitRallyStageSelection(Menu *pMenu, int param)
     int count;
 
     count = 0;
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     // PORT: AMIGA: identify each car-menu initialization and player context.
     if (pMenu == FrontendMenu_GetCarSetup()) {
         s_carMenuEntrySequence++;
@@ -3726,7 +3726,7 @@ void FrontendScroller_InitRallyStageSelection(Menu *pMenu, int param)
         pWidths++;
         p++;
     }
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     if (pMenu == FrontendMenu_GetCarSetup()) {
         Sys_Log("AMIGA: car-init map seq=%u itemCount=%d cursor=%d scroller(count=%d spacing=%d current=%d previous=%d offset=%d start=%d time=%d) globals(selection=%d time=%d)",
                 s_carMenuEntrySequence, pMenu->itemCount, pMenu->cursor,
@@ -6139,7 +6139,7 @@ int FrontendDraw_ModeProgressBar(int param_1, int param_2, int param_3, int para
     int x;
     int step;
     int scale;
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     unsigned int triangleStart;
 #endif
 
@@ -6150,7 +6150,7 @@ int FrontendDraw_ModeProgressBar(int param_1, int param_2, int param_3, int para
     rect[0] = (short)(x >> 16);
     scale = 0xa0000;
     step = FixMul(g_pGraphics->resX << 16, FixDiv(scale, 0x2800000));
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     triangleStart = g_tri2DCount1;
 #endif
     for (i = 0; i < param_3; i++) {
@@ -6161,7 +6161,7 @@ int FrontendDraw_ModeProgressBar(int param_1, int param_2, int param_3, int para
         x += step;
         rect[0] = (short)(x >> 16);
     }
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     // PORT: AMIGA: capture both bar coordinates and queued layer-1 triangles
     // only on the selection change armed by FrontendMenu_DrawCarSetup.
     if (param_5 != NULL && g_carSetupDiagnosticProgressBarsRemaining != 0) {
@@ -10564,7 +10564,7 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
     int grip;
     short height;
     int x;
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     int paletteId;
     int liveryIndex;
     Texture *frontTexture;
@@ -10593,7 +10593,7 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
     names[1] = label;
     FrontendDraw_MenuPath(pMenu, PATH_X(), PATH_Y(), 1, 3, names, 2);
     FrontendDraw_ScrollerRow(FrontendScroller_GetRouteEntryScroller(), 1);
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     paletteId = g_screenPaletteIds[pMenu->cursor];
     liveryIndex = g_paletteLiveryIndex[paletteId];
     frontTexture = CFrontend::m_unk0x0081884c[paletteId];
@@ -10666,7 +10666,7 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
         height = 0x1ce;
     else
         height = 0xe8;
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     pTexture = frontTexture;
 #else
     pTexture = CFrontend::m_unk0x0081884c[g_screenPaletteIds[pMenu->cursor]];
@@ -10682,7 +10682,7 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
         dst.y -= height;
         Sprite_Queue(&src, &dst, pTexture, 1, 0, 0, NULL, g_colourWhite0x00524968, 8);
     }
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     pTexture = backTexture;
 #else
     pTexture = CFrontend::m_unk0x008182cc[g_screenPaletteIds[pMenu->cursor]];
@@ -10698,7 +10698,7 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
         dst.y -= height;
         Sprite_Queue(&src, &dst, pTexture, 1, 0, 0, NULL, g_colourWhite0x00524968, 8);
     }
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     pTexture = liveryTexture;
 #else
     pTexture = CFrontend::m_unk0x00818530[g_paletteLiveryIndex[g_screenPaletteIds[pMenu->cursor]]];
@@ -10713,7 +10713,7 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
         Sprite_Queue((SpriteRect *)pRects[g_screenPaletteIds[pMenu->cursor]], (SpriteRect *)g_frontendDrawRect, pTexture, 1, 0, 0, NULL,
                      g_colourWhite0x00524968, 8);
     }
-#if defined(__m68k__)
+#if defined(OPENCMR2_MENU_DIAGNOSTICS)
     if (diagnosticSelectionChanged) {
         const unsigned int expectedSprites = (frontTexture != NULL ? 1u : 0u) +
                                              (backTexture != NULL ? 1u : 0u) +

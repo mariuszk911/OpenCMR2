@@ -41,6 +41,11 @@ target_compile_options(cmr2_game PRIVATE
     -Wno-everything
     -ferror-limit=0)
 target_link_libraries(cmr2_game PUBLIC SDL3::SDL3)
+# The first-entry car-menu breadcrumbs are always on for the Amiga target;
+# host builds enable the same code with -DOPENCMR2_MENU_DIAGNOSTICS=ON.
+if(OPENCMR2_MENU_DIAGNOSTICS)
+    target_compile_definitions(cmr2_game PRIVATE OPENCMR2_MENU_DIAGNOSTICS)
+endif()
 
 # These units used to call variadic sprintf through fixed-argument casts,
 # which breaks the macOS ARM64 ABI. Reject incompatible function casts here

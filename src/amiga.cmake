@@ -52,6 +52,9 @@ set_target_properties(cmr2_game PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_include_directories(cmr2_game PUBLIC
     ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
 target_link_libraries(cmr2_game PRIVATE opencmr2_domain_a)
+# Car-menu breadcrumbs are always on for the target while the first-entry
+# menu state is being diagnosed; host builds opt in with the same macro.
+target_compile_definitions(cmr2_game PRIVATE OPENCMR2_MENU_DIAGNOSTICS)
 set_source_files_properties(${GAME_QIFIST_UNITS} TARGET_DIRECTORY cmr2_game
     PROPERTIES COMPILE_DEFINITIONS CMR2_QIFIST)
 
