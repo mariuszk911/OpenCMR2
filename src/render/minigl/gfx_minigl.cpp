@@ -47,7 +47,11 @@ namespace {
 
 void *s_context;
 int s_miniglOpen;
+// Stage 0 sampler state. Direct3D keeps it per stage, GL per texture object,
+// so it is stored here and applied whenever a texture is bound or uploaded.
 int s_stageAddress = GFX_ADDRESS_WRAP;
+int s_stageMinFilter = GFX_FILTER_POINT;
+int s_stageMagFilter = GFX_FILTER_POINT;
 GfxTexture *s_boundTexture;
 static const float kMenuDotCircle[20][2] = {
     {1.0f, 0.0f}, {0.95106f, 0.30902f}, {0.80902f, 0.58779f}, {0.58779f, 0.80902f},
@@ -478,31 +482,28 @@ extern "C" void Gfx_SetAlphaFunc(int compare) { (void)compare; }
 extern "C" void Gfx_SetAlphaRef(uint32_t reference) { (void)reference; }
 extern "C" void Gfx_SetTextureFactor(uint32_t color) { s_textureFactor = color; }
 
-static GLint StageWrapMode(void);
+static void ApplyStageSampler(void);
 
 extern "C" void Gfx_SetTexture(int stage, GfxTexture *texture)
 {
-    if (stage != 0)
+    if (stage != 0 || !EnsureLocked())
         return;
-    if (texture == NULL || texture->parent != NULL) {
-        s_boundTexture = NULL;
+    GfxTexture *drawn = NULL;
+    if (texture != NULL && texture->parent == NULL) {
+        drawn = texture->replacement != NULL ? texture->replacement : texture;
+        if (drawn->dirty)
+            UploadTexture(drawn);
+        if (drawn->glId == 0)
+            drawn = NULL;
+    }
+    s_boundTexture = drawn;
+    if (drawn == NULL) {
         glDisable(GL_TEXTURE_2D);
         return;
     }
-    GfxTexture *drawn = texture->replacement != NULL ? texture->replacement : texture;
-    if (drawn->dirty)
-        UploadTexture(drawn);
-    if (drawn->glId != 0) {
-        const GLint wrap = StageWrapMode();
-        glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, drawn->glId);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
-        s_boundTexture = drawn;
-    } else {
-        s_boundTexture = NULL;
-        glDisable(GL_TEXTURE_2D);
-    }
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, drawn->glId);
+    ApplyStageSampler();
 }
 
 extern "C" void Gfx_SetStageColorOp(int stage, int op) { (void)stage; (void)op; }
@@ -520,26 +521,50 @@ static GLint StageWrapMode(void)
     }
 }
 
+static GLint FilterMode(int filter)
+{
+    return filter == GFX_FILTER_LINEAR ? GL_LINEAR : GL_NEAREST;
+}
+
+// Applies the stage 0 sampler state to the texture object bound to
+// GL_TEXTURE_2D. The caller holds the display lock.
+static void ApplyStageSampler(void)
+{
+    const GLint wrap = StageWrapMode();
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, FilterMode(s_stageMinFilter));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, FilterMode(s_stageMagFilter));
+}
+
+// A sampler change reaches the texture already bound; textures bound later
+// pick the stored state up in Gfx_SetTexture.
+static void ReapplyStageSampler(void)
+{
+    if (s_boundTexture != NULL && EnsureLocked())
+        ApplyStageSampler();
+}
+
 extern "C" void Gfx_SetStageAddress(int stage, int address)
 {
-    if (stage != 0)
+    if (stage != 0 || address == s_stageAddress)
         return;
     s_stageAddress = address;
-    if (EnsureLocked()) {
-        const GLint wrap = StageWrapMode();
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
-    }
+    ReapplyStageSampler();
 }
 extern "C" void Gfx_SetStageMinFilter(int stage, int filter)
 {
-    if (stage == 0 && EnsureLocked())
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter == GFX_FILTER_POINT ? GL_NEAREST : GL_LINEAR);
+    if (stage != 0 || filter == s_stageMinFilter)
+        return;
+    s_stageMinFilter = filter;
+    ReapplyStageSampler();
 }
 extern "C" void Gfx_SetStageMagFilter(int stage, int filter)
 {
-    if (stage == 0 && EnsureLocked())
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter == GFX_FILTER_POINT ? GL_NEAREST : GL_LINEAR);
+    if (stage != 0 || filter == s_stageMagFilter)
+        return;
+    s_stageMagFilter = filter;
+    ReapplyStageSampler();
 }
 extern "C" void Gfx_SetStageMipFilter(int stage, int filter) { (void)stage; (void)filter; }
 extern "C" void Gfx_SetStageMaxMipLevel(int stage, int level) { (void)stage; (void)level; }
@@ -893,11 +918,7 @@ void UploadTexture(GfxTexture *texture)
     if (texture->glId == 0)
         glGenTextures(1, &texture->glId);
     glBindTexture(GL_TEXTURE_2D, texture->glId);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    const GLint wrap = StageWrapMode();
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+    ApplyStageSampler();
     unsigned char *rgba = TextureToRGBA(texture);
     if (rgba != NULL) {
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
