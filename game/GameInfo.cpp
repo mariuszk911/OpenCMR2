@@ -1,4 +1,5 @@
 #include "port/movie.h"
+#include "port/save_image_disk.h"
 #include "port/sys.h"
 // The original sums the two packed DWORDs, including both high shorts.
 inline int OptionMenu_AddPackedScreenRectangleWords(int *pWords)
@@ -3154,6 +3155,13 @@ static int SavedGames_AddListedFile(const char *name, void *pDir)
 
     sprintf(path, "%s%s", (const char *)pDir, name);
     pRecord = CFileBuffer::GetGenericFileBuffer(path, TRUE);
+    // PORT: AMIGA: the .rcs image is little-endian; convert the loaded buffer
+    // before the game validates and copies it.
+    if (pRecord != NULL && !SavedImageDisk_Unpack(pRecord, CGenericFileLoader::m_fileSize)) {
+        Sys_Log("save: ignoring invalid session %s", name);
+        CFileBuffer::FreeGenericFileBuffer(pRecord);
+        return 1;
+    }
     if (pRecord != NULL && !SavedGames_IsValidSessionImage(pRecord, CGenericFileLoader::m_fileSize)) {
         Sys_Log("save: ignoring invalid session %s", name);
         CFileBuffer::FreeGenericFileBuffer(pRecord);
@@ -10466,7 +10474,12 @@ BYTE SavedGames_WriteSessionImage(int index, const char *name)
     }
     if (!SavedGames_IsValidSessionImage(&image, sizeof(image)))
         return 0;
-    return CInstallInfo::WriteFileToDisk(CFrontend::m_stringDest, 0, &image, sizeof(image)) == 1;
+    // PORT: AMIGA: write the little-endian .rcs image; the codec keeps the
+    // bitfield words in the original LSB-first order.
+    BYTE packed[sizeof(SavedGameImage)];
+    if (!SavedImageDisk_Pack(&image, packed, sizeof(packed)))
+        return 0;
+    return CInstallInfo::WriteFileToDisk(CFrontend::m_stringDest, 0, packed, sizeof(packed)) == 1;
 }
 
 // Loads the highlighted saved game into the frontend and moves to the game

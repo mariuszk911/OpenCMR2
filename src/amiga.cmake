@@ -44,7 +44,8 @@ add_library(cmr2_game OBJECT
     diagnostics/observer.cpp
     port/disk.cpp
     port/font_pcf.cpp
-    port/replay_disk.cpp)
+    port/replay_disk.cpp
+    port/save_image_disk.cpp)
 # M0 does not link the game yet, so keep it out of the default `all` target.
 # M1 removes this once the platform services exist and the executable links it.
 set_target_properties(cmr2_game PROPERTIES EXCLUDE_FROM_ALL TRUE)
@@ -158,6 +159,16 @@ add_executable(amiga_platform_test ${PROJECT_SOURCE_DIR}/tests/amiga/platform_te
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_platform_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_platform_test)
+
+# M0.7 save-image codec: native 68k struct -> little-endian .rcs and back.
+add_executable(amiga_save_image_test ${PROJECT_SOURCE_DIR}/tests/amiga/save_image_test.cpp
+    port/save_image_disk.cpp)
+target_include_directories(amiga_save_image_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/port/compat
+    ${GAME_DIR})
+target_link_libraries(amiga_save_image_test PRIVATE opencmr2_domain_a)
+opencmr2_amiga_stack(amiga_save_image_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)

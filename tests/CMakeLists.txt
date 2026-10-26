@@ -81,6 +81,34 @@ target_compile_options(disk_swaps_test PRIVATE
 target_compile_definitions(disk_swaps_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 add_test(NAME disk_swaps COMMAND disk_swaps_test)
 
+# M0.7 save-image codec: the file is little-endian and its bitfield words are
+# LSB-first; the normal build checks the raw bytes, the forced build proves the
+# swap path and bitfield round trip.
+add_executable(save_image_disk_test save_image_disk.cpp
+    ${PROJECT_SOURCE_DIR}/src/port/save_image_disk.cpp)
+target_include_directories(save_image_disk_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/game
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/port/compat)
+target_compile_options(save_image_disk_test PRIVATE
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+    -fms-extensions)
+add_test(NAME save_image_disk COMMAND save_image_disk_test)
+
+add_executable(save_image_disk_be_test save_image_disk.cpp
+    ${PROJECT_SOURCE_DIR}/src/port/save_image_disk.cpp)
+target_include_directories(save_image_disk_be_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/game
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/port/compat)
+target_compile_options(save_image_disk_be_test PRIVATE
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+    -fms-extensions)
+target_compile_definitions(save_image_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+add_test(NAME save_image_disk_be COMMAND save_image_disk_be_test)
+
 # The -malign-int workaround keeps 64-bit division in a Domain B TU; these
 # helpers must be bit-exact against the original expressions.
 add_executable(intdiv_test intdiv.cpp ${PROJECT_SOURCE_DIR}/src/port/intdiv.cpp)
