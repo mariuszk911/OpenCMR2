@@ -626,6 +626,7 @@ void CGraphics::RemapTextureAlpha(Texture *pTexture, WORD from0, WORD to0, WORD 
     short w;
     short h;
     DWORD f0, t0, f1, t1, f2, t2;
+    DWORD pixel; // PORT: AMIGA: explicit little-endian texel
 
     rect.left = 0;
     w = pTexture->width;
@@ -671,12 +672,16 @@ void CGraphics::RemapTextureAlpha(Texture *pTexture, WORD from0, WORD to0, WORD 
         t2 = to2;
         for (y = 0; y < height; y++) {
             for (x = 0; x < width; x++) {
-                if ((*p32 >> 24) == f0)
-                    *p32 = (*p32 & 0xffffff) | (t0 << 24);
-                if ((*p32 >> 24) == f1)
-                    *p32 = (*p32 & 0xffffff) | (t1 << 24);
-                if ((*p32 >> 24) == f2)
-                    *p32 = (*p32 & 0xffffff) | (t2 << 24);
+                // PORT: AMIGA: 32-bit texels are Direct3D B,G,R,A bytes (a
+                // little-endian DWORD); read and write them explicitly.
+                pixel = ReadLE32(p32);
+                if ((pixel >> 24) == f0)
+                    pixel = (pixel & 0xffffff) | (t0 << 24);
+                if ((pixel >> 24) == f1)
+                    pixel = (pixel & 0xffffff) | (t1 << 24);
+                if ((pixel >> 24) == f2)
+                    pixel = (pixel & 0xffffff) | (t2 << 24);
+                WriteLE32(p32, pixel);
                 p32++;
             }
             p32 += skip;
@@ -767,7 +772,8 @@ void CGraphics::BlendPixel(Texture *pTexture, unsigned int x, unsigned int y, BY
             g = (int)FTOI(__int64, X87S_ADD(X87S_MUL(X87S_FILD(float, g), f), g_netZero * inv));
             b = (int)FTOI(__int64, X87S_ADD(X87S_MUL(X87S_FILD(float, b), f), X87S_MUL((float)dst[2], inv)));
         }
-        *p32 = GFX_RGBA(r, g, b, 0xff);
+        // PORT: AMIGA: store the texel as Direct3D B,G,R,A bytes.
+        WriteLE32(p32, GFX_RGBA(r, g, b, 0xff));
     }
 }
 
@@ -826,7 +832,8 @@ unsigned int CGraphics::GetPixelRed(GfxLockedRect *pDesc, int x, int y)
         return (((*pPixel & pDesc->format.redMask) >> Pixel_MaskShift(pDesc->format.redMask)) & 0xff)
                << (8 - Pixel_MaskBits(pDesc->format.redMask));
     } else if (pDesc->format.bitsPerPixel == 32) {
-        return (BYTE)(((DWORD *)pDesc->pixels)[(pDesc->width + pad) * y + x] >> 16);
+        // PORT: AMIGA: the texel is a little-endian DWORD (B,G,R,A bytes).
+        return (BYTE)(ReadLE32((DWORD *)pDesc->pixels + (pDesc->width + pad) * y + x) >> 16);
     }
     return 0;
 }
@@ -843,7 +850,8 @@ unsigned int CGraphics::GetPixelAlpha(GfxLockedRect *pDesc, int x, int y)
         return (((*pPixel & pDesc->format.alphaMask) >> Pixel_MaskShift(pDesc->format.alphaMask)) & 0xff)
                << (8 - Pixel_MaskBits(pDesc->format.alphaMask));
     } else if (pDesc->format.bitsPerPixel == 32) {
-        return ((DWORD *)pDesc->pixels)[(pDesc->width + pad) * y + x] >> 24;
+        // PORT: AMIGA: the texel is a little-endian DWORD (B,G,R,A bytes).
+        return ReadLE32((DWORD *)pDesc->pixels + (pDesc->width + pad) * y + x) >> 24;
     }
     return 0;
 }
@@ -3965,7 +3973,8 @@ sample:
     } else if (desc.format.bitsPerPixel == 32) {
         for (row = 0; row < h; row++) {
             for (col = 0; col < w; col++) {
-                pixel = ((DWORD *)desc.pixels)[(row * desc.pitch) / 4 + col];
+                // PORT: AMIGA: the texel is a little-endian DWORD (B,G,R,A bytes).
+                pixel = ReadLE32((DWORD *)desc.pixels + (row * desc.pitch) / 4 + col);
                 c = (BYTE)((pixel & desc.format.redMask) >> rShift);
                 if (c < rLo || c > rHi)
                     continue;
@@ -6165,7 +6174,8 @@ Texture *CGraphics::LoadTGATexture(BYTE *pTGA, Texture *pTexture)
                 a = 0;
                 if (aShift < pInfo->bytesPerPixel * 8)
                     a = p[3];
-                *pDst32++ = (p[0] << rShift) | (p[1] << gShift) | (p[2] << bShift) | (a << aShift);
+                // PORT: AMIGA: store the texel as Direct3D B,G,R,A bytes.
+                WriteLE32(pDst32++, (p[0] << rShift) | (p[1] << gShift) | (p[2] << bShift) | (a << aShift));
             }
             if (y != height - 1)
                 pDst32 += padding;
