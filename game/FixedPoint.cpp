@@ -1020,7 +1020,9 @@ void Car_RestorePhysicsFromRecord(Car *pDst, CarNetRecord *pSrc)
     }
     for (i = 0; i < 8; i++) {
         pDst->cornerNormal[i] = pDst->cornerAxis[i];
-        pDst->cornerOnGround[4 + i] = 0;
+        // PORT: AMIGA: cornerOnGround[4 + i] ran past the 8-entry array into
+        // its union alias; objectContactState[i] is the same storage, in bounds.
+        pDst->objectContactState[i] = 0;
     }
     pDst->field_0x7a8 = pDst->engineSpeed;
     pDst->positionPrev2 = pDst->positionPrev;

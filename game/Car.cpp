@@ -5268,7 +5268,8 @@ void Car_PrepareStep(Car *carBase, short *pOrder, short count)
                 for (i = 0; i < 8; i++) {
                     g_pCurrentCar->cornerNormal[i] =
                         g_pCurrentCar->cornerAxis[i];
-                    g_pCurrentCar->cornerOnGround[4 + i] = 0;
+                    // PORT: AMIGA: in-bounds union alias of cornerOnGround[4 + i].
+                    g_pCurrentCar->objectContactState[i] = 0;
                 }
                 g_pCurrentCar->field_0x7a8 = g_pCurrentCar->engineSpeed;
                 g_pCurrentCar->positionPrev2 = g_pCurrentCar->positionPrev;
@@ -5368,7 +5369,8 @@ void Car_PrepareStep(Car *carBase, short *pOrder, short count)
                 for (i = 0; i < 8; i++) {
                     g_pCurrentCar->cornerNormal[i] =
                         g_pCurrentCar->cornerAxis[i];
-                    g_pCurrentCar->cornerOnGround[4 + i] = 0;
+                    // PORT: AMIGA: in-bounds union alias of cornerOnGround[4 + i].
+                    g_pCurrentCar->objectContactState[i] = 0;
                 }
                 g_pCurrentCar->field_0x7a8 = g_pCurrentCar->engineSpeed;
                 g_pCurrentCar->positionPrev2 = g_pCurrentCar->position;
