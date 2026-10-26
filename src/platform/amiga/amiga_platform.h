@@ -6,9 +6,9 @@
 extern "C" {
 #endif
 
-/* Parses --data/--user-dir, sets the Sys directories, creates the default
-   settings file and locates a complete game installation. Returns 0 after
-   logging a diagnostic when the installation cannot be used. */
+/* Uses PROGDIR: for the data and user directories, creates the default
+   settings file and validates the installation beside the executable.
+   Returns 0 after logging a diagnostic when the installation is incomplete. */
 int AmigaPlatform_Init(int argc, char **argv);
 void AmigaPlatform_Shutdown(void);
 const char *AmigaPlatform_GetDataDir(void);

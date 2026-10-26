@@ -238,9 +238,10 @@ OpenCMR2 for AmigaOS 3.2 / PiStorm
 Requirements: AmigaOS 3.2, 68040 with FPU, PiStorm, RTG (640x480 baseline),
 AHI and the original PC game data.
 
-Install Libs/minigl.library in LIBS: and run:
+Install Libs/minigl.library in LIBS:, keep the game data next to opencmr2,
+and run:
 
-  opencmr2 --data Work:Games/CMR2
+  opencmr2
 
 The diagnostics under tests/ are for development only. amiga_smoke writes a
 PPM and a Shell log; the Sys tests use PROGDIR: fixtures next to the binary.

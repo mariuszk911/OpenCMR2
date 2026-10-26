@@ -7,16 +7,30 @@
 char g_ddsSuffix[] = ".dds";
 // GLOBAL: CMR2 0x00519484
 char g_tgaSuffix[] = ".tga";
-extern char g_emptyString[4];
 
 // Replaces the extension of the file name part of path with the empty string.
 // match 86%: below the 90% bar; kept as FUNCTION on purpose so reccmp measures it (see CONVENCIONES)
 // FUNCTION: CMR2 0x004a9f50
 void Texture_GetPathStem(char *pOut, char *path)
 {
-    // PORT: copy text directly; avoid calling sprintf through an incompatible type.
-    strcpy(pOut, strrchr(path, '\\') + 1);
-    sprintf(strrchr(pOut, '.'), g_emptyString);
+    // PORT: AMIGA: accept both separators and truncate the extension directly.
+    // GCC 6.5 -O2 miscompiled the old sprintf(dot, "") and left ".tga" on the
+    // stem, so the archive was queried as "cmr2.tga.dds" and never found.
+    const char *back = strrchr(path, '\\');
+    const char *forward = strrchr(path, '/');
+    const char *base = path;
+    if (back != NULL || forward != NULL) {
+        if (back == NULL)
+            base = forward + 1;
+        else if (forward == NULL)
+            base = back + 1;
+        else
+            base = (forward > back ? forward : back) + 1;
+    }
+    strcpy(pOut, base);
+    char *dot = strrchr(pOut, '.');
+    if (dot != NULL)
+        *dot = '\0';
 }
 
 // Finds a texture in the archive pFile (as .dds, then .tga) and creates it,

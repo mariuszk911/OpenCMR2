@@ -11,6 +11,7 @@
 
 int main(int argc, char **argv)
 {
+    Sys_Log("opencmr2: main entry");
     if (!AmigaPlatform_Init(argc, argv)) {
         Sys_Log("platform: initialization failed");
         Sys_Exit(1);

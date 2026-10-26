@@ -47,7 +47,7 @@ BPTR s_logHandle;
 int s_logTried;
 char s_commandLine[1024];
 
-char s_dataDir[256] = "PROGDIR:Data";
+char s_dataDir[256] = "PROGDIR:";
 char s_userDir[256] = "PROGDIR:";
 char s_lastMissing[512];
 
@@ -1043,12 +1043,29 @@ extern "C" void Sys_Log(const char *format, ...)
     vsnprintf(line, sizeof(line), format, args);
     va_end(args);
     fprintf(stderr, "%s\n", line);
+    fflush(stderr);
     if (!s_logTried) {
         s_logTried = 1;
         char logPath[kNativePathSize];
         if (RootFile(logPath, sizeof(logPath), s_userDir, "opencmr2.log")) {
-            s_logHandle = Open((STRPTR)logPath, MODE_NEWFILE);
+            /* Append when possible: MODE_NEWFILE fails with IoErr 202 while a
+               previous run still holds the file. A unique name is the last
+               resort so the diagnostic trail is never lost. */
+            s_logHandle = Open((STRPTR)logPath, MODE_OLDFILE);
             if (s_logHandle == 0)
+                s_logHandle = Open((STRPTR)logPath, MODE_NEWFILE);
+            if (s_logHandle == 0) {
+                char fallback[kNativePathSize + 16];
+                for (int i = 1; i <= 3 && s_logHandle == 0; ++i) {
+                    snprintf(fallback, sizeof(fallback), "%s.%d", logPath, i);
+                    s_logHandle = Open((STRPTR)fallback, MODE_OLDFILE);
+                    if (s_logHandle == 0)
+                        s_logHandle = Open((STRPTR)fallback, MODE_NEWFILE);
+                }
+            }
+            if (s_logHandle != 0)
+                Seek(s_logHandle, 0, OFFSET_END);
+            else
                 fprintf(stderr, "opencmr2: cannot open %s (IoErr %ld)\n",
                         logPath, (long)IoErr());
         }

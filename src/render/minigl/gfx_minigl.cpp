@@ -30,6 +30,8 @@ struct GfxTexture {
     int32_t pitch;
     GfxTexture *replacement;
     GfxTexture *parent;
+    unsigned int glId;
+    int dirty;
 };
 
 struct GfxVertexBuffer {
@@ -44,6 +46,7 @@ int s_width = 640;
 int s_height = 480;
 int s_locked;
 int s_fullscreen;
+void UploadTexture(GfxTexture *texture);
 int s_virtualWidth;
 int s_virtualHeight;
 
@@ -261,7 +264,10 @@ extern "C" void Gfx_Clear(uint32_t flags, uint32_t color, float z)
         return;
     glClearColor(((color >> 16) & 0xff) / 255.0f, ((color >> 8) & 0xff) / 255.0f,
                  (color & 0xff) / 255.0f, ((color >> 24) & 0xff) / 255.0f);
-    glClearDepth((double)z);
+    // All current callers pass z = 1.0, the GL default clear depth. GLClearDepth
+    // is not exercised by the M0.9 smoke and crashed on the target; clearing to
+    // the default is equivalent for every call site in the game.
+    (void)z;
     GLbitfield bits = 0;
     if (flags & GFX_CLEAR_TARGET)
         bits |= GL_COLOR_BUFFER_BIT;
@@ -397,8 +403,20 @@ extern "C" void Gfx_SetTextureFactor(uint32_t color) { s_textureFactor = color; 
 
 extern "C" void Gfx_SetTexture(int stage, GfxTexture *texture)
 {
-    (void)stage;
-    (void)texture;
+    if (stage != 0)
+        return;
+    if (texture == NULL || texture->parent != NULL) {
+        glDisable(GL_TEXTURE_2D);
+        return;
+    }
+    if (texture->dirty)
+        UploadTexture(texture);
+    if (texture->glId != 0) {
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, texture->glId);
+    } else {
+        glDisable(GL_TEXTURE_2D);
+    }
 }
 
 extern "C" void Gfx_SetStageColorOp(int stage, int op) { (void)stage; (void)op; }
@@ -408,8 +426,16 @@ extern "C" void Gfx_SetStageAlphaOp(int stage, int op) { (void)stage; (void)op; 
 extern "C" void Gfx_SetStageAlphaArg1(int stage, int arg) { (void)stage; (void)arg; }
 extern "C" void Gfx_SetStageAlphaArg2(int stage, int arg) { (void)stage; (void)arg; }
 extern "C" void Gfx_SetStageAddress(int stage, int address) { (void)stage; (void)address; }
-extern "C" void Gfx_SetStageMinFilter(int stage, int filter) { (void)stage; (void)filter; }
-extern "C" void Gfx_SetStageMagFilter(int stage, int filter) { (void)stage; (void)filter; }
+extern "C" void Gfx_SetStageMinFilter(int stage, int filter)
+{
+    if (stage == 0 && EnsureLocked())
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter == GFX_FILTER_POINT ? GL_NEAREST : GL_LINEAR);
+}
+extern "C" void Gfx_SetStageMagFilter(int stage, int filter)
+{
+    if (stage == 0 && EnsureLocked())
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter == GFX_FILTER_POINT ? GL_NEAREST : GL_LINEAR);
+}
 extern "C" void Gfx_SetStageMipFilter(int stage, int filter) { (void)stage; (void)filter; }
 extern "C" void Gfx_SetStageMaxMipLevel(int stage, int level) { (void)stage; (void)level; }
 extern "C" void Gfx_SetStageTexCoordIndex(int stage, uint32_t index) { (void)stage; (void)index; }
@@ -474,13 +500,61 @@ extern "C" void Gfx_DrawIndexedPrimitive(int primitive, const GfxVertex *vertice
 
 extern "C" void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount)
 {
-    (void)primitive; (void)vertices; (void)vertexCount;
+    if (vertices == NULL || vertexCount == 0 || !EnsureLocked())
+        return;
+    GLenum mode;
+    switch (primitive) {
+    case GFX_TRIANGLELIST: mode = GL_TRIANGLES; break;
+    case GFX_TRIANGLESTRIP: mode = GL_TRIANGLE_STRIP; break;
+    case GFX_LINELIST: mode = GL_LINES; break;
+    case GFX_LINESTRIP: mode = GL_LINE_STRIP; break;
+    default: return;
+    }
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, (double)s_width, (double)s_height, 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glBegin(mode);
+    for (uint32_t i = 0; i < vertexCount; ++i) {
+        const GfxTLVertex *v = &vertices[i];
+        glColor4ub((GLubyte)((v->color >> 16) & 0xff), (GLubyte)((v->color >> 8) & 0xff),
+                   (GLubyte)(v->color & 0xff), (GLubyte)((v->color >> 24) & 0xff));
+        glTexCoord2f(v->tu, v->tv);
+        glVertex2f(v->sx, v->sy);
+    }
+    glEnd();
 }
 
 extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount,
                                            const uint16_t *indices, uint32_t indexCount)
 {
-    (void)primitive; (void)vertices; (void)vertexCount; (void)indices; (void)indexCount;
+    (void)vertexCount;
+    if (vertices == NULL || indices == NULL || indexCount == 0 || !EnsureLocked())
+        return;
+    GLenum mode = primitive == GFX_TRIANGLESTRIP ? GL_TRIANGLE_STRIP : GL_TRIANGLES;
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, (double)s_width, (double)s_height, 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glBegin(mode);
+    for (uint32_t i = 0; i < indexCount; ++i) {
+        const GfxTLVertex *v = &vertices[indices[i]];
+        glColor4ub((GLubyte)((v->color >> 16) & 0xff), (GLubyte)((v->color >> 8) & 0xff),
+                   (GLubyte)(v->color & 0xff), (GLubyte)((v->color >> 24) & 0xff));
+        glTexCoord2f(v->tu, v->tv);
+        glVertex2f(v->sx, v->sy);
+    }
+    glEnd();
 }
 
 extern "C" void Gfx_GetPixelFormat(int format, GfxPixelFormat *out)
@@ -531,6 +605,177 @@ extern "C" void Gfx_GetPixelFormat(int format, GfxPixelFormat *out)
     }
 }
 
+namespace {
+
+void PutPixelRGBA(unsigned char *dst, const unsigned char *src, int format)
+{
+    switch (format) {
+    case GFX_FORMAT_BGRA8:
+        dst[0] = src[2]; dst[1] = src[1]; dst[2] = src[0]; dst[3] = src[3];
+        break;
+    case GFX_FORMAT_BGRX8:
+        dst[0] = src[2]; dst[1] = src[1]; dst[2] = src[0]; dst[3] = 0xff;
+        break;
+    default:
+        dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = src[3];
+        break;
+    }
+}
+
+void DecodeBCColor(unsigned int c0, unsigned int c1, int alpha, unsigned int *palette)
+{
+    const unsigned int r0 = ((c0 >> 11) & 0x1f) * 255 / 31;
+    const unsigned int g0 = ((c0 >> 5) & 0x3f) * 255 / 63;
+    const unsigned int b0 = (c0 & 0x1f) * 255 / 31;
+    const unsigned int r1 = ((c1 >> 11) & 0x1f) * 255 / 31;
+    const unsigned int g1 = ((c1 >> 5) & 0x3f) * 255 / 63;
+    const unsigned int b1 = (c1 & 0x1f) * 255 / 31;
+    const unsigned int p0 = r0 | (g0 << 8) | (b0 << 16) | 0xff000000u;
+    const unsigned int p1 = r1 | (g1 << 8) | (b1 << 16) | 0xff000000u;
+    palette[0] = p0;
+    palette[1] = p1;
+    if (alpha) {
+        palette[2] = (((p0 & 0xff) + (p1 & 0xff)) / 2) |
+                     ((((p0 >> 8) & 0xff) + ((p1 >> 8) & 0xff)) / 2) << 8 |
+                     ((((p0 >> 16) & 0xff) + ((p1 >> 16) & 0xff)) / 2) << 16 |
+                     0xff000000u;
+        palette[3] = 0;
+    } else if (c0 > c1) {
+        palette[2] = (((p0 & 0xff) * 2 + (p1 & 0xff)) / 3) |
+                     ((((p0 >> 8) & 0xff) * 2 + ((p1 >> 8) & 0xff)) / 3) << 8 |
+                     ((((p0 >> 16) & 0xff) * 2 + ((p1 >> 16) & 0xff)) / 3) << 16 |
+                     0xff000000u;
+        palette[3] = (((p0 & 0xff) + (p1 & 0xff) * 2) / 3) |
+                     ((((p0 >> 8) & 0xff) + ((p1 >> 8) & 0xff) * 2) / 3) << 8 |
+                     ((((p0 >> 16) & 0xff) + ((p1 >> 16) & 0xff) * 2) / 3) << 16 |
+                     0xff000000u;
+    } else {
+        palette[2] = (((p0 & 0xff) + (p1 & 0xff)) / 2) |
+                     ((((p0 >> 8) & 0xff) + ((p1 >> 8) & 0xff)) / 2) << 8 |
+                     ((((p0 >> 16) & 0xff) + ((p1 >> 16) & 0xff)) / 2) << 16 |
+                     0xff000000u;
+        palette[3] = 0;
+    }
+}
+
+void DecodeBC1Block(const unsigned char *src, unsigned char *dst, int dstPitch)
+{
+    unsigned int palette[4];
+    const unsigned int c0 = src[0] | (src[1] << 8);
+    const unsigned int c1 = src[2] | (src[3] << 8);
+    DecodeBCColor(c0, c1, 0, palette);
+    const unsigned int bits = src[4] | (src[5] << 8) | (src[6] << 16) | ((unsigned int)src[7] << 24);
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x) {
+            const unsigned int p = palette[(bits >> (2 * (y * 4 + x))) & 3];
+            unsigned char *d = dst + y * dstPitch + x * 4;
+            d[0] = (unsigned char)(p & 0xff);
+            d[1] = (unsigned char)((p >> 8) & 0xff);
+            d[2] = (unsigned char)((p >> 16) & 0xff);
+            d[3] = (unsigned char)((p >> 24) & 0xff);
+        }
+}
+
+void DecodeBC3Block(const unsigned char *src, unsigned char *dst, int dstPitch)
+{
+    unsigned char alpha[8];
+    alpha[0] = src[0];
+    alpha[1] = src[1];
+    if (alpha[0] > alpha[1]) {
+        for (int i = 1; i < 7; ++i)
+            alpha[i + 1] = (unsigned char)(((7 - i) * alpha[0] + i * alpha[1]) / 7);
+    } else {
+        for (int i = 1; i < 5; ++i)
+            alpha[i + 1] = (unsigned char)(((5 - i) * alpha[0] + i * alpha[1]) / 5);
+        alpha[6] = 0;
+        alpha[7] = 255;
+    }
+    unsigned long long bits = 0;
+    for (int i = 0; i < 6; ++i)
+        bits |= (unsigned long long)src[2 + i] << (8 * i);
+    unsigned int palette[4];
+    const unsigned int c0 = src[8] | (src[9] << 8);
+    const unsigned int c1 = src[10] | (src[11] << 8);
+    DecodeBCColor(c0, c1, 0, palette);
+    const unsigned int colorBits = src[12] | (src[13] << 8) | (src[14] << 16) | ((unsigned int)src[15] << 24);
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x) {
+            const int index = y * 4 + x;
+            const unsigned int p = palette[(colorBits >> (2 * index)) & 3];
+            const unsigned char a = alpha[(bits >> (3 * index)) & 7];
+            unsigned char *d = dst + y * dstPitch + x * 4;
+            d[0] = (unsigned char)(p & 0xff);
+            d[1] = (unsigned char)((p >> 8) & 0xff);
+            d[2] = (unsigned char)((p >> 16) & 0xff);
+            d[3] = a;
+        }
+}
+
+unsigned char *TextureToRGBA(const GfxTexture *texture)
+{
+    const unsigned int width = (unsigned int)texture->width;
+    const unsigned int height = (unsigned int)texture->height;
+    unsigned char *rgba = (unsigned char *)malloc(width * height * 4);
+    if (rgba == NULL)
+        return NULL;
+
+    if (texture->format == GFX_FORMAT_BC1 || texture->format == GFX_FORMAT_BC3) {
+        const unsigned int blocksWide = (width + 3) / 4;
+        const unsigned int blocksHigh = (height + 3) / 4;
+        const int blockSize = texture->format == GFX_FORMAT_BC1 ? 8 : 16;
+        for (unsigned int by = 0; by < blocksHigh; ++by) {
+            for (unsigned int bx = 0; bx < blocksWide; ++bx) {
+                const unsigned char *block = texture->data + (by * blocksWide + bx) * blockSize;
+                unsigned char pixels[16 * 4];
+                if (texture->format == GFX_FORMAT_BC1)
+                    DecodeBC1Block(block, pixels, 16);
+                else
+                    DecodeBC3Block(block, pixels, 16);
+                for (unsigned int y = 0; y < 4; ++y) {
+                    unsigned char *dst = rgba + (by * 4 + y) * width * 4 + bx * 16;
+                    memcpy(dst, pixels + y * 16, 16);
+                }
+            }
+        }
+    } else {
+        for (unsigned int y = 0; y < height; ++y) {
+            const unsigned char *src = texture->data + y * texture->pitch;
+            unsigned char *dst = rgba + y * width * 4;
+            for (unsigned int x = 0; x < width; ++x) {
+                PutPixelRGBA(dst + x * 4, src + x * 4, texture->format);
+            }
+        }
+    }
+    return rgba;
+}
+
+void UploadTexture(GfxTexture *texture)
+{
+    if (texture == NULL || texture->parent != NULL || texture->data == NULL)
+        return;
+    if ((texture->flags & GFX_TEXTURE_STAGING) != 0)
+        return;
+    if (!EnsureLocked())
+        return;
+    if (texture->glId == 0)
+        glGenTextures(1, &texture->glId);
+    glBindTexture(GL_TEXTURE_2D, texture->glId);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    unsigned char *rgba = TextureToRGBA(texture);
+    if (rgba != NULL) {
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, texture->width, texture->height, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        free(rgba);
+    }
+    texture->dirty = 0;
+}
+
+} // namespace
+
 extern "C" GfxTexture *Gfx_CreateTexture(int width, int height, int format, int mipLevels, uint32_t flags)
 {
     if (width <= 0 || height <= 0)
@@ -554,6 +799,7 @@ extern "C" GfxTexture *Gfx_CreateTexture(int width, int height, int format, int 
     texture->flags = flags;
     texture->dataSize = bytes;
     texture->pitch = TexturePitch(width, format);
+    texture->dirty = 1;
     return texture;
 }
 
@@ -561,8 +807,19 @@ extern "C" void Gfx_DestroyTexture(GfxTexture *texture)
 {
     if (texture == NULL)
         return;
-    if (texture->parent == NULL)
+    if (texture->parent == NULL) {
+        if (texture->glId != 0 && s_context != NULL) {
+            const int wasLocked = s_locked;
+            if (EnsureLocked()) {
+                glDeleteTextures(1, &texture->glId);
+                if (!wasLocked) {
+                    mglUnlockDisplay();
+                    s_locked = 0;
+                }
+            }
+        }
         free(texture->data);
+    }
     delete texture;
 }
 
@@ -586,7 +843,9 @@ extern "C" int Gfx_LockTexture(GfxTexture *texture, int face, int mip, GfxLocked
 
 extern "C" void Gfx_UnlockTexture(GfxTexture *texture, int face, int mip)
 {
-    (void)texture; (void)face; (void)mip;
+    (void)face; (void)mip;
+    if (texture != NULL && texture->parent == NULL)
+        texture->dirty = 1;
 }
 
 extern "C" void Gfx_SetTextureReplacement(GfxTexture *texture, GfxTexture *replacement)
@@ -619,7 +878,13 @@ extern "C" void Gfx_GenerateMipmaps(GfxTexture *texture)
 
 extern "C" void Gfx_CopyTexture(GfxTexture *dst, GfxTexture *src)
 {
-    (void)dst; (void)src;
+    if (dst == NULL || src == NULL || dst->parent != NULL || src->data == NULL)
+        return;
+    if (dst->width == src->width && dst->height == src->height && dst->format == src->format &&
+        dst->dataSize >= src->dataSize) {
+        memcpy(dst->data, src->data, src->dataSize);
+        dst->dirty = 1;
+    }
 }
 
 extern "C" GfxTexture *Gfx_GetCubeFace(GfxTexture *cube, int face)
