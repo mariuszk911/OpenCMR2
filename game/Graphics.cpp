@@ -30,6 +30,12 @@ void Mesh_ReuploadAll(void);
 void Scene_RestoreLights(void);
 void Sound_RestartMusicAfterDeviceCreation(void);
 
+#if defined(__m68k__)
+// PORT: AMIGA: one-shot car setup diagnostics armed on a palette change.
+extern Texture *g_carSetupDiagnosticTextures[3];
+extern unsigned int g_carSetupDiagnosticTextureMask;
+#endif
+
 // GLOBAL: CMR2 0x00660830
 Graphics g_graphics;
 
@@ -6592,6 +6598,26 @@ void CGraphics::ConfigureTextureStageBlendMode(int stage, Texture *pTexture)
 // FUNCTION: CMR2 0x004a4850
 void CGraphics::ApplyTextureStageChange(int stage, Texture *pTexture)
 {
+#if defined(__m68k__)
+    // PORT: AMIGA: report when selected car art reaches the stage-0 binding path.
+    if (stage == 0 && pTexture != NULL && g_carSetupDiagnosticTextureMask != 0) {
+        unsigned int matchingMask = 0;
+        unsigned int i;
+        for (i = 0; i < 3; ++i) {
+            const unsigned int bit = 1u << i;
+            if ((g_carSetupDiagnosticTextureMask & bit) != 0 &&
+                g_carSetupDiagnosticTextures[i] == pTexture)
+                matchingMask |= bit;
+        }
+        if (matchingMask != 0) {
+            const int cacheHit = m_unk0x0065fa38 == pTexture && m_unk0x00520b28 == stage;
+            Sys_Log("AMIGA: car art stage0 name=%.48s id=%u surface=%08lx cache-hit=%d",
+                    pTexture->name, (unsigned int)pTexture->textureId,
+                    (unsigned long)pTexture->pSurface, cacheHit);
+            g_carSetupDiagnosticTextureMask &= ~matchingMask;
+        }
+    }
+#endif
     if (m_unk0x0065fa38 == pTexture && m_unk0x00520b28 == stage)
         return;
     m_unk0x0065fa38 = pTexture;

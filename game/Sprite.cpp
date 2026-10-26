@@ -46,6 +46,14 @@ GfxTLVertex g_spriteVerts3[1024 * 4];
 
 void Graphics_InvalidateTextureStageCache(void);
 
+#if defined(__m68k__)
+// PORT: AMIGA: one-shot car setup bar diagnostics, armed by the frontend draw.
+extern unsigned int g_carSetupDiagnosticProgressStart;
+extern unsigned int g_carSetupDiagnosticProgressEnd;
+extern int g_carSetupDiagnosticProgressFlushPending;
+extern unsigned int g_carSetupDiagnosticTextureMask;
+#endif
+
 // PORT: pixels of the back buffer per pixel of the screen the game draws in,
 // larger than 1 when the menus are scaled up (see MenuScreen_Begin).
 static float g_spriteScreenScale = 1.0f;
@@ -219,6 +227,15 @@ void Sprite_DrawLayer(int layer)
     Gfx_SetStageMinFilter(0, GFX_FILTER_LINEAR);
     Gfx_SetStageMagFilter(0, GFX_FILTER_LINEAR);
     Graphics_InvalidateTextureStageCache();
+#if defined(__m68k__)
+    // PORT: AMIGA: expire unmatched texture watches after this layer's first
+    // flush so a missing asset cannot add checks to every later sprite frame.
+    if (layer == 1 && g_carSetupDiagnosticTextureMask != 0) {
+        Sys_Log("AMIGA: car art stage0 not reached mask=%u layer1-sprites=%u",
+                g_carSetupDiagnosticTextureMask, count);
+        g_carSetupDiagnosticTextureMask = 0;
+    }
+#endif
     CGraphics::InvalidateBlendStateCache();
 }
 
@@ -634,6 +651,57 @@ void Tri2D_DrawLayer(int layer)
         }
         break;
     default:
+#if defined(__m68k__)
+        // PORT: AMIGA: consume the bar range at the layer-1 boundary, including
+        // an empty flush, so a later frame can never misattribute its triangles.
+        if (g_carSetupDiagnosticProgressFlushPending) {
+            const unsigned int start = g_carSetupDiagnosticProgressStart;
+            const unsigned int end = g_carSetupDiagnosticProgressEnd;
+            const unsigned int count = g_tri2DCount1;
+            int minX = 0, minY = 0, maxX = 0, maxY = 0;
+            int haveBounds = 0;
+            int validRange = start <= end && end <= count && end <= TRI2D_LAYER_MAX;
+            if (validRange) {
+                unsigned int i;
+                for (i = start; i < end; ++i) {
+                    int v;
+                    for (v = 0; v < 3; ++v) {
+                        const float sx = g_tri2DLayer1[i].v[v].sx;
+                        const float sy = g_tri2DLayer1[i].v[v].sy;
+                        if (!(sx >= -32768.0f && sx <= 32767.0f &&
+                              sy >= -32768.0f && sy <= 32767.0f)) {
+                            validRange = 0;
+                            break;
+                        }
+                        const int x = (int)sx;
+                        const int y = (int)sy;
+                        if (!haveBounds) {
+                            minX = maxX = x;
+                            minY = maxY = y;
+                            haveBounds = 1;
+                        } else {
+                            if (x < minX) minX = x;
+                            if (x > maxX) maxX = x;
+                            if (y < minY) minY = y;
+                            if (y > maxY) maxY = y;
+                        }
+                    }
+                    if (!validRange)
+                        break;
+                }
+            }
+            if (validRange && haveBounds)
+                Sys_Log("AMIGA: car bars layer1 triangles=%u range=%u..%u count=%u bounds=%d..%d,%d..%d",
+                        end - start, start, end, count, minX, maxX, minY, maxY);
+            else if (validRange)
+                Sys_Log("AMIGA: car bars layer1 empty range=%u..%u count=%u",
+                        start, end, count);
+            else
+                Sys_Log("AMIGA: car bars layer1 invalid range=%u..%u count=%u",
+                        start, end, count);
+            g_carSetupDiagnosticProgressFlushPending = 0;
+        }
+#endif
         if (g_tri2DCount1 > 0u) {
             CGraphics::ApplyTextureStageChange(0, 0);
             Gfx_DrawPrimitiveTL(GFX_TRIANGLELIST, (GfxTLVertex *)g_tri2DLayer1, g_tri2DCount1 * 3);
