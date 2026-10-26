@@ -343,28 +343,65 @@ extern "C" void Gfx_Clear(uint32_t flags, uint32_t color, float z)
     glClear(bits);
 }
 
+namespace {
+
+// The game's 2D coordinates and viewports are in the virtual screen while one
+// is set (the menus' screen, see Gfx_SetVirtualScreen), otherwise in the
+// back buffer's pixels.
+void GetScreenSize(int *width, int *height)
+{
+    const bool scaled = s_virtualWidth > 0 && s_virtualHeight > 0;
+    *width = scaled ? s_virtualWidth : s_width;
+    *height = scaled ? s_virtualHeight : s_height;
+}
+
+// Maps a screen coordinate to back-buffer pixels, rounding half up like the
+// host executors' lroundf, and clamps it to [low, size].
+int ScaleToTarget(uint32_t value, int target, int screen, int low)
+{
+    const int64_t scaled = ((int64_t)value * target + screen / 2) / screen;
+    if (scaled < low)
+        return low;
+    return scaled > target ? target : (int)scaled;
+}
+
+// Applies s_viewport to GL, scaled from the screen to the back buffer and
+// clamped to it as the host executors do. The caller holds the display lock.
+void ApplyViewport(void)
+{
+    int screenW, screenH;
+    GetScreenSize(&screenW, &screenH);
+    if (screenW <= 0 || screenH <= 0)
+        return;
+    const int x0 = ScaleToTarget(s_viewport.x, s_width, screenW, 0);
+    const int y0 = ScaleToTarget(s_viewport.y, s_height, screenH, 0);
+    const int x1 = ScaleToTarget(s_viewport.x + s_viewport.width, s_width, screenW, x0);
+    const int y1 = ScaleToTarget(s_viewport.y + s_viewport.height, s_height, screenH, y0);
+    // D3D's origin is the top-left corner, GL's the bottom-left one.
+    glViewport(x0, s_height - y1, x1 - x0, y1 - y0);
+}
+
+// TL vertices are in screen coordinates over the whole screen, like the host
+// executors' fixedtl shader; the GL viewport then maps them to the back
+// buffer. The caller holds the display lock.
+void LoadScreenProjection(void)
+{
+    int screenW, screenH;
+    GetScreenSize(&screenW, &screenH);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, (double)screenW, (double)screenH, 0.0, -1.0, 1.0);
+}
+
+} // namespace
+
 extern "C" void Gfx_SetViewport(const GfxViewport *viewport)
 {
     if (viewport == NULL)
         return;
-    if (s_context == NULL) {
-        s_viewport = *viewport;
-        return;
-    }
-    if (viewport->x > (uint32_t)s_width || viewport->y > (uint32_t)s_height ||
-        viewport->width > (uint32_t)s_width - viewport->x ||
-        viewport->height > (uint32_t)s_height - viewport->y) {
-        Sys_Log("gfx: viewport %lu,%lu %lux%lu outside %dx%d ignored", (unsigned long)viewport->x,
-                (unsigned long)viewport->y, (unsigned long)viewport->width,
-                (unsigned long)viewport->height, s_width, s_height);
-        return;
-    }
     s_viewport = *viewport;
-    // D3D's origin is the top-left corner, GL's the bottom-left one. The
-    // bounds check above keeps this in range.
-    const int glY = s_height - (int)viewport->y - (int)viewport->height;
-    if (EnsureLocked())
-        glViewport((GLint)viewport->x, (GLint)glY, (GLsizei)viewport->width, (GLsizei)viewport->height);
+    if (s_context != NULL && EnsureLocked())
+        ApplyViewport();
 }
 
 extern "C" void Gfx_GetViewport(GfxViewport *viewport)
@@ -375,8 +412,15 @@ extern "C" void Gfx_GetViewport(GfxViewport *viewport)
 
 extern "C" void Gfx_SetVirtualScreen(int width, int height)
 {
+    if (width <= 0 || height <= 0)
+        width = height = 0;
+    if (width == s_virtualWidth && height == s_virtualHeight)
+        return;
     s_virtualWidth = width;
     s_virtualHeight = height;
+    // The stored viewport is in the screen's coordinates; remap it.
+    if (s_context != NULL && EnsureLocked())
+        ApplyViewport();
 }
 
 extern "C" void Gfx_PushState(void)
@@ -644,9 +688,7 @@ extern "C" void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, 
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glOrtho(0.0, (double)s_width, (double)s_height, 0.0, -1.0, 1.0);
+    LoadScreenProjection();
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     if (s_boundTexture != NULL && (s_boundTexture->flags & GFX_TEXTURE_MENU_DOT) != 0 &&
@@ -699,9 +741,7 @@ extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *ver
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glOrtho(0.0, (double)s_width, (double)s_height, 0.0, -1.0, 1.0);
+    LoadScreenProjection();
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     glBegin(mode);
