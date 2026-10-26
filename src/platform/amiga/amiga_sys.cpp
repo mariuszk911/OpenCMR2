@@ -60,6 +60,7 @@ const size_t kNativePathSize = 640;
 bool s_listFull;
 bool s_logWriteFailed;
 struct Window *s_inputWindow;
+unsigned char s_keyState[256];
 
 int EClockNow(uint64_t *value)
 {
@@ -888,16 +889,23 @@ extern "C" void AmigaSys_SetWindow(void *window)
     s_inputWindow = (struct Window *)window;
 }
 
-extern "C" int Sys_PollEvent(SysEvent *event)
+// Consumes every queued IDCMP message, keeping the polled input state current.
+// Returns 1 with the first event the game understands. Releases, mouse
+// messages and unmapped keys only update state and are not events.
+static int PollEvent(SysEvent *event, int *consumed)
 {
     struct IntuiMessage *message;
 
+    if (consumed != NULL)
+        *consumed = 0;
     if (event == NULL || s_inputWindow == NULL || s_inputWindow->UserPort == NULL)
         return 0;
     while ((message = (struct IntuiMessage *)GetMsg(s_inputWindow->UserPort)) != NULL) {
         const ULONG messageClass = message->Class;
         int handled = 0;
 
+        if (consumed != NULL)
+            *consumed = 1;
         if (messageClass == IDCMP_CLOSEWINDOW) {
             event->type = SYS_EVENT_QUIT;
             event->key = 0;
@@ -905,12 +913,15 @@ extern "C" int Sys_PollEvent(SysEvent *event)
             event->repeat = 0;
             handled = 1;
         } else if (messageClass == IDCMP_ACTIVEWINDOW) {
+            // Releases may have been delivered while inactive; start clean.
+            memset(s_keyState, 0, sizeof(s_keyState));
             event->type = SYS_EVENT_FOCUS_GAINED;
             event->key = 0;
             event->character = 0;
             event->repeat = 0;
             handled = 1;
         } else if (messageClass == IDCMP_INACTIVEWINDOW) {
+            memset(s_keyState, 0, sizeof(s_keyState));
             event->type = SYS_EVENT_FOCUS_LOST;
             event->key = 0;
             event->character = 0;
@@ -918,7 +929,7 @@ extern "C" int Sys_PollEvent(SysEvent *event)
             handled = 1;
         } else if (messageClass == IDCMP_RAWKEY) {
             // Releases are not events: the game polls the held-key state.
-            const int dik = AmigaKey_ToDIK(message->Code);
+            const int dik = AmigaKey_UpdateState(s_keyState, message->Code);
             if (dik != 0 && (message->Code & 0x80) == 0) {
                 event->type = SYS_EVENT_KEY_DOWN;
                 event->key = dik;
@@ -940,6 +951,22 @@ extern "C" int Sys_PollEvent(SysEvent *event)
     return 0;
 }
 
+extern "C" int Sys_PollEvent(SysEvent *event)
+{
+    return PollEvent(event, NULL);
+}
+
+extern "C" void AmigaSys_GetKeyState(unsigned char keys[256])
+{
+    if (keys != NULL)
+        memcpy(keys, s_keyState, sizeof(s_keyState));
+}
+
+extern "C" int AmigaSys_IsKeyDown(int dik)
+{
+    return dik >= 0 && dik < 256 && (s_keyState[dik] & 0x80) != 0;
+}
+
 extern "C" int Sys_WaitEvent(SysEvent *event)
 {
     if (event == NULL)
@@ -949,8 +976,13 @@ extern "C" int Sys_WaitEvent(SysEvent *event)
         Sys_Sleep(20);
         return 0;
     }
-    if (Sys_PollEvent(event))
+    int consumed = 0;
+    if (PollEvent(event, &consumed))
         return 1;
+    // A batch that only carried releases or unmapped keys still has to let the
+    // frame run, otherwise holding a key cannot be observed by the game.
+    if (consumed)
+        return 0;
     WaitPort(s_inputWindow->UserPort);
     return Sys_PollEvent(event);
 }

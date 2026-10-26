@@ -1,8 +1,7 @@
 /*
  * Amiga raw-key codes to DirectInput scan codes (DIK_*) for the game's
  * event model. The mapping covers the navigation and text keys the menus and
- * default bindings use; the input slice completes the rest when the keyboard
- * state is implemented.
+ * default bindings use; keys outside the table are ignored.
  */
 #ifndef OPENCMR2_AMIGA_KEYS_H
 #define OPENCMR2_AMIGA_KEYS_H
@@ -81,6 +80,21 @@ static inline int AmigaKey_ToDIK(int code)
 
     default: return 0;
     }
+}
+
+/*
+ * Applies one raw-key message to the DIK-indexed held-key state.
+ * Bit 7 of the raw code is the release flag; a held key is 0x80, matching
+ * DirectInput's keyboard buffer. Returns the mapped DIK code, or 0 when the
+ * key is not mapped.
+ */
+static inline int AmigaKey_UpdateState(unsigned char keys[256], int code)
+{
+    const int dik = AmigaKey_ToDIK(code);
+    if (dik == 0)
+        return 0;
+    keys[dik] = (code & 0x80) != 0 ? 0 : 0x80;
+    return dik;
 }
 
 #endif

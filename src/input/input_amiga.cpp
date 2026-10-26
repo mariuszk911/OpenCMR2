@@ -1,7 +1,10 @@
-// Input on AmigaOS: the device model is present but polling is not wired to
-// the keyboard/joystick hardware yet. The keyboard events still reach the game
-// through Sys_PollEvent, so menus can be added before the polling slice.
+// Input on AmigaOS: the IDCMP event loop (amiga_sys.cpp) is the source of
+// truth. It keeps the held-key state current while Sys_PollEvent drains the
+// window port; this layer exposes that state through the DirectInput-style
+// polling interface the game was written against. Mouse and joystick polling
+// land with their devices.
 #include "port/input.h"
+#include "platform/amiga/amiga_sys.h"
 
 #include <string.h>
 
@@ -107,10 +110,10 @@ extern "C" void Input_SetMouseExclusive(InputDevice *device, int exclusive)
 
 extern "C" int Input_ReadKeyboard(InputDevice *device, BYTE keys[256])
 {
-    (void)device;
-    if (keys != NULL)
-        memset(keys, 0, 256);
-    return device != NULL;
+    if (device == NULL || keys == NULL || device->kind != 1)
+        return 0;
+    AmigaSys_GetKeyState(keys);
+    return 1;
 }
 
 extern "C" int Input_ReadMouse(InputDevice *device, InputMouseState *state)
@@ -130,8 +133,7 @@ extern "C" int Input_ReadJoystick(InputDevice *device, InputJoystickState *state
 
 extern "C" int Input_IsKeyDown(int key)
 {
-    (void)key;
-    return 0;
+    return AmigaSys_IsKeyDown(key);
 }
 
 extern "C" void Input_GetKeyRepeat(DWORD *delay, DWORD *interval)

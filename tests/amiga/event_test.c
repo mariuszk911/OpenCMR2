@@ -77,19 +77,47 @@ int main(void)
         return Fail("focus lost");
     DrainReplies(reply);
 
+    unsigned char keys[256];
+
     Send(port, reply, IDCMP_RAWKEY, 0x45, 0);
     if (!Sys_PollEvent(&event) || event.type != SYS_EVENT_KEY_DOWN || event.key != 0x01)
         return Fail("escape");
+    if (!AmigaSys_IsKeyDown(0x01))
+        return Fail("escape held");
+    memset(keys, 0, sizeof(keys));
+    AmigaSys_GetKeyState(keys);
+    if ((keys[0x01] & 0x80) == 0)
+        return Fail("keyboard state escape");
     DrainReplies(reply);
 
     Send(port, reply, IDCMP_RAWKEY, 0xc5, 0);
     if (Sys_PollEvent(&event))
         return Fail("raw key release");
+    if (AmigaSys_IsKeyDown(0x01))
+        return Fail("escape released");
+    memset(keys, 0xff, sizeof(keys));
+    AmigaSys_GetKeyState(keys);
+    if (keys[0x01] != 0)
+        return Fail("keyboard state released");
+    DrainReplies(reply);
+
+    // A release-only batch is not an event, but it must not stall the loop.
+    Send(port, reply, IDCMP_RAWKEY, 0xc5, 0);
+    if (Sys_WaitEvent(&event))
+        return Fail("wait release");
     DrainReplies(reply);
 
     Send(port, reply, IDCMP_RAWKEY, 0x44, IEQUALIFIER_REPEAT);
     if (!Sys_PollEvent(&event) || event.key != 0x1c || !event.repeat)
         return Fail("repeat return");
+    DrainReplies(reply);
+
+    // Losing focus clears held keys so they cannot stay stuck.
+    Send(port, reply, IDCMP_INACTIVEWINDOW, 0, 0);
+    if (!Sys_PollEvent(&event) || event.type != SYS_EVENT_FOCUS_LOST)
+        return Fail("focus lost clears keys");
+    if (AmigaSys_IsKeyDown(0x1c))
+        return Fail("held key after focus loss");
     DrainReplies(reply);
 
     Send(port, reply, IDCMP_VANILLAKEY, 'A', 0);

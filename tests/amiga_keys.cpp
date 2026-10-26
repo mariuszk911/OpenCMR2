@@ -2,6 +2,7 @@
 #include "platform/amiga/amiga_keys.h"
 
 #include <cstdio>
+#include <cstring>
 
 namespace {
 
@@ -50,6 +51,18 @@ int main()
 
     Check(AmigaKey_ToDIK(0x7f), 0, "unmapped key");
     Check(AmigaKey_ToDIK(0xff), 0, "unmapped release key");
+
+    unsigned char keys[256];
+    std::memset(keys, 0, sizeof(keys));
+    Check(AmigaKey_UpdateState(keys, 0x45), 0x01, "press mapped");
+    Check(keys[0x01], 0x80, "escape held");
+    Check(AmigaKey_UpdateState(keys, 0x45), 0x01, "repeat press mapped");
+    Check(keys[0x01], 0x80, "escape still held");
+    Check(AmigaKey_UpdateState(keys, 0xc5), 0x01, "release mapped");
+    Check(keys[0x01], 0, "escape released");
+    Check(AmigaKey_UpdateState(keys, 0x7f), 0, "press unmapped");
+    Check(AmigaKey_UpdateState(keys, 0xff), 0, "release unmapped");
+    Check(keys[0x7f], 0, "unmapped key untouched");
 
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

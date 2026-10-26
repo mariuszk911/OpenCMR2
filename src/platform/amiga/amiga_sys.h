@@ -26,6 +26,12 @@ void AmigaSys_Shutdown(void);
    Sys_WaitEvent. The MiniGL executor calls this after creating its context. */
 void AmigaSys_SetWindow(void *window);
 
+/* Held-key state indexed by DIK_*, 0x80 while the key is down. The renderer
+   drains IDCMP through Sys_PollEvent, so the input layer reads the same state
+   the event loop maintains. Focus loss clears it. */
+void AmigaSys_GetKeyState(unsigned char keys[256]);
+int AmigaSys_IsKeyDown(int dik);
+
 #ifdef __cplusplus
 }
 #endif
