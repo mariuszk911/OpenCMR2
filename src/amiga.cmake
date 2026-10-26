@@ -8,6 +8,11 @@ set(MINIGL_LIBRARY_DIR "${PISTORM3D}/SDK/lib")
 # Amiga build has no RTTI and does not use it.
 list(REMOVE_ITEM GAME_SOURCES ${GAME_DIR}/CrtTypeInfo.cpp)
 
+# GCC 6.5 -O2 has produced illegal-instruction failures in the Sys C++/STL
+# code on 68040; keep this file at -O1 until objdump evidence clears it.
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/platform/amiga/amiga_sys.cpp
+    PROPERTIES COMPILE_OPTIONS "-O1")
+
 # ---- Domain A: game layout -------------------------------------------------
 # The flag set that defines the original 32-bit/MSVC layout. M0.5 passed on the
 # cross-compiled ABI (build/amiga/m0-layout.log), so -malign-int is now part of
