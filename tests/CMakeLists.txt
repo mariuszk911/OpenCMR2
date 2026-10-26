@@ -302,6 +302,36 @@ add_executable(replay_disk_test replay_disk.cpp)
 target_link_libraries(replay_disk_test PRIVATE opencmr2_platform)
 add_test(NAME replay_disk COMMAND replay_disk_test)
 
+# M0.7 replay payload: lane events/samples/race records and the type-2
+# sample bitfields. The normal build checks little-endian file bytes; the
+# forced build proves the swap path on the little-endian host.
+add_executable(replay_payload_test replay_payload.cpp
+    ${PROJECT_SOURCE_DIR}/src/port/replay_disk.cpp
+    ${PROJECT_SOURCE_DIR}/src/port/disk.cpp)
+target_include_directories(replay_payload_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/game
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/port/compat)
+target_compile_options(replay_payload_test PRIVATE
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+    -fms-extensions)
+add_test(NAME replay_payload COMMAND replay_payload_test)
+
+add_executable(replay_payload_be_test replay_payload.cpp
+    ${PROJECT_SOURCE_DIR}/src/port/replay_disk.cpp
+    ${PROJECT_SOURCE_DIR}/src/port/disk.cpp)
+target_include_directories(replay_payload_be_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/game
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/port/compat)
+target_compile_options(replay_payload_be_test PRIVATE
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+    -fms-extensions)
+target_compile_definitions(replay_payload_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+add_test(NAME replay_payload_be COMMAND replay_payload_be_test)
+
 add_executable(replay_events_test replay_events.cpp)
 target_link_libraries(replay_events_test PRIVATE opencmr2_platform)
 add_test(NAME replay_events COMMAND replay_events_test)

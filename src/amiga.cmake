@@ -170,6 +170,18 @@ target_include_directories(amiga_save_image_test PRIVATE
 target_link_libraries(amiga_save_image_test PRIVATE opencmr2_domain_a)
 opencmr2_amiga_stack(amiga_save_image_test)
 
+# M0.7 replay payload: native stream -> little-endian file -> native stream,
+# including the type-2 sample bitfields.
+add_executable(amiga_replay_payload_test ${PROJECT_SOURCE_DIR}/tests/replay_payload.cpp
+    port/replay_disk.cpp
+    port/disk.cpp)
+target_include_directories(amiga_replay_payload_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/port/compat
+    ${GAME_DIR})
+target_link_libraries(amiga_replay_payload_test PRIVATE opencmr2_domain_a)
+opencmr2_amiga_stack(amiga_replay_payload_test)
+
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_event_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -1573,14 +1573,9 @@ void Replay_RestoreCarState(Block0x309 *pSrc, Car *pDst)
     }
     memcpy(wheelEmitter, pDst->wheelEmitter, sizeof(wheelEmitter));
 
-    if (sizeof(Car) == g_diskLayout_Car.diskSize) {
-        *(Block0x309 *)pDst = *pSrc;
-    } else {
-        for (int run = 0; run < g_diskLayout_Car.runCount; ++run) {
-            const DiskRun &r = g_diskLayout_Car.runs[run];
-            memcpy((BYTE *)pDst + r.native, (BYTE *)pSrc + r.disk, r.size);
-        }
-    }
+    // PORT: AMIGA: the lane is stored in the original disk layout; apply the
+    // scalar swaps while copying it into the native Car.
+    Disk_Unpack(pDst, pSrc, &g_diskLayout_Car);
 
     pDst->pSceneRoot = pSceneRoot;
     pDst->pBodyNode = pBodyNode;
@@ -1616,10 +1611,8 @@ void Replay_CopyAuxState(Block0x134 *pSrc, Block0x134 *pDst)
 void Replay_RestoreAuxState(Block0x134 *pSrc, Block0x134 *pDst)
 {
     if (sizeof(CarPartSet) != g_diskLayout_CarPartSet.diskSize) {
-        for (int run = 0; run < g_diskLayout_CarPartSet.runCount; ++run) {
-            const DiskRun &r = g_diskLayout_CarPartSet.runs[run];
-            memcpy((BYTE *)pDst + r.native, (BYTE *)pSrc + r.disk, r.size);
-        }
+        // PORT: AMIGA: apply the scalar swaps while copying the disk lane.
+        Disk_Unpack(pDst, pSrc, &g_diskLayout_CarPartSet);
         return;
     }
 
@@ -1631,7 +1624,8 @@ void Replay_RestoreAuxState(Block0x134 *pSrc, Block0x134 *pDst)
     memcpy(keepC, pDst->data + 30, sizeof(keepC));
     memcpy(keepB, pDst->data + 15, sizeof(keepB));
     memcpy(keepA, pDst->data, sizeof(keepA));
-    *pDst = *pSrc;
+    // PORT: AMIGA: the same-size path still needs the endian swaps.
+    Disk_Unpack(pDst, pSrc, &g_diskLayout_CarPartSet);
     for (i = 0; i < 15; i++) {
         pDst->data[i] = keepA[i];
         pDst->data[15 + i] = keepB[i];
