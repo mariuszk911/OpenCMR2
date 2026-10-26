@@ -212,13 +212,16 @@ else
 fi
 
 # ---- staging ----------------------------------------------------------------
-mkdir -p "$REPO/dist/amiga/Libs"
+mkdir -p "$REPO/dist/amiga/Libs" "$REPO/dist/amiga/tests"
 cp "$REPO/build/amiga/opencmr2" "$REPO/dist/amiga/opencmr2"
 chmod 755 "$REPO/dist/amiga/opencmr2"
-if [ -f "$REPO/build/amiga/amiga_smoke" ]; then
-    cp "$REPO/build/amiga/amiga_smoke" "$REPO/dist/amiga/amiga_smoke"
-    chmod 755 "$REPO/dist/amiga/amiga_smoke"
-fi
+# Diagnostics and Sys smoke tests live under tests/, never next to the
+# deployment files.
+for binary in "$REPO"/build/amiga/amiga_smoke "$REPO"/build/amiga/amiga_*_test; do
+    [ -f "$binary" ] || continue
+    cp "$binary" "$REPO/dist/amiga/tests/"
+    chmod 755 "$REPO/dist/amiga/tests/$(basename "$binary")"
+done
 cp "$PISTORM3D_ROOT/bin/minigl.library" "$REPO/dist/amiga/Libs/minigl.library"
 chmod 644 "$REPO/dist/amiga/Libs/minigl.library"
 cp "$PISTORM3D_ROOT/licences/License_MiniGL_Library.txt" "$REPO/dist/amiga/License_MiniGL_Library.txt"
@@ -227,8 +230,8 @@ chmod 644 "$REPO/dist/amiga/License_MiniGL_Library.txt"
 cat > "$REPO/dist/amiga/README" <<'EOF'
 OpenCMR2 for AmigaOS 3.2 / PiStorm
 
-  opencmr2                    the executable (M0 startup scaffold)
-  amiga_smoke                 M0.9 startup diagnostic, run once on the target
+  opencmr2                    the game executable
+  tests/                      Sys/platform diagnostics; not deployment files
   Libs/minigl.library         MiniGL 29.1, matching the SDK it was built with
   License_MiniGL_Library.txt  MiniGL licence
 
@@ -239,12 +242,8 @@ Install Libs/minigl.library in LIBS: and run:
 
   opencmr2 --data Work:Games/CMR2
 
-The M0.9 diagnostic writes a PPM and a Shell log:
-
-  amiga_smoke RAM:m0-smoke.ppm > RAM:m0-smoke.log
-
-Until M1 lands opencmr2 is the M0 build scaffold; it does not start the game
-yet.
+The diagnostics under tests/ are for development only. amiga_smoke writes a
+PPM and a Shell log; the Sys tests use PROGDIR: fixtures next to the binary.
 EOF
 
 printf 'build.sh: staged %s\n' "$REPO/dist/amiga"
