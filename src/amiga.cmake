@@ -32,7 +32,9 @@ target_compile_options(opencmr2_domain_a INTERFACE
     -malign-int
     $<$<COMPILE_LANGUAGE:C>:-x c>
     "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/port/types.h"
-    "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/port/msvcrt.h")
+    "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/port/msvcrt.h"
+    "$<$<COMPILE_LANGUAGE:CXX>:-include>"
+    "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/port/menu_layout.h>")
 
 # Not linked into the M0 scaffold yet: M1 adds the platform services, then the
 # executable links this library. port/disk.cpp is Domain A too; M0.8 removed
@@ -160,3 +162,13 @@ target_include_directories(amiga_callback_state_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
 target_compile_options(amiga_callback_state_test PRIVATE -malign-int)
 opencmr2_amiga_stack(amiga_callback_state_test)
+
+# M1: Menu/MenuItem must keep the MSVC LSB bitfield layout on 68k; the game
+# compiles them through port/menu_layout.h, which declares the bitfields in
+# reverse so GCC's MSB-first allocation stores the original byte
+# (scalar_storage_order does not change bitfield order on GCC 6.5).
+add_executable(amiga_menu_layout_test ${PROJECT_SOURCE_DIR}/tests/amiga/menu_layout_test.cpp)
+target_link_libraries(amiga_menu_layout_test PRIVATE opencmr2_domain_a)
+target_include_directories(amiga_menu_layout_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
+opencmr2_amiga_stack(amiga_menu_layout_test)

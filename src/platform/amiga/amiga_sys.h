@@ -26,15 +26,21 @@ void AmigaSys_Shutdown(void);
    Sys_WaitEvent. The MiniGL executor calls this after creating its context. */
 void AmigaSys_SetWindow(void *window);
 
+/* Fork-owned input.device adapter: installs the key down/up handler that
+   maintains the DIK state, latches sub-frame taps and ignores keys while the
+   game window is not active. Called when the game opens the keyboard. */
+int AmigaSys_InputInit(void);
+void AmigaSys_InputShutdown(void);
+
 /* Windowed mode: opens the visible game window on the Workbench screen with a
    close gadget and makes it the input window, after reVC. Returns the Window*
    for mglCreateContextFromWindow, or NULL on failure (the executor then uses
    the MiniGL screen and its input backdrop). */
 void *AmigaSys_CreateGameWindow(int width, int height, const char *title);
 
-/* Held-key state indexed by DIK_*, 0x80 while the key is down. The renderer
-   drains IDCMP through Sys_PollEvent, so the input layer reads the same state
-   the event loop maintains. Focus loss clears it. */
+/* Held-key state indexed by DIK_*, 0x80 while the key is down. It comes from
+   the input.device adapter; IDCMP remains the fallback for tests and when
+   input.device cannot be opened. Focus loss clears it. */
 void AmigaSys_GetKeyState(unsigned char keys[256]);
 int AmigaSys_IsKeyDown(int dik);
 

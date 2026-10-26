@@ -5,6 +5,8 @@
 // land with their devices.
 #include "port/input.h"
 #include "port/sys.h"
+
+#include <stdio.h>
 #include "platform/amiga/amiga_sys.h"
 
 #include <string.h>
@@ -30,6 +32,7 @@ extern "C" int Input_JoysticksChanged(void)
 
 extern "C" InputDevice *Input_OpenKeyboard(void)
 {
+    AmigaSys_InputInit();
     return &s_keyboard;
 }
 
@@ -124,7 +127,14 @@ extern "C" int Input_ReadKeyboard(InputDevice *device, BYTE keys[256])
     }
     /* One line per press/release transition, not per frame. */
     if (down != s_lastDown) {
-        Sys_Log("input: keyboard poll %d key(s) down", down);
+        char codes[3 * 256 + 1];
+        int pos = 0;
+        for (i = 0; i < 256; i++) {
+            if ((keys[i] & 0x80) != 0 && pos < (int)sizeof(codes) - 3)
+                pos += sprintf(codes + pos, "%02x", i);
+        }
+        codes[pos] = '\0';
+        Sys_Log("input: keyboard poll %d key(s) down codes=%s", down, down != 0 ? codes : "-");
         s_lastDown = down;
     }
     return 1;

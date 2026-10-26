@@ -41,6 +41,18 @@ target_compile_definitions(layout_probe_shared PRIVATE
     OPENCMR2_LAYOUT_PRINT OPENCMR2_LAYOUT_SHARED_ONLY)
 add_test(NAME layout_probe_shared COMMAND layout_probe_shared)
 
+# 32-bit host drift guard for the fork-owned Menu layout override. The Amiga
+# target uses src/port/menu_layout.h; this checks the real game/Menu.h against
+# the same expected sizes, offsets and prototypes.
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    add_executable(menu_layout_host_test menu_layout_host.cpp)
+    target_include_directories(menu_layout_host_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/game
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/port/compat)
+    add_test(NAME menu_layout_host COMMAND menu_layout_host_test)
+endif()
+
 # M0.8: native copies are released by their owning file buffer, without a
 # malloc_usable_size/_msize/malloc_size dependency.
 add_executable(disk_ownership_test disk_ownership.cpp

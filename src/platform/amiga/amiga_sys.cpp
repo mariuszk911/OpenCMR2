@@ -5,6 +5,7 @@
 // cannot boot on this file alone yet.
 #include "port/sys.h"
 #include "port/sys_steps.h"
+#include "port/endian.h"
 #include "platform/amiga/amiga_keys.h"
 #include "platform/amiga/amiga_paths.h"
 #include "platform/amiga/amiga_settings.h"
@@ -20,6 +21,9 @@
 #include <exec/io.h>
 #include <exec/ports.h>
 #include <devices/timer.h>
+#include <devices/input.h>
+#include <devices/inputevent.h>
+#include <exec/interrupts.h>
 #include <dos/dos.h>
 #include <intuition/intuition.h>
 #include <proto/exec.h>
@@ -69,6 +73,154 @@ struct Window *s_ownedInputWindow;
 struct MsgPort *s_inputPort;
 struct Screen *s_inputScreen;
 unsigned char s_keyState[256];
+
+/* input.device adapter. The handler is the authoritative key down/up source:
+ * a sampled IDCMP state can lose a release or a tap shorter than one frame.
+ * It runs at interrupt level, so it only touches these arrays and the window
+ * flag; all device-management calls happen in task context below. */
+struct MsgPort *s_inputDevicePort;
+struct IOStdReq *s_inputDeviceRequest;
+struct Interrupt s_inputDeviceHandler;
+int s_inputDeviceState; /* 0 = not tried, 1 = open, 2 = handler installed, -1 = failed */
+static int s_inputExitRegistered;
+volatile unsigned char s_inputHeld[256];
+volatile unsigned char s_inputLatch[256];
+
+static void ResetKeyState(void)
+{
+    int i;
+    Disable();
+    for (i = 0; i < 256; i++) {
+        s_keyState[i] = 0;
+        s_inputHeld[i] = 0;
+        s_inputLatch[i] = 0;
+    }
+    Enable();
+}
+
+/* RAWKEY carries the DIK scan code; bit 7 (IECODE_UP_PREFIX) is key-up. A
+ * tap is latched for two game samples so the game's frame-to-frame edge
+ * (DeviceInfo.field_0x8) still sees it; a held key stays in s_inputHeld. */
+static struct InputEvent *InputDeviceHandler(register struct InputEvent *events __asm("a0"),
+                                            register APTR data __asm("a1"))
+{
+    struct InputEvent *event;
+    struct Window *window = s_inputWindow;
+
+    (void)data;
+    if (window == NULL || (window->Flags & WFLG_WINDOWACTIVE) == 0)
+        return events;
+    for (event = events; event != NULL; event = event->ie_NextEvent) {
+        int dik;
+        if (event->ie_Class != IECLASS_RAWKEY)
+            continue;
+        dik = AmigaKey_ToDIK(event->ie_Code);
+        if (dik == 0)
+            continue;
+        if ((event->ie_Code & IECODE_UP_PREFIX) != 0) {
+            s_inputHeld[dik] = 0;
+        } else if (s_inputHeld[dik] == 0) {
+            s_inputHeld[dik] = 1;
+            s_inputLatch[dik] = 2;
+        }
+    }
+    return events;
+}
+
+static void CloseInputDevice(void)
+{
+    if (s_inputDeviceState == 2 && s_inputDeviceRequest != NULL) {
+        int attempt;
+        BYTE result = 0;
+        for (attempt = 0; attempt < 3; ++attempt) {
+            s_inputDeviceRequest->io_Command = IND_REMHANDLER;
+            s_inputDeviceRequest->io_Data = (APTR)&s_inputDeviceHandler;
+            s_inputDeviceRequest->io_Length = 0;
+            result = DoIO((struct IORequest *)s_inputDeviceRequest);
+            if (result == 0 && s_inputDeviceRequest->io_Error == 0)
+                break;
+            Sys_Log("input.device: IND_REMHANDLER failed (IoErr %ld), attempt %d",
+                    (long)(result != 0 ? result : s_inputDeviceRequest->io_Error), attempt + 1);
+        }
+        if (result != 0 || s_inputDeviceRequest->io_Error != 0) {
+            Sys_Log("input.device: handler still installed; keeping request and port");
+            return;
+        }
+        s_inputDeviceState = 1;
+    }
+    if (s_inputDeviceState == 1 && s_inputDeviceRequest != NULL) {
+        CloseDevice((struct IORequest *)s_inputDeviceRequest);
+        s_inputDeviceState = 0;
+    }
+    if (s_inputDeviceRequest != NULL) {
+        DeleteIORequest((struct IORequest *)s_inputDeviceRequest);
+        s_inputDeviceRequest = NULL;
+    }
+    if (s_inputDevicePort != NULL) {
+        DeleteMsgPort(s_inputDevicePort);
+        s_inputDevicePort = NULL;
+    }
+    s_inputDeviceState = 0;
+}
+
+extern "C" int AmigaSys_InputInit(void)
+{
+    if (s_inputDeviceState == 2)
+        return 1;
+    if (s_inputDeviceState != 0)
+        return 0;
+    s_inputDeviceState = -1;
+    s_inputDevicePort = CreateMsgPort();
+    if (s_inputDevicePort == NULL) {
+        Sys_Log("input.device: CreateMsgPort failed");
+        s_inputDeviceState = 0;
+        return 0;
+    }
+    s_inputDeviceRequest = (struct IOStdReq *)CreateIORequest(s_inputDevicePort, sizeof(struct IOStdReq));
+    if (s_inputDeviceRequest == NULL) {
+        Sys_Log("input.device: CreateIORequest failed");
+        CloseInputDevice();
+        return 0;
+    }
+    if (OpenDevice((STRPTR)"input.device", 0, (struct IORequest *)s_inputDeviceRequest, 0) != 0) {
+        Sys_Log("input.device: OpenDevice failed (IoErr %ld)", (long)IoErr());
+        CloseInputDevice();
+        return 0;
+    }
+    s_inputDeviceState = 1;
+    s_inputDeviceHandler.is_Node.ln_Type = NT_INTERRUPT;
+    s_inputDeviceHandler.is_Node.ln_Pri = 100;
+    s_inputDeviceHandler.is_Node.ln_Name = (char *)"OpenCMR2 input handler";
+    s_inputDeviceHandler.is_Code = (void (*)())InputDeviceHandler;
+    s_inputDeviceHandler.is_Data = NULL;
+    s_inputDeviceRequest->io_Command = IND_ADDHANDLER;
+    s_inputDeviceRequest->io_Data = (APTR)&s_inputDeviceHandler;
+    s_inputDeviceRequest->io_Length = 0;
+    if (DoIO((struct IORequest *)s_inputDeviceRequest) != 0) {
+        Sys_Log("input.device: IND_ADDHANDLER failed (IoErr %ld)", (long)IoErr());
+        CloseInputDevice();
+        return 0;
+    }
+    s_inputDeviceState = 2;
+    ResetKeyState();
+    if (!s_inputExitRegistered) {
+        if (atexit(AmigaSys_InputShutdown) == 0)
+            s_inputExitRegistered = 1;
+        else
+            Sys_Log("input.device: atexit registration failed");
+    }
+    Sys_Log("input: device handler installed");
+    return 1;
+}
+
+extern "C" void AmigaSys_InputShutdown(void)
+{
+    /* Direct exit() paths do not run CloseInputState; make sure an in-flight
+     * handler returns before the window is torn down by the OS. */
+    s_inputWindow = NULL;
+    ResetKeyState();
+    CloseInputDevice();
+}
 
 int EClockNow(uint64_t *value)
 {
@@ -654,6 +806,79 @@ extern "C" const char *Sys_GetLastMissingFile(void)
     return s_lastMissing;
 }
 
+/*
+ * PORT: AMIGA: the controller and game-info files are raw native structures.
+ * The keyboard binding bytes are endian-independent, but the multi-byte
+ * fields and the 4-byte controller slot map are not. A PC-written file passes
+ * the 0x11a4 size check and would be read by the game without conversion; the
+ * slot map [0,1] would become [0,256] and ApplyControllerButtonBindings(1)
+ * would index m_controllerInfo[256]. Log the byte order and the critical
+ * fields so the next target run proves which format is present.
+ */
+static void LogConfigFile(const char *native, BPTR handle)
+{
+    BYTE head[0x150];
+    BYTE slot[4];
+    char name[32];
+    LONG size;
+    LONG got;
+    int slotGot = 0;
+
+    if (strstr(native, "Controller.rcf") == NULL && strstr(native, "GameInfo.rcf") == NULL)
+        return;
+    memset(head, 0, sizeof(head));
+    size = Seek(handle, 0, OFFSET_END);
+    Seek(handle, 0, OFFSET_BEGINNING);
+    got = Read(handle, head, sizeof(head));
+    Seek(handle, 0, OFFSET_BEGINNING);
+    if (got < 0)
+        got = 0;
+    if (strstr(native, "Controller.rcf") != NULL) {
+        name[0] = '\0';
+        if (got > 8) {
+            size_t nameLen = (size_t)(got - 8);
+            if (nameLen >= sizeof(name))
+                nameLen = sizeof(name) - 1;
+            memcpy(name, head + 8, nameLen);
+            name[nameLen] = '\0';
+        }
+        memset(slot, 0, sizeof(slot));
+        if (size >= 0x11a4) {
+            Seek(handle, 0x11a0, OFFSET_BEGINNING);
+            slotGot = (int)Read(handle, slot, sizeof(slot));
+            Seek(handle, 0, OFFSET_BEGINNING);
+        }
+        Sys_Log("file: config Controller size=%ld first=%08lx/%08lx name=%s bind0=%02lx%02lx%02lx%02lx%02lx%02lx%02lx%02lx%02lx slot=%02lx%02lx%02lx%02lx be=%u,%u le=%u,%u read=%d",
+                (long)size,
+                got >= 4 ? (unsigned long)Swap32(ReadLE32(head)) : 0UL,
+                got >= 4 ? (unsigned long)ReadLE32(head) : 0UL,
+                name,
+                got > 0x13e + 8 ? (unsigned long)head[0x13e + 0] : 0,
+                got > 0x13e + 8 ? (unsigned long)head[0x13e + 1] : 0,
+                got > 0x13e + 8 ? (unsigned long)head[0x13e + 2] : 0,
+                got > 0x13e + 8 ? (unsigned long)head[0x13e + 3] : 0,
+                got > 0x13e + 8 ? (unsigned long)head[0x13e + 4] : 0,
+                got > 0x13e + 8 ? (unsigned long)head[0x13e + 5] : 0,
+                got > 0x13e + 8 ? (unsigned long)head[0x13e + 6] : 0,
+                got > 0x13e + 8 ? (unsigned long)head[0x13e + 7] : 0,
+                got > 0x13e + 8 ? (unsigned long)head[0x13e + 8] : 0,
+                (unsigned long)slot[0], (unsigned long)slot[1],
+                (unsigned long)slot[2], (unsigned long)slot[3],
+                (unsigned int)Swap16(ReadLE16(slot)),
+                (unsigned int)Swap16(ReadLE16(slot + 2)),
+                (unsigned int)ReadLE16(slot),
+                (unsigned int)ReadLE16(slot + 2),
+                slotGot);
+    } else {
+        Sys_Log("file: config GameInfo size=%ld magic=%08lx/%08lx lang=%02lx read=%ld",
+                (long)size,
+                got >= 0x14 ? (unsigned long)Swap32(ReadLE32(head + 0x10)) : 0,
+                got >= 0x14 ? (unsigned long)ReadLE32(head + 0x10) : 0,
+                got >= 0x15 ? (unsigned long)head[0x14] : 0,
+                (long)got);
+    }
+}
+
 extern "C" SysFile *Sys_OpenFile(const char *path, int mode)
 {
     char native[kNativePathSize];
@@ -668,6 +893,8 @@ extern "C" SysFile *Sys_OpenFile(const char *path, int mode)
         Sys_Log("Open %s failed (IoErr %ld)", native, (long)IoErr());
         return NULL;
     }
+    if (!writing)
+        LogConfigFile(native, handle);
     SysFile *file = new (std::nothrow) SysFile;
     if (file == NULL) {
         Close(handle);
@@ -897,9 +1124,11 @@ extern "C" void Sys_Sleep(uint32_t ms)
 static void CloseInputState(void)
 {
     if (s_ownedInputWindow != NULL) {
-        CloseWindow(s_ownedInputWindow);
+        struct Window *window = s_ownedInputWindow;
         s_ownedInputWindow = NULL;
+        /* Stop the input handler from touching the window before it dies. */
         s_inputWindow = NULL;
+        CloseWindow(window);
     }
     if (s_inputScreen != NULL) {
         UnlockPubScreen(NULL, s_inputScreen);
@@ -913,6 +1142,7 @@ static void CloseInputState(void)
         DeleteMsgPort(s_inputPort);
         s_inputPort = NULL;
     }
+    ResetKeyState();
     s_inputWindow = NULL;
 }
 
@@ -1056,7 +1286,7 @@ static int PollEvent(SysEvent *event, int *consumed)
         } else if (messageClass == IDCMP_ACTIVEWINDOW) {
             // Releases may have been delivered while inactive; start clean.
             Sys_Log("input: active window");
-            memset(s_keyState, 0, sizeof(s_keyState));
+            ResetKeyState();
             event->type = SYS_EVENT_FOCUS_GAINED;
             event->key = 0;
             event->character = 0;
@@ -1064,7 +1294,7 @@ static int PollEvent(SysEvent *event, int *consumed)
             handled = 1;
         } else if (messageClass == IDCMP_INACTIVEWINDOW) {
             Sys_Log("input: inactive window");
-            memset(s_keyState, 0, sizeof(s_keyState));
+            ResetKeyState();
             event->type = SYS_EVENT_FOCUS_LOST;
             event->key = 0;
             event->character = 0;
@@ -1108,13 +1338,34 @@ extern "C" int Sys_PollEvent(SysEvent *event)
 
 extern "C" void AmigaSys_GetKeyState(unsigned char keys[256])
 {
-    if (keys != NULL)
-        memcpy(keys, s_keyState, sizeof(s_keyState));
+    int i;
+    if (keys == NULL)
+        return;
+    if (s_inputDeviceState == 2) {
+        /* One sample: held keys plus taps latched for this frame. */
+        Disable();
+        for (i = 0; i < 256; i++) {
+            keys[i] = (s_inputHeld[i] || s_inputLatch[i]) ? 0x80 : 0;
+            if (s_inputHeld[i])
+                s_inputLatch[i] = 0;
+            else if (s_inputLatch[i] != 0)
+                s_inputLatch[i]--;
+        }
+        Enable();
+        return;
+    }
+    /* Fallback for the target tests (fake window, no input.device) and for a
+     * machine where input.device could not be opened. */
+    memcpy(keys, s_keyState, sizeof(s_keyState));
 }
 
 extern "C" int AmigaSys_IsKeyDown(int dik)
 {
-    return dik >= 0 && dik < 256 && (s_keyState[dik] & 0x80) != 0;
+    if (dik < 0 || dik >= 256)
+        return 0;
+    if (s_inputDeviceState == 2)
+        return s_inputHeld[dik] != 0 || s_inputLatch[dik] != 0;
+    return (s_keyState[dik] & 0x80) != 0;
 }
 
 extern "C" int Sys_WaitEvent(SysEvent *event)
@@ -1283,6 +1534,7 @@ extern "C" void AmigaSys_Shutdown(void)
 {
     CloseTime();
     CloseInputState();
+    AmigaSys_InputShutdown();
     if (IntuitionBase != NULL) {
         CloseLibrary((struct Library *)IntuitionBase);
         IntuitionBase = NULL;
