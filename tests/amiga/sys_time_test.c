@@ -52,6 +52,5 @@ int main(void)
             (unsigned long)start, (unsigned long)end, (unsigned long)elapsed,
             (unsigned long)unixTime, steps);
     printf("sys_time: OK\n");
-    Sys_Exit(0);
-    return 1;
+    return 0;
 }

@@ -7,7 +7,6 @@
  */
 #include "platform/amiga/amiga_platform.h"
 #include "port/sys.h"
-#include "test_paths.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -16,21 +15,15 @@ static int Fail(const char *what)
 {
     Sys_Log("platform: FAIL %s", what);
     printf("platform: FAIL %s\n", what);
-    Sys_Exit(1);
     return 1;
 }
 
 int main(int argc, char **argv)
 {
-    char data[512];
-    char user[512];
-    if (!TestPath(data, sizeof(data), "gamedata") ||
-        !TestPath(user, sizeof(user), "platform-user"))
-        return Fail("test drawer path");
-
-    char *fallback[] = {
-        (char *)"amiga_platform_test", (char *)"--data", data,
-        (char *)"--user-dir", user, NULL,
+    // PROGDIR: is the test binary's own drawer; no volume name is needed.
+    static char *fallback[] = {
+        (char *)"amiga_platform_test", (char *)"--data", (char *)"PROGDIR:gamedata",
+        (char *)"--user-dir", (char *)"PROGDIR:platform-user", NULL,
     };
 
     if (argc < 2) {
@@ -39,9 +32,9 @@ int main(int argc, char **argv)
     }
     if (!AmigaPlatform_Init(argc, argv))
         return Fail("init");
-    if (strcmp(AmigaPlatform_GetDataDir(), data) != 0)
+    if (strcmp(AmigaPlatform_GetDataDir(), "PROGDIR:gamedata") != 0)
         return Fail("data directory");
-    if (strcmp(AmigaPlatform_GetUserDir(), user) != 0)
+    if (strcmp(AmigaPlatform_GetUserDir(), "PROGDIR:platform-user") != 0)
         return Fail("user directory");
     if (!Sys_FileExists("Game/Bigfiles/common.bfl"))
         return Fail("data file through the Sys layer");
@@ -54,9 +47,8 @@ int main(int argc, char **argv)
     if (AmigaPlatform_WasSetupCanceled())
         return Fail("setup canceled");
 
-    AmigaPlatform_Shutdown();
     Sys_Log("platform: OK");
     printf("platform: OK\n");
-    Sys_Exit(0);
-    return 1;
+    AmigaPlatform_Shutdown();
+    return 0;
 }

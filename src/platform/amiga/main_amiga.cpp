@@ -19,6 +19,5 @@ int main(int argc, char **argv)
     const unsigned int code = CMain::Initialize(Sys_GetCommandLine());
     Diagnostics::StopProfile();
     AmigaPlatform_Shutdown();
-    Sys_Exit((int)code);
-    return 0;
+    return (int)code;
 }

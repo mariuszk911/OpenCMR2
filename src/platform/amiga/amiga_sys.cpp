@@ -533,6 +533,19 @@ int ResolveReading(const char *path, char *out, size_t size)
 
 // Native Amiga paths (volume/assign: or /...) come from the game's install
 // paths and must bypass the data-directory join. Backslashes are normalized.
+int HasSuffix(const char *path, const char *suffix)
+{
+    const size_t pathLen = strlen(path);
+    const size_t suffixLen = strlen(suffix);
+    if (pathLen < suffixLen)
+        return 0;
+    for (size_t i = 0; i < suffixLen; ++i) {
+        if (AmigaPath_Lower(path[pathLen - suffixLen + i]) != AmigaPath_Lower(suffix[i]))
+            return 0;
+    }
+    return 1;
+}
+
 int IsNativePath(const char *path)
 {
     if (path == NULL || path[0] == '\0')
@@ -603,6 +616,8 @@ extern "C" int Sys_ResolvePath(const char *path, int forWriting, char *out, size
         }
         UnLock(lock);
         CopyPath(out, outSize, native);
+        if (HasSuffix(path, ".bfl"))
+            Sys_Log("file: archive %s", native);
         return 1;
     }
     if (!AmigaPath_Split(path, &parts)) {
@@ -615,8 +630,12 @@ extern "C" int Sys_ResolvePath(const char *path, int forWriting, char *out, size
             return 0;
         return CreateParentDirs(&parts);
     }
-    if (ResolveReading(path, out, outSize))
+    if (ResolveReading(path, out, outSize)) {
+        if (HasSuffix(path, ".bfl"))
+            Sys_Log("file: archive %s", out);
         return 1;
+    }
+    Sys_Log("file: not found: %s", path);
     RememberMissing(path);
     return 0;
 }
@@ -1058,17 +1077,20 @@ extern "C" void Sys_Fatal(const char *format, ...)
     Sys_Exit(1);
 }
 
-extern "C" void Sys_Exit(int code)
+extern "C" void AmigaSys_Shutdown(void)
 {
     CloseTime();
     if (IntuitionBase != NULL) {
         CloseLibrary((struct Library *)IntuitionBase);
         IntuitionBase = NULL;
     }
-    if (s_logHandle != 0) {
-        Close(s_logHandle);
-        s_logHandle = 0;
-    }
+    // The log is flushed per line; closing its dos handle on the normal return
+    // path is left to the OS.
+}
+
+extern "C" void Sys_Exit(int code)
+{
+    AmigaSys_Shutdown();
     exit(code);
 }
 

@@ -7,7 +7,6 @@
  */
 #include "platform/amiga/amiga_sys.h"
 #include "port/sys.h"
-#include "test_paths.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -19,7 +18,6 @@ static int Fail(const char *what)
 {
     Sys_Log("sys_file: FAIL %s", what);
     printf("sys_file: FAIL %s\n", what);
-    Sys_Exit(1);
     return 1;
 }
 
@@ -37,15 +35,11 @@ static int Collect(const char *name, void *context)
 int main(void)
 {
     char buffer[16];
-    char user[512];
-    char data[512];
 
-    if (!TestPath(user, sizeof(user), "sysfile-user") ||
-        !TestPath(data, sizeof(data), "sysfile-data"))
-        return Fail("test drawer path");
-    AmigaSys_SetUserDir(user);
-    AmigaSys_SetDataDir(data);
-    Sys_Log("sys_file: begin user=%s data=%s", user, data);
+    // PROGDIR: is the test binary's own drawer; no volume name is needed.
+    AmigaSys_SetUserDir("PROGDIR:sysfile-user");
+    AmigaSys_SetDataDir("PROGDIR:sysfile-data");
+    Sys_Log("sys_file: begin");
 
     // A data file through a differently-spelled, DOS-style game path.
     SysFile *file = Sys_OpenFile("frontend\\menu.tga", SYS_FILE_READ);
@@ -58,19 +52,15 @@ int main(void)
     Sys_CloseFile(file);
 
     // Native Amiga paths bypass the data-directory join and normalize '\'.
-    char native[600];
-    snprintf(native, sizeof(native), "%s/frontend\\menu.tga", data);
-    file = Sys_OpenFile(native, SYS_FILE_READ);
+    file = Sys_OpenFile("PROGDIR:sysfile-data/frontend\\menu.tga", SYS_FILE_READ);
     if (file == NULL)
         return Fail("open native path");
     if (Sys_ReadFile(file, buffer, sizeof(buffer)) != 6 || memcmp(buffer, "MENU42", 6) != 0)
         return Fail("read native path");
     Sys_CloseFile(file);
 
-    char nativeList[600];
-    snprintf(nativeList, sizeof(nativeList), "%s/FrontEnd", data);
     listedCount = 0;
-    Sys_ListFiles(nativeList, "*", Collect, NULL);
+    Sys_ListFiles("PROGDIR:sysfile-data/FrontEnd", "*", Collect, NULL);
     if (listedCount != 1 || strcmp(listed[0], "Menu.TGA") != 0)
         return Fail("list native path");
 
@@ -135,6 +125,5 @@ int main(void)
 
     Sys_Log("sys_file: OK (listed %d)", listedCount);
     printf("sys_file: OK\n");
-    Sys_Exit(0);
-    return 1;
+    return 0;
 }

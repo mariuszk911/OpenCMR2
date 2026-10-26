@@ -22,7 +22,6 @@ static int Fail(const char *what)
 {
     Sys_Log("event: FAIL %s", what);
     printf("event: FAIL %s\n", what);
-    Sys_Exit(1);
     return 1;
 }
 
@@ -120,6 +119,5 @@ int main(void)
     DeleteMsgPort(reply);
     Sys_Log("event: OK (desktop %ldx%ld)", (long)width, (long)height);
     printf("event: OK\n");
-    Sys_Exit(0);
-    return 1;
+    return 0;
 }

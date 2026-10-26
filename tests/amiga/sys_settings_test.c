@@ -7,7 +7,6 @@
  */
 #include "platform/amiga/amiga_sys.h"
 #include "port/sys.h"
-#include "test_paths.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -16,16 +15,13 @@ static int Fail(const char *what)
 {
     Sys_Log("sys_settings: FAIL %s", what);
     printf("sys_settings: FAIL %s\n", what);
-    Sys_Exit(1);
     return 1;
 }
 
 int main(void)
 {
-    char user[512];
-    if (!TestPath(user, sizeof(user), "syssettings-user"))
-        return Fail("test drawer path");
-    AmigaSys_SetUserDir(user);
+    // PROGDIR: is the test binary's own drawer; no volume name is needed.
+    AmigaSys_SetUserDir("PROGDIR:syssettings-user");
 
     if (strcmp(Sys_GetInstallSetting("Language"), "French") != 0)
         return Fail("install.language");
@@ -51,6 +47,5 @@ int main(void)
 
     Sys_Log("sys_settings: OK");
     printf("sys_settings: OK\n");
-    Sys_Exit(0);
-    return 1;
+    return 0;
 }

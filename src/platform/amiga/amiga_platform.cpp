@@ -197,6 +197,7 @@ extern "C" int AmigaPlatform_Init(int argc, char **argv)
 extern "C" void AmigaPlatform_Shutdown(void)
 {
     // MiniGL owns the window; its lifetime is closed by the renderer slice.
+    AmigaSys_Shutdown();
 }
 
 extern "C" const char *AmigaPlatform_GetDataDir(void)
