@@ -142,3 +142,16 @@ add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_event_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_event_test)
+
+# Development helper: remove a stuck game task without resetting the machine.
+# RemTask does not close the MiniGL screen, so this is for test iterations only.
+add_executable(amiga_kill_task_test ${PROJECT_SOURCE_DIR}/tests/amiga/kill_task_test.c)
+target_include_directories(amiga_kill_task_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_kill_task_test)
+
+# M1: the callback state's packed DWORD must match the MSVC layout on 68k too.
+add_executable(amiga_callback_state_test ${PROJECT_SOURCE_DIR}/tests/amiga/callback_state_test.cpp)
+target_include_directories(amiga_callback_state_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
+target_compile_options(amiga_callback_state_test PRIVATE -malign-int)
+opencmr2_amiga_stack(amiga_callback_state_test)
