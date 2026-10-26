@@ -1,6 +1,7 @@
 // Audio on AmigaOS. The mixer/AHI output is not wired yet; buffers exist and
-// accept PCM so the game can load and queue sound without crashing. MS-ADPCM
-// decoding is the portable implementation shared with the host.
+// accept PCM so the game can load and queue sound without crashing. A one-shot
+// buffer still "plays" for its real duration in silence, so the game's sound
+// slots and speech queues are released as they would be with output.
 #include "port/audio.h"
 #include "port/sys.h"
 
@@ -19,6 +20,7 @@ struct AudioBuffer {
     LONG pan;
     DWORD frequency;
     DWORD position;
+    uint32_t startTicks; // Sys_GetTicks() at Audio_Play
 };
 
 struct AudioStream {
@@ -129,6 +131,7 @@ extern "C" void Audio_Play(AudioBuffer *buffer, int loop)
     buffer->playing = 1;
     buffer->loop = loop != 0;
     buffer->position = 0;
+    buffer->startTicks = Sys_GetTicks();
 }
 
 extern "C" void Audio_Stop(AudioBuffer *buffer)
@@ -137,9 +140,29 @@ extern "C" void Audio_Stop(AudioBuffer *buffer)
         buffer->playing = 0;
 }
 
+namespace {
+
+// Milliseconds a one-shot buffer takes at its current frequency.
+uint32_t PlayDuration(const AudioBuffer *buffer)
+{
+    const uint64_t bytesPerSecond =
+        (uint64_t)buffer->frequency * (uint64_t)buffer->channels * (uint64_t)(buffer->bits / 8);
+    if (bytesPerSecond == 0)
+        return 0;
+    const uint64_t ms = (uint64_t)buffer->bytes * 1000u / bytesPerSecond;
+    return ms > 0xffffffffu ? 0xffffffffu : (uint32_t)ms;
+}
+
+} // namespace
+
 extern "C" int Audio_IsPlaying(AudioBuffer *buffer)
 {
-    return buffer != NULL && buffer->playing;
+    if (buffer == NULL || !buffer->playing)
+        return 0;
+    // Unsigned subtraction keeps the elapsed time right across the 2^32 wrap.
+    if (!buffer->loop && Sys_GetTicks() - buffer->startTicks >= PlayDuration(buffer))
+        buffer->playing = 0;
+    return buffer->playing;
 }
 
 extern "C" DWORD Audio_GetPlayPosition(AudioBuffer *buffer)
