@@ -52,6 +52,19 @@ int main()
     Check(AmigaKey_ToDIK(0x7f), 0, "unmapped key");
     Check(AmigaKey_ToDIK(0xff), 0, "unmapped release key");
 
+    // Every key the adapter produces has a name; anything else is "".
+    for (int code = 0; code < 0x80; ++code) {
+        const int dik = AmigaKey_ToDIK(code);
+        if (dik != 0 && AmigaKey_DIKName(dik)[0] == '\0') {
+            std::fprintf(stderr, "FAIL: raw key 0x%x (DIK 0x%x) has no name\n", code, dik);
+            ++failures;
+        }
+    }
+    Check(std::strcmp(AmigaKey_DIKName(0x1c), "Return"), 0, "Return name");
+    Check(std::strcmp(AmigaKey_DIKName(0xcb), "Left"), 0, "Left name");
+    Check(AmigaKey_DIKName(0)[0], 0, "no key name");
+    Check(AmigaKey_DIKName(0x58 + 1)[0], 0, "unmapped DIK name");
+
     unsigned char keys[256];
     std::memset(keys, 0, sizeof(keys));
     Check(AmigaKey_UpdateState(keys, 0x45), 0x01, "press mapped");

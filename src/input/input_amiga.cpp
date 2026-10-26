@@ -7,6 +7,7 @@
 #include "port/sys.h"
 
 #include <stdio.h>
+#include "platform/amiga/amiga_keys.h"
 #include "platform/amiga/amiga_sys.h"
 
 #include <string.h>
@@ -170,8 +171,7 @@ extern "C" void Input_GetKeyRepeat(DWORD *delay, DWORD *interval)
 
 extern "C" const char *Input_GetKeyName(int key)
 {
-    (void)key;
-    return "Unknown";
+    return AmigaKey_DIKName(key);
 }
 
 extern "C" InputEffect *Input_CreateEffect(InputDevice *device, const InputEffectParams *params)
