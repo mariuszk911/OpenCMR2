@@ -1162,8 +1162,19 @@ extern "C" void Gfx_GenerateMipmaps(GfxTexture *texture)
 
 extern "C" void Gfx_CopyTexture(GfxTexture *dst, GfxTexture *src)
 {
-    if (dst == NULL || src == NULL || dst->parent != NULL || src->data == NULL)
+    if (dst == NULL || src == NULL)
         return;
+    // A cube-face view shares its cube's storage, as Root() does on the host.
+    if (dst->parent != NULL)
+        dst = dst->parent;
+    if (src->parent != NULL)
+        src = src->parent;
+    if (dst == src)
+        return;
+    if (src->data == NULL || dst->data == NULL) {
+        Sys_Log("gfx: copy between textures without CPU storage ignored");
+        return;
+    }
     if (dst->width == src->width && dst->height == src->height && dst->format == src->format) {
         memcpy(dst->data, src->data, src->dataSize);
         dst->dirty = 1;
