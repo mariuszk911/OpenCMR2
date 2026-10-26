@@ -1114,11 +1114,41 @@ extern "C" void Gfx_CopyTexture(GfxTexture *dst, GfxTexture *src)
 {
     if (dst == NULL || src == NULL || dst->parent != NULL || src->data == NULL)
         return;
-    if (dst->width == src->width && dst->height == src->height && dst->format == src->format &&
-        dst->dataSize >= src->dataSize) {
+    if (dst->width == src->width && dst->height == src->height && dst->format == src->format) {
         memcpy(dst->data, src->data, src->dataSize);
         dst->dirty = 1;
+        return;
     }
+    // Like the host executors: convert through 32-bit pixels and scale with
+    // nearest sampling. Nothing converts to a compressed format.
+    if (dst->format == GFX_FORMAT_BC1 || dst->format == GFX_FORMAT_BC3) {
+        Sys_Log("gfx: cannot convert a texture to a compressed format");
+        return;
+    }
+    unsigned char *rgba = TextureToRGBA(src);
+    if (rgba == NULL) {
+        Sys_Log("gfx: out of memory converting a %dx%d texture", src->width, src->height);
+        return;
+    }
+    const unsigned int dstBytes = dst->format == GFX_FORMAT_BUMP_DUDVL ? 3 : 4;
+    for (int y = 0; y < dst->height; ++y) {
+        const int sy = (int)((int64_t)y * src->height / dst->height);
+        unsigned char *out = dst->data + y * dst->pitch;
+        for (int x = 0; x < dst->width; ++x) {
+            const int sx = (int)((int64_t)x * src->width / dst->width);
+            const unsigned char *p = rgba + ((size_t)sy * src->width + sx) * 4;
+            // The CPU copy is stored as in Direct3D memory: blue, green, red
+            // (then alpha for the 32-bit formats).
+            out[0] = p[2];
+            out[1] = p[1];
+            out[2] = p[0];
+            if (dstBytes == 4)
+                out[3] = p[3];
+            out += dstBytes;
+        }
+    }
+    free(rgba);
+    dst->dirty = 1;
 }
 
 extern "C" GfxTexture *Gfx_GetCubeFace(GfxTexture *cube, int face)
