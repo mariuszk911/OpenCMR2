@@ -4,6 +4,7 @@
 // and user directory. There is no SDL and no ASL picker in v1.
 #include "platform/amiga/amiga_platform.h"
 #include "platform/amiga/amiga_sys.h"
+#include "port/gfx.h"
 #include "port/sys.h"
 
 #include <stddef.h>
@@ -131,7 +132,9 @@ extern "C" int AmigaPlatform_Init(int argc, char **argv)
 
 extern "C" void AmigaPlatform_Shutdown(void)
 {
-    // MiniGL owns the window; its lifetime is closed by the renderer slice.
+    // The renderer owns the MiniGL context and, in fullscreen mode, the screen
+    // that hides Workbench. Tear it down before Intuition itself is closed.
+    Gfx_Shutdown();
     AmigaSys_Shutdown();
 }
 

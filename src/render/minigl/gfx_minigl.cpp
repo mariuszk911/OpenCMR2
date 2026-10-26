@@ -46,6 +46,7 @@ struct GfxVertexBuffer {
 namespace {
 
 void *s_context;
+int s_miniglOpen;
 int s_stageAddress = GFX_ADDRESS_WRAP;
 GfxTexture *s_boundTexture;
 static const float kMenuDotCircle[20][2] = {
@@ -173,6 +174,7 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
         Sys_Log("gfx: MiniGLOpen failed");
         return 0;
     }
+    s_miniglOpen = 1;
     // PORT: AMIGA: windowed mode follows reVC. The application owns the
     // visible window (close gadget, focus, IDCMP port) and MiniGL renders into
     // its inner area with mglCreateContextFromWindow.
@@ -197,6 +199,7 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
                 s_gameWindow = NULL;
             }
             MiniGLClose();
+            s_miniglOpen = 0;
             return 0;
         }
         // Fullscreen: v3dWindow is NULL and inputWindow is MiniGL's borderless
@@ -223,6 +226,7 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
             s_gameWindow = NULL;
         }
         MiniGLClose();
+        s_miniglOpen = 0;
         return 0;
     }
     glViewport(0, 0, width, height);
@@ -261,7 +265,10 @@ extern "C" void Gfx_Shutdown(void)
         AmigaSys_SetWindow(NULL);
         s_gameWindow = NULL;
     }
-    MiniGLClose();
+    if (s_miniglOpen) {
+        MiniGLClose();
+        s_miniglOpen = 0;
+    }
 }
 
 extern "C" int Gfx_GetDisplayModeCount(void)

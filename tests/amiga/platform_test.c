@@ -12,6 +12,12 @@
 #include <stdio.h>
 #include <string.h>
 
+/* AmigaPlatform_Shutdown tears the renderer down; this lifecycle test links
+ * the platform layer without a graphics backend, so provide the no-op. */
+void Gfx_Shutdown(void)
+{
+}
+
 static int Fail(const char *what)
 {
     Sys_Log("platform: FAIL %s", what);
