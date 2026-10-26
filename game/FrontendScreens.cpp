@@ -6111,6 +6111,17 @@ int FrontendDraw_ModeProgressBar(int param_1, int param_2, int param_3, int para
         rect[0] = (short)(x >> 16);
     }
     if (param_5 != 0) {
+        // PORT: AMIGA: one-shot evidence for the big-endian narrowing of this
+        // packed rectangle word to Font_DrawText's short x argument.
+        static int loggedProgressLabelCoordinates;
+        if (!loggedProgressLabelCoordinates) {
+            DWORD packedRect;
+            memcpy(&packedRect, rect, sizeof(packedRect));
+            Sys_Log("AMIGA: progress label res=%dx%d rect=%d,%d packed=%08lx short-x=%d",
+                    g_pGraphics->resX, g_pGraphics->resY, (int)rect[0], (int)rect[1],
+                    (unsigned long)packedRect, (int)(short)packedRect);
+            loggedProgressLabelCoordinates = 1;
+        }
         Font_DrawText(1, param_5, *(int *)rect, (int)(g_pGraphics->resY * 0x18) / 0x1e0 + param_2,
                       (int *)g_colourText0x0052496c, 0x14);
         return rect[0];
