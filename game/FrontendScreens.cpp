@@ -70,6 +70,11 @@ unsigned int g_carSetupDiagnosticProgressStart;
 unsigned int g_carSetupDiagnosticProgressEnd;
 unsigned int g_carSetupDiagnosticProgressBarsRemaining;
 int g_carSetupDiagnosticProgressFlushPending;
+
+// PORT: AMIGA: entry sequence correlates menu initialization with its first draw.
+static unsigned int s_carMenuEntrySequence;
+static unsigned int s_carMenuDrawnSequence = 0xffffffffu;
+static int s_carMenuPlayerIndex = -1;
 #endif
 
 // GLOBAL: CMR2 0x00819864
@@ -3676,6 +3681,17 @@ void FrontendScroller_InitRallyStageSelection(Menu *pMenu, int param)
     int count;
 
     count = 0;
+#if defined(__m68k__)
+    // PORT: AMIGA: identify each car-menu initialization and player context.
+    if (pMenu == FrontendMenu_GetCarSetup()) {
+        s_carMenuEntrySequence++;
+        s_carMenuPlayerIndex = CGameInfo::GetConfiguredPlayerCount() - g_profilePlayersRemaining - 1;
+        Sys_Log("AMIGA: car-init begin seq=%u menu=%08lx param=%d player=%d players=%d remaining=%d res=%dx%d",
+                s_carMenuEntrySequence, (unsigned long)pMenu, param, s_carMenuPlayerIndex,
+                CGameInfo::GetConfiguredPlayerCount(), (int)g_profilePlayersRemaining,
+                g_pGraphics->resX, g_pGraphics->resY);
+    }
+#endif
     Frontend_SetOverlayMode(CGameInfo::GetConfiguredPlayerCount() - g_profilePlayersRemaining - 1);
     pScroller = FrontendScroller_GetRouteEntryScroller();
     pScroller->pMenu = pMenu;
@@ -3710,6 +3726,23 @@ void FrontendScroller_InitRallyStageSelection(Menu *pMenu, int param)
         pWidths++;
         p++;
     }
+#if defined(__m68k__)
+    if (pMenu == FrontendMenu_GetCarSetup()) {
+        Sys_Log("AMIGA: car-init map seq=%u itemCount=%d cursor=%d scroller(count=%d spacing=%d current=%d previous=%d offset=%d start=%d time=%d) globals(selection=%d time=%d)",
+                s_carMenuEntrySequence, pMenu->itemCount, pMenu->cursor,
+                pScroller->count, pScroller->spacing, pScroller->current,
+                pScroller->previous, pScroller->offset, pScroller->startOffset,
+                pScroller->startTime, g_scrollerSelection, g_scrollerSelectionTimestamp);
+        for (i = 0; i < count; ++i) {
+            strcpy(CFrontend::m_stringDest, CFrontend::GetTextString(pMenu->items[i].id));
+            CGenericFileLoader::StrLowerPolish(CFrontend::m_stringDest);
+            Sys_Log("AMIGA: car-init item seq=%u index=%d id=%d palette=%d width=%d text=%.48s",
+                    s_carMenuEntrySequence, i, pMenu->items[i].id,
+                    g_screenPaletteIds[i], g_menuScroller0x00819230.widths[i],
+                    CFrontend::m_stringDest);
+        }
+    }
+#endif
 }
 
 void GameInfo_ResetSessionTimestamp(void);
@@ -10539,6 +10572,9 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
     Texture *liveryTexture;
     unsigned int spriteCountBeforeCarArt;
     int diagnosticSelectionChanged;
+    MenuScroller *carScroller;
+    int selectedItemId;
+    int selectedWidth;
     static int previousDiagnosticCursor = -1;
     static int previousDiagnosticPalette = -1;
 #endif
@@ -10563,6 +10599,24 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
     frontTexture = CFrontend::m_unk0x0081884c[paletteId];
     backTexture = CFrontend::m_unk0x008182cc[paletteId];
     liveryTexture = CFrontend::m_unk0x00818530[liveryIndex];
+    carScroller = FrontendScroller_GetRouteEntryScroller();
+    selectedItemId = -1;
+    selectedWidth = -1;
+    if (pMenu->cursor >= 0 && pMenu->cursor < pMenu->itemCount && pMenu->cursor < 22) {
+        selectedItemId = pMenu->items[pMenu->cursor].id;
+        selectedWidth = g_menuScroller0x00819230.widths[pMenu->cursor];
+    }
+    if (pMenu == FrontendMenu_GetCarSetup() && s_carMenuDrawnSequence != s_carMenuEntrySequence) {
+        // PORT: AMIGA: correlate the first draw with the matching init sequence.
+        Sys_Log("AMIGA: car-draw seq=%u player=%d menu=%08lx res=%dx%d items=%d cursor=%d item=%d palette=%d width=%d scroller(count=%d spacing=%d current=%d previous=%d offset=%d start=%d time=%d) globals(selection=%d time=%d)",
+                s_carMenuEntrySequence, s_carMenuPlayerIndex, (unsigned long)pMenu,
+                g_pGraphics->resX, g_pGraphics->resY, pMenu->itemCount, pMenu->cursor,
+                selectedItemId, paletteId, selectedWidth, carScroller->count,
+                carScroller->spacing, carScroller->current, carScroller->previous,
+                carScroller->offset, carScroller->startOffset, carScroller->startTime,
+                g_scrollerSelection, g_scrollerSelectionTimestamp);
+        s_carMenuDrawnSequence = s_carMenuEntrySequence;
+    }
     diagnosticSelectionChanged = 0;
     // PORT: AMIGA: capture selected assets only when the menu selection changes.
     if (pMenu->cursor != previousDiagnosticCursor || paletteId != previousDiagnosticPalette) {
