@@ -927,6 +927,12 @@ extern "C" void Gfx_DestroyTexture(GfxTexture *texture)
 {
     if (texture == NULL)
         return;
+    // The TL path reads s_boundTexture's flags; never leave it dangling. A
+    // bound texture always has a GL name, so texturing is disabled below
+    // while the display is locked for glDeleteTextures.
+    const bool wasBound = s_boundTexture == texture;
+    if (wasBound)
+        s_boundTexture = NULL;
     if (texture->parent == NULL) {
         if (texture->replacement != NULL) {
             Gfx_DestroyTexture(texture->replacement);
@@ -935,6 +941,8 @@ extern "C" void Gfx_DestroyTexture(GfxTexture *texture)
         if (texture->glId != 0 && s_context != NULL) {
             const int wasLocked = s_locked;
             if (EnsureLocked()) {
+                if (wasBound)
+                    glDisable(GL_TEXTURE_2D);
                 glDeleteTextures(1, &texture->glId);
                 if (!wasLocked) {
                     mglUnlockDisplay();
