@@ -53,6 +53,10 @@ int s_stageAddress = GFX_ADDRESS_WRAP;
 int s_stageMinFilter = GFX_FILTER_POINT;
 int s_stageMagFilter = GFX_FILTER_POINT;
 GfxTexture *s_boundTexture;
+// MiniGL has no render-to-texture. While the game targets a texture (the car
+// reflection cube faces) its draws and clears are dropped so they cannot land
+// on the back buffer; the texture keeps its contents.
+GfxTexture *s_renderTarget;
 static const float kMenuDotCircle[20][2] = {
     {1.0f, 0.0f}, {0.95106f, 0.30902f}, {0.80902f, 0.58779f}, {0.58779f, 0.80902f},
     {0.30902f, 0.95106f}, {0.0f, 1.0f}, {-0.30902f, 0.95106f}, {-0.58779f, 0.80902f},
@@ -327,7 +331,7 @@ extern "C" void Gfx_PresentStretched(int vsync)
 
 extern "C" void Gfx_Clear(uint32_t flags, uint32_t color, float z)
 {
-    if (!EnsureLocked())
+    if (s_renderTarget != NULL || !EnsureLocked())
         return;
     glClearColor(((color >> 16) & 0xff) / 255.0f, ((color >> 8) & 0xff) / 255.0f,
                  (color & 0xff) / 255.0f, ((color >> 24) & 0xff) / 255.0f);
@@ -400,7 +404,7 @@ extern "C" void Gfx_SetViewport(const GfxViewport *viewport)
     if (viewport == NULL)
         return;
     s_viewport = *viewport;
-    if (s_context != NULL && EnsureLocked())
+    if (s_renderTarget == NULL && s_context != NULL && EnsureLocked())
         ApplyViewport();
 }
 
@@ -419,7 +423,7 @@ extern "C" void Gfx_SetVirtualScreen(int width, int height)
     s_virtualWidth = width;
     s_virtualHeight = height;
     // The stored viewport is in the screen's coordinates; remap it.
-    if (s_context != NULL && EnsureLocked())
+    if (s_renderTarget == NULL && s_context != NULL && EnsureLocked())
         ApplyViewport();
 }
 
@@ -433,7 +437,20 @@ extern "C" void Gfx_PopState(void)
 
 extern "C" void Gfx_SetRenderTarget(GfxTexture *target)
 {
-    (void)target;
+    if (target == s_renderTarget)
+        return;
+    if (target != NULL) {
+        static bool logged;
+        if (!logged) {
+            logged = true;
+            Sys_Log("AMIGA: render targets are not supported; their draws are dropped "
+                    "(no car reflections)");
+        }
+    }
+    s_renderTarget = target;
+    // Back on the back buffer, restore the viewport the game set for it.
+    if (target == NULL && s_context != NULL && EnsureLocked())
+        ApplyViewport();
 }
 
 extern "C" void Gfx_CaptureBackdrop(void)
@@ -674,7 +691,7 @@ extern "C" void Gfx_DrawIndexedPrimitive(int primitive, const GfxVertex *vertice
 
 extern "C" void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount)
 {
-    if (vertices == NULL || vertexCount == 0 || !EnsureLocked())
+    if (vertices == NULL || vertexCount == 0 || s_renderTarget != NULL || !EnsureLocked())
         return;
     GLenum mode;
     switch (primitive) {
@@ -734,7 +751,7 @@ extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *ver
                                            const uint16_t *indices, uint32_t indexCount)
 {
     (void)vertexCount;
-    if (vertices == NULL || indices == NULL || indexCount == 0 || !EnsureLocked())
+    if (vertices == NULL || indices == NULL || indexCount == 0 || s_renderTarget != NULL || !EnsureLocked())
         return;
     GLenum mode = primitive == GFX_TRIANGLESTRIP ? GL_TRIANGLE_STRIP : GL_TRIANGLES;
     glDisable(GL_DEPTH_TEST);
