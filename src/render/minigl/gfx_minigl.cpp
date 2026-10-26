@@ -71,6 +71,7 @@ int s_fullscreen;
 // Windowed mode: the application owns this window and MiniGL renders into it.
 void *s_gameWindow;
 void UploadTexture(GfxTexture *texture);
+void ApplyViewport(void);
 int s_virtualWidth;
 int s_virtualHeight;
 
@@ -237,7 +238,7 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
         s_miniglOpen = 0;
         return 0;
     }
-    glViewport(0, 0, width, height);
+    ApplyViewport();
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     mglUnlockDisplay();
@@ -369,8 +370,17 @@ int ScaleToTarget(uint32_t value, int target, int screen, int low)
     return scaled > target ? target : (int)scaled;
 }
 
+// The game's viewport in back-buffer pixels, GL (bottom-left) origin.
+struct TargetRect {
+    int x, y, width, height;
+};
+TargetRect s_targetViewport;
+
 // Applies s_viewport to GL, scaled from the screen to the back buffer and
-// clamped to it as the host executors do. The caller holds the display lock.
+// clamped to it as the host executors do. As on the host the viewport also
+// clips: the scissor test stays on with the same rectangle, bounding clears
+// and TL draws (which use the whole back buffer as their viewport).
+// The caller holds the display lock.
 void ApplyViewport(void)
 {
     int screenW, screenH;
@@ -382,19 +392,33 @@ void ApplyViewport(void)
     const int x1 = ScaleToTarget(s_viewport.x + s_viewport.width, s_width, screenW, x0);
     const int y1 = ScaleToTarget(s_viewport.y + s_viewport.height, s_height, screenH, y0);
     // D3D's origin is the top-left corner, GL's the bottom-left one.
-    glViewport(x0, s_height - y1, x1 - x0, y1 - y0);
+    s_targetViewport.x = x0;
+    s_targetViewport.y = s_height - y1;
+    s_targetViewport.width = x1 - x0;
+    s_targetViewport.height = y1 - y0;
+    glViewport(s_targetViewport.x, s_targetViewport.y, s_targetViewport.width, s_targetViewport.height);
+    glScissor(s_targetViewport.x, s_targetViewport.y, s_targetViewport.width, s_targetViewport.height);
+    glEnable(GL_SCISSOR_TEST);
 }
 
 // TL vertices are in screen coordinates over the whole screen, like the host
-// executors' fixedtl shader; the GL viewport then maps them to the back
-// buffer. The caller holds the display lock.
-void LoadScreenProjection(void)
+// executors' fixedtl shader, and are clipped (not scaled) by the game's
+// viewport through the scissor test. The caller holds the display lock and
+// calls EndScreenDraw afterwards.
+void BeginScreenDraw(void)
 {
     int screenW, screenH;
     GetScreenSize(&screenW, &screenH);
+    glViewport(0, 0, s_width, s_height);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     glOrtho(0.0, (double)screenW, (double)screenH, 0.0, -1.0, 1.0);
+}
+
+// Restores the game's viewport for the draws that use it.
+void EndScreenDraw(void)
+{
+    glViewport(s_targetViewport.x, s_targetViewport.y, s_targetViewport.width, s_targetViewport.height);
 }
 
 } // namespace
@@ -705,7 +729,7 @@ extern "C" void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, 
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    LoadScreenProjection();
+    BeginScreenDraw();
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     if (s_boundTexture != NULL && (s_boundTexture->flags & GFX_TEXTURE_MENU_DOT) != 0 &&
@@ -734,6 +758,7 @@ extern "C" void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, 
         }
         glEnd();
         glEnable(GL_TEXTURE_2D);
+        EndScreenDraw();
         return;
     }
     glBegin(mode);
@@ -745,6 +770,7 @@ extern "C" void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, 
         glVertex2f(v->sx, v->sy);
     }
     glEnd();
+    EndScreenDraw();
 }
 
 extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount,
@@ -758,7 +784,7 @@ extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *ver
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    LoadScreenProjection();
+    BeginScreenDraw();
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     glBegin(mode);
@@ -770,6 +796,7 @@ extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *ver
         glVertex2f(v->sx, v->sy);
     }
     glEnd();
+    EndScreenDraw();
 }
 
 extern "C" void Gfx_GetPixelFormat(int format, GfxPixelFormat *out)
