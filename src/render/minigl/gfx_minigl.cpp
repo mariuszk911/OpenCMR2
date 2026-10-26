@@ -571,8 +571,14 @@ static void ApplyStageSampler(void);
 
 extern "C" void Gfx_SetTexture(int stage, GfxTexture *texture)
 {
-    if (stage != 0 || !EnsureLocked())
+    if (stage != 0)
         return;
+    // Without the display lock nothing can be uploaded or bound; record that
+    // no texture is bound so the TL path never reads a stale one.
+    if (!EnsureLocked()) {
+        s_boundTexture = NULL;
+        return;
+    }
     GfxTexture *drawn = NULL;
     if (texture != NULL && texture->parent == NULL) {
         drawn = texture->replacement != NULL ? texture->replacement : texture;
