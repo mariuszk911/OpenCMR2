@@ -343,10 +343,24 @@ extern "C" void Gfx_SetViewport(const GfxViewport *viewport)
 {
     if (viewport == NULL)
         return;
+    if (s_context == NULL) {
+        s_viewport = *viewport;
+        return;
+    }
+    if (viewport->x > (uint32_t)s_width || viewport->y > (uint32_t)s_height ||
+        viewport->width > (uint32_t)s_width - viewport->x ||
+        viewport->height > (uint32_t)s_height - viewport->y) {
+        Sys_Log("gfx: viewport %lu,%lu %lux%lu outside %dx%d ignored", (unsigned long)viewport->x,
+                (unsigned long)viewport->y, (unsigned long)viewport->width,
+                (unsigned long)viewport->height, s_width, s_height);
+        return;
+    }
     s_viewport = *viewport;
+    // D3D's origin is the top-left corner, GL's the bottom-left one. The
+    // bounds check above keeps this in range.
+    const int glY = s_height - (int)viewport->y - (int)viewport->height;
     if (EnsureLocked())
-        glViewport((GLint)viewport->x, (GLint)(s_height - viewport->y - viewport->height),
-                   (GLsizei)viewport->width, (GLsizei)viewport->height);
+        glViewport((GLint)viewport->x, (GLint)glY, (GLsizei)viewport->width, (GLsizei)viewport->height);
 }
 
 extern "C" void Gfx_GetViewport(GfxViewport *viewport)
