@@ -304,8 +304,10 @@ void Game_DrawBootCameraAndFPS(CallbackStateMachine *p1, BYTE p2)
         Font_DrawText(0, CFrontend::m_stringDest, 0, 0, g_fpsTextColours, 9);
     }
     Game_DrawSceneViewport(g_splashSceneRoot, g_splashCamera, rect, 0, 1);
-    if (g_bootLoadingDone == 0)
-        Graphics_PresentFrameAndResetCounters();
+    // PORT: AMIGA: the port has no separate frontend present path. Without
+    // this the menu draws into the back buffer, GetFrameDelta stays 0 and the
+    // matrix/flag animation never advances.
+    Graphics_PresentFrameAndResetCounters();
 }
 
 // Shared with the other boot renders of Game.cpp (0x4d0a80, 0x4d1370).

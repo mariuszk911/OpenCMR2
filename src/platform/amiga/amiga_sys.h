@@ -26,6 +26,12 @@ void AmigaSys_Shutdown(void);
    Sys_WaitEvent. The MiniGL executor calls this after creating its context. */
 void AmigaSys_SetWindow(void *window);
 
+/* Windowed mode: opens the visible game window on the Workbench screen with a
+   close gadget and makes it the input window, after reVC. Returns the Window*
+   for mglCreateContextFromWindow, or NULL on failure (the executor then uses
+   the MiniGL screen and its input backdrop). */
+void *AmigaSys_CreateGameWindow(int width, int height, const char *title);
+
 /* Held-key state indexed by DIK_*, 0x80 while the key is down. The renderer
    drains IDCMP through Sys_PollEvent, so the input layer reads the same state
    the event loop maintains. Focus loss clears it. */

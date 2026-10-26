@@ -35,6 +35,11 @@
 struct Device *TimerBase;
 struct IntuitionBase *IntuitionBase;
 
+// The IDCMP classes the input pump understands (see Sys_PollEvent).
+static const ULONG kInputIDCMP = IDCMP_RAWKEY | IDCMP_VANILLAKEY | IDCMP_MOUSEMOVE | IDCMP_MOUSEBUTTONS |
+                                 IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW |
+                                 IDCMP_ACTIVEWINDOW | IDCMP_INACTIVEWINDOW;
+
 namespace {
 
 struct MsgPort *s_timerPort;
@@ -60,6 +65,9 @@ const size_t kNativePathSize = 640;
 bool s_listFull;
 bool s_logWriteFailed;
 struct Window *s_inputWindow;
+struct Window *s_ownedInputWindow;
+struct MsgPort *s_inputPort;
+struct Screen *s_inputScreen;
 unsigned char s_keyState[256];
 
 int EClockNow(uint64_t *value)
@@ -884,9 +892,141 @@ extern "C" void Sys_Sleep(uint32_t ms)
                 (long)s_timerRequest.tr_node.io_Error);
 }
 
+// Releases everything AmigaSys_SetWindow owns and detaches our port from a
+// window we did not create. One teardown path for window changes and exit.
+static void CloseInputState(void)
+{
+    if (s_ownedInputWindow != NULL) {
+        CloseWindow(s_ownedInputWindow);
+        s_ownedInputWindow = NULL;
+        s_inputWindow = NULL;
+    }
+    if (s_inputScreen != NULL) {
+        UnlockPubScreen(NULL, s_inputScreen);
+        s_inputScreen = NULL;
+    }
+    if (s_inputPort != NULL) {
+        if (s_inputWindow != NULL && s_inputWindow->UserPort == s_inputPort) {
+            ModifyIDCMP(s_inputWindow, 0);
+            s_inputWindow->UserPort = NULL;
+        }
+        DeleteMsgPort(s_inputPort);
+        s_inputPort = NULL;
+    }
+    s_inputWindow = NULL;
+}
+
+// Windowed mode, after reVC: the application owns the visible window, so the
+// same window carries the close gadget, receives focus and owns the IDCMP port
+// the game polls. MiniGL renders into it with mglCreateContextFromWindow; the
+// render size is the window's inner area.
+extern "C" void *AmigaSys_CreateGameWindow(int width, int height, const char *title)
+{
+    struct Screen *screen;
+    struct Window *window;
+    int left;
+    int top;
+
+    if (width <= 0 || height <= 0 || !EnsureIntuition())
+        return NULL;
+    CloseInputState();
+    screen = LockPubScreen(NULL);
+    if (screen == NULL) {
+        Sys_Log("input: LockPubScreen failed");
+        return NULL;
+    }
+    left = ((int)screen->Width - width) / 2;
+    top = ((int)screen->Height - height) / 2;
+    if (left < 0)
+        left = 0;
+    if (top < 0)
+        top = 0;
+    {
+        struct TagItem windowTags[] = {
+            { WA_PubScreen, (ULONG)screen },
+            { WA_Left, (ULONG)left },
+            { WA_Top, (ULONG)top },
+            { WA_InnerWidth, (ULONG)width },
+            { WA_InnerHeight, (ULONG)height },
+            { WA_AutoAdjust, TRUE },
+            { WA_Title, (ULONG)(title != NULL ? title : "OpenCMR2") },
+            { WA_DragBar, TRUE },
+            { WA_DepthGadget, TRUE },
+            { WA_CloseGadget, TRUE },
+            { WA_Activate, TRUE },
+            { WA_ReportMouse, TRUE },
+            { WA_IDCMP, kInputIDCMP },
+            { WA_Flags, WFLG_ACTIVATE | WFLG_REPORTMOUSE | WFLG_RMBTRAP },
+            { TAG_DONE, 0 }
+        };
+        window = OpenWindowTagList(NULL, windowTags);
+    }
+    if (window == NULL) {
+        Sys_Log("input: OpenWindowTagList failed");
+        UnlockPubScreen(NULL, screen);
+        return NULL;
+    }
+    s_ownedInputWindow = window;
+    s_inputScreen = screen;
+    s_inputWindow = window;
+    WindowToFront(window);
+    ActivateWindow(window);
+    Sys_Log("input: game window %lx client %dx%d at %d,%d",
+            (unsigned long)window,
+            (int)(window->Width - window->BorderLeft - window->BorderRight),
+            (int)(window->Height - window->BorderTop - window->BorderBottom),
+            (int)window->LeftEdge, (int)window->TopEdge);
+    return window;
+}
+
 extern "C" void AmigaSys_SetWindow(void *window)
 {
-    s_inputWindow = (struct Window *)window;
+    struct Window *base = (struct Window *)window;
+
+    CloseInputState();
+    if (base != NULL && base->UserPort != NULL) {
+        // PORT: AMIGA: a window that already owns an IDCMP port is the one the
+        // events arrive on (windowed MiniGL, test harnesses). Adopt it rather
+        // than replacing its port. Only touch IDCMP on a real Intuition
+        // window; the test harness passes a bare fake Window.
+        if (base->WScreen != NULL)
+            ModifyIDCMP(base, base->IDCMPFlags | kInputIDCMP);
+        s_inputWindow = base;
+        return;
+    }
+    // PORT: AMIGA: follow the working reVC input path. MiniGL's fullscreen
+    // backdrop has no UserPort here, so open our own borderless, activated
+    // IDCMP window on the same screen instead of borrowing the render window.
+    if (base != NULL && base->WScreen != NULL) {
+        struct TagItem tags[] = {
+            { WA_CustomScreen, (ULONG)base->WScreen },
+            { WA_Left, 0 },
+            { WA_Top, 0 },
+            { WA_Width, 1 },
+            { WA_Height, 1 },
+            { WA_Flags, WFLG_ACTIVATE | WFLG_BORDERLESS | WFLG_BACKDROP | WFLG_REPORTMOUSE },
+            { WA_IDCMP, kInputIDCMP },
+            { WA_ReportMouse, TRUE },
+            { TAG_DONE, 0 }
+        };
+        s_ownedInputWindow = OpenWindowTagList(NULL, tags);
+        if (s_ownedInputWindow != NULL) {
+            s_inputWindow = s_ownedInputWindow;
+            WindowToFront(s_ownedInputWindow);
+            ActivateWindow(s_ownedInputWindow);
+        }
+    }
+    // Fallback: put a port on MiniGL's window if opening our own failed.
+    if (s_inputWindow == NULL && base != NULL && base->UserPort == NULL) {
+        s_inputPort = CreateMsgPort();
+        if (s_inputPort != NULL) {
+            base->UserPort = s_inputPort;
+            ModifyIDCMP(base, kInputIDCMP);
+            s_inputWindow = base;
+            WindowToFront(base);
+            ActivateWindow(base);
+        }
+    }
 }
 
 // Consumes every queued IDCMP message, keeping the polled input state current.
@@ -907,6 +1047,7 @@ static int PollEvent(SysEvent *event, int *consumed)
         if (consumed != NULL)
             *consumed = 1;
         if (messageClass == IDCMP_CLOSEWINDOW) {
+            Sys_Log("input: close window");
             event->type = SYS_EVENT_QUIT;
             event->key = 0;
             event->character = 0;
@@ -914,6 +1055,7 @@ static int PollEvent(SysEvent *event, int *consumed)
             handled = 1;
         } else if (messageClass == IDCMP_ACTIVEWINDOW) {
             // Releases may have been delivered while inactive; start clean.
+            Sys_Log("input: active window");
             memset(s_keyState, 0, sizeof(s_keyState));
             event->type = SYS_EVENT_FOCUS_GAINED;
             event->key = 0;
@@ -921,15 +1063,23 @@ static int PollEvent(SysEvent *event, int *consumed)
             event->repeat = 0;
             handled = 1;
         } else if (messageClass == IDCMP_INACTIVEWINDOW) {
+            Sys_Log("input: inactive window");
             memset(s_keyState, 0, sizeof(s_keyState));
             event->type = SYS_EVENT_FOCUS_LOST;
             event->key = 0;
             event->character = 0;
             event->repeat = 0;
             handled = 1;
+        } else if (messageClass == IDCMP_REFRESHWINDOW) {
+            BeginRefresh(s_inputWindow);
+            EndRefresh(s_inputWindow, TRUE);
         } else if (messageClass == IDCMP_RAWKEY) {
             // Releases are not events: the game polls the held-key state.
             const int dik = AmigaKey_UpdateState(s_keyState, message->Code);
+            if (dik != 0 && (message->Qualifier & IEQUALIFIER_REPEAT) == 0)
+                Sys_Log("input: rawkey %02lx %s dik %d",
+                        (unsigned long)(message->Code & 0x7f),
+                        (message->Code & 0x80) != 0 ? "up" : "down", dik);
             if (dik != 0 && (message->Code & 0x80) == 0) {
                 event->type = SYS_EVENT_KEY_DOWN;
                 event->key = dik;
@@ -983,7 +1133,10 @@ extern "C" int Sys_WaitEvent(SysEvent *event)
     // frame run, otherwise holding a key cannot be observed by the game.
     if (consumed)
         return 0;
-    WaitPort(s_inputWindow->UserPort);
+    // PORT: AMIGA: WaitPort blocks the only render loop while the window is
+    // active, which freezes the frontend matrix/animations. Poll and sleep one
+    // frame instead; input latency stays under one frame.
+    Sys_Sleep(16);
     return Sys_PollEvent(event);
 }
 
@@ -1129,6 +1282,7 @@ extern "C" void Sys_Fatal(const char *format, ...)
 extern "C" void AmigaSys_Shutdown(void)
 {
     CloseTime();
+    CloseInputState();
     if (IntuitionBase != NULL) {
         CloseLibrary((struct Library *)IntuitionBase);
         IntuitionBase = NULL;

@@ -126,37 +126,32 @@ void Sprite_DrawLayer(int layer)
         if (pSprite->pTexture == NULL)
             continue;
         w = (float)(unsigned int)pSprite->pTexture->width;
-        u0 = X87S_DIV((float)pSprite->src.x, w);
-        u1 = X87S_DIV(X87S_FILD(float, (pSprite->src.x + pSprite->src.w)), w);
         h = (float)(unsigned int)pSprite->pTexture->height;
-        v0 = X87S_DIV((float)pSprite->src.y, h);
-        v1 = X87S_DIV(X87S_FILD(float, (pSprite->src.y + pSprite->src.h)), h);
-        if (CGraphics::GetSelectedDisplayDriverIndex() == 0) {
-            // PORT: half a pixel of the screen, to read texel centres; that
-            // is half a texel only when the sprite keeps its size.
-            if (pSprite->dst.w != pSprite->src.w && pSprite->dst.w != 0) {
-                u0 += X87S_DIV(X87S_MUL(0.5f / w, X87S_LOAD(pSprite->src.w)), X87S_LOAD(pSprite->dst.w));
-                u1 += X87S_DIV(X87S_MUL(0.5f / w, X87S_LOAD(pSprite->src.w)), X87S_LOAD(pSprite->dst.w));
-            } else {
-                u0 += 0.5f / w;
-                u1 += 0.5f / w;
-            }
-            if (pSprite->dst.h != pSprite->src.h && pSprite->dst.h != 0) {
-                v0 += X87S_DIV(X87S_MUL(0.5f / h, X87S_LOAD(pSprite->src.h)), X87S_LOAD(pSprite->dst.h));
-                v1 += X87S_DIV(X87S_MUL(0.5f / h, X87S_LOAD(pSprite->src.h)), X87S_LOAD(pSprite->dst.h));
-            } else {
-                v0 += 0.5f / h;
-                v1 += 0.5f / h;
-            }
+        inset = Gfx_GetSpriteTexelInset(pSprite->pTexture->pSurface);
+        // PORT: AMIGA: sample half a texel inside both UV edges so a sprite
+        // (a font glyph or a menu dot) never reads the neighbouring cell of
+        // its atlas, at every size. The inset is applied to the UVs only and
+        // the destination keeps its full size; this replaces the old
+        // half-screen-pixel adjustment, which the original applied only at
+        // native scale and then discarded when the sprite was enlarged.
+        if (pSprite->src.w > 0) {
+            u0 = X87S_DIV(X87S_ADD(X87S_LOAD(pSprite->src.x), inset), w);
+            u1 = X87S_DIV(X87S_SUB(X87S_LOAD(pSprite->src.x + pSprite->src.w), inset), w);
+        } else {
+            u0 = X87S_DIV((float)pSprite->src.x, w);
+            u1 = u0;
+        }
+        if (pSprite->src.h > 0) {
+            v0 = X87S_DIV(X87S_ADD(X87S_LOAD(pSprite->src.y), inset), h);
+            v1 = X87S_DIV(X87S_SUB(X87S_LOAD(pSprite->src.y + pSprite->src.h), inset), h);
+        } else {
+            v0 = X87S_DIV((float)pSprite->src.y, h);
+            v1 = v0;
         }
         // PORT: filtered smoothly, a sprite scaled up on the back buffer reads
         // its border texels from their centres, half a texel inside its quad,
         // so the filter does not reach into the next sprite of the texture
-        // (the next letter of a font); the scale stays the same. Pixel centres
-        // are on integer coordinates: the quad starts half a pixel before the
-        // centre of its first texel. Text drawn from a distance field is cut
-        // by half a texel of its field only: its glyphs reach their cells'
-        // edges.
+        // (the next letter of a font); the scale stays the same.
         x0 = pSprite->dst.x;
         x1 = pSprite->dst.x + pSprite->dst.w;
         y0 = pSprite->dst.y;
@@ -166,19 +161,6 @@ void Sprite_DrawLayer(int layer)
         x1 += pSprite->subpixel[0] / 256.0f;
         y0 += pSprite->subpixel[1] / 256.0f;
         y1 += pSprite->subpixel[1] / 256.0f;
-        inset = Gfx_GetSpriteTexelInset(pSprite->pTexture->pSurface);
-        if (pSprite->src.w > 0 && X87S_MUL(X87S_LOAD(pSprite->dst.w), g_spriteScreenScale) > pSprite->src.w) {
-            u0 = X87S_DIV((X87S_ADD(X87S_LOAD(pSprite->src.x), inset)), w);
-            u1 = X87S_DIV((X87S_SUB(X87S_LOAD(pSprite->src.x + pSprite->src.w), inset)), w);
-            x0 += X87S_SUB(X87S_DIV(X87S_MUL(inset, X87S_LOAD(pSprite->dst.w)), X87S_LOAD(pSprite->src.w)), 0.5f);
-            x1 -= X87S_ADD(X87S_DIV(X87S_MUL(inset, X87S_LOAD(pSprite->dst.w)), X87S_LOAD(pSprite->src.w)), 0.5f);
-        }
-        if (pSprite->src.h > 0 && X87S_MUL(X87S_LOAD(pSprite->dst.h), g_spriteScreenScale) > pSprite->src.h) {
-            v0 = X87S_DIV((X87S_ADD(X87S_LOAD(pSprite->src.y), inset)), h);
-            v1 = X87S_DIV((X87S_SUB(X87S_LOAD(pSprite->src.y + pSprite->src.h), inset)), h);
-            y0 += X87S_SUB(X87S_DIV(X87S_MUL(inset, X87S_LOAD(pSprite->dst.h)), X87S_LOAD(pSprite->src.h)), 0.5f);
-            y1 -= X87S_ADD(X87S_DIV(X87S_MUL(inset, X87S_LOAD(pSprite->dst.h)), X87S_LOAD(pSprite->src.h)), 0.5f);
-        }
         if (pSprite->param & 5) {
             t = u0;
             u0 = u1;

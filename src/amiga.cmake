@@ -41,6 +41,7 @@ add_library(cmr2_game OBJECT
     ${GAME_SOURCES}
     diagnostics/observer.cpp
     port/disk.cpp
+    port/font_pcf.cpp
     port/replay_disk.cpp)
 # M0 does not link the game yet, so keep it out of the default `all` target.
 # M1 removes this once the platform services exist and the executable links it.
@@ -57,6 +58,7 @@ set_source_files_properties(${GAME_QIFIST_UNITS} TARGET_DIRECTORY cmr2_game
 # runtime behaviour the game calls.
 add_library(opencmr2_platform OBJECT
     platform/msvcrt.cpp
+    platform/amiga/amiga_libfix.c
     platform/amiga/amiga_sys.cpp
     platform/amiga/amiga_platform.cpp
     render/minigl/gfx_minigl.cpp
@@ -67,6 +69,9 @@ add_library(opencmr2_platform OBJECT
 target_include_directories(opencmr2_platform PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
 target_include_directories(opencmr2_platform PRIVATE ${MINIGL_INCLUDE_DIR})
+# The float libm overrides must not be folded back into *f calls by GCC, and
+# __builtin_sqrt must expand to fsqrt instead of a fallback call to sqrt.
+set_source_files_properties(platform/amiga/amiga_libfix.c PROPERTIES COMPILE_FLAGS "-fno-builtin -fno-math-errno")
 
 # ---- M1 stubs (Domain B) ---------------------------------------------------
 # Compiled by the default build so the target compiler checks them now, but
@@ -101,7 +106,7 @@ opencmr2_amiga_stack(opencmr2)
 target_compile_definitions(opencmr2 PRIVATE OPENCMR2_AMIGA_STACK=${OPENCMR2_AMIGA_STACK})
 target_link_libraries(opencmr2 PRIVATE opencmr2_domain_a opencmr2_platform)
 target_link_directories(opencmr2 PRIVATE ${MINIGL_LIBRARY_DIR})
-target_link_libraries(opencmr2 PRIVATE minigl)
+target_link_libraries(opencmr2 PRIVATE minigl m)
 
 # ---- M0.9 startup smoke harness (Domain B) --------------------------------
 # Standalone: MiniGL 29.1, timer.device and AHI, no game or port-layer code.

@@ -12,6 +12,7 @@
 #include "Sprite.h"
 #include "FixedPoint.h"
 #include "Texture.h"
+#include "port/colour.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -680,6 +681,8 @@ void FrontendDraw_AnimatedMatrixBackground(short x0, short y0, char *pMap)
     colour[3] = 0xff;
     centre2[0] = g_pGraphics->resX;
     centre2[1] = 0;
+    // PORT: the frontend render now presents every frame (see Game.cpp), so
+    // CMain::UpdateFrameTime keeps the original 10 ms frame delta advancing.
     g_matrixPhase1 = (short)(((CMain::GetFrameDelta() + 1) * -0x6000) / 360);
     g_matrixPhase2 = (short)(((CMain::GetFrameDelta() + 1) * -0x3000) / 360);
     // PORT: retain the original matrix, palette and per-dot ripple exactly;
@@ -700,7 +703,8 @@ void FrontendDraw_AnimatedMatrixBackground(short x0, short y0, char *pMap)
             wave = (Frontend_ComputeRippleHeight(centre2, u, v, g_matrixPhase2, 0x140000) + wave1) / 2;
             g_frontendDrawRect[0] -= FixMulShift32(0x30000, wave);
             g_frontendDrawRect[1] -= (FixMul(0x30000, wave) >> 16);
-            *(unsigned int *)colour = g_matrixColours[*pCell];
+            // PORT: AMIGA: the packed colour supplies the BGRA bytes.
+            Gfx_UnpackArgbToBgra(g_matrixColours[*pCell], colour);
             brightness = wave / 4 + 0xc000;
             colour[0] = FixMulShift32((int)FTOI(__int64, X87S_MUL(colour[0], CGraphics::m_65536)), brightness);
             colour[1] = FixMulShift32((int)FTOI(__int64, X87S_MUL(colour[1], CGraphics::m_65536)), brightness);

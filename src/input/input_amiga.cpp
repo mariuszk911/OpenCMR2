@@ -4,6 +4,7 @@
 // polling interface the game was written against. Mouse and joystick polling
 // land with their devices.
 #include "port/input.h"
+#include "port/sys.h"
 #include "platform/amiga/amiga_sys.h"
 
 #include <string.h>
@@ -110,9 +111,22 @@ extern "C" void Input_SetMouseExclusive(InputDevice *device, int exclusive)
 
 extern "C" int Input_ReadKeyboard(InputDevice *device, BYTE keys[256])
 {
+    static int s_lastDown = -1;
+    int down = 0;
+    int i;
+
     if (device == NULL || keys == NULL || device->kind != 1)
         return 0;
     AmigaSys_GetKeyState(keys);
+    for (i = 0; i < 256; i++) {
+        if ((keys[i] & 0x80) != 0)
+            down++;
+    }
+    /* One line per press/release transition, not per frame. */
+    if (down != s_lastDown) {
+        Sys_Log("input: keyboard poll %d key(s) down", down);
+        s_lastDown = down;
+    }
     return 1;
 }
 

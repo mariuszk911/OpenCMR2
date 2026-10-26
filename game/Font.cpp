@@ -7,6 +7,7 @@
 #include "Graphics.h"
 #include "InstallInfo.h"
 #include "Sprite.h"
+#include "port/font_pcf.h"
 #include "port/outline_font.h"
 
 FontSlot *g_fonts;
@@ -56,72 +57,52 @@ BYTE Font_ReleaseAll(void)
 // FUNCTION: CMR2 0x0040b2f0
 void Font_Release(BYTE index)
 {
-    // PORT: the glyph table is native storage, see Font_Setup.
-    if (g_fonts[index & 0xff].pGlyphs != NULL)
-        CFileBuffer::FreeGenericFileBuffer(g_fonts[index & 0xff].pGlyphs);
-    if (g_fonts[index & 0xff].ownsData != 0) {
-        CFileBuffer::FreeGenericFileBuffer(g_fonts[index & 0xff].pData);
-        g_fonts[index & 0xff].pData = NULL;
-        g_fonts[index & 0xff].pGlyphs = NULL;
-        return;
+    FontSlot *font = &g_fonts[index & 0xff];
+
+    // PORT: AMIGA: the native .pcf tables are owned by the port parser.
+    FontPcf_Release(font, index & 0xff);
+    font->loaded = 0;
+    if (font->ownsData != 0) {
+        CFileBuffer::FreeGenericFileBuffer(font->pData);
+        font->pData = NULL;
     }
-    g_fonts[index & 0xff].pGlyphs = NULL;
 }
 
-// Binds a loaded .pcf buffer and its texture to a font slot and relocates
-// the kerning pointers of every glyph.
+// Binds a loaded .pcf buffer and its texture to a font slot.
 // FUNCTION: CMR2 0x0040b350
-void Font_Setup(void *pData, Texture *pTexture, unsigned int index, char bInArchive)
+void Font_Setup(void *pData, Texture *pTexture, unsigned int index, char bInArchive, DWORD dataSize)
 {
+    FontSlot *font;
     unsigned int i;
-    char *p;
 
-    if (index < g_fontCount && pData != NULL && pTexture != NULL) {
-        g_fonts[index].pData = pData;
-        g_fonts[index].pTexture = pTexture;
-        g_fonts[index].pHeader = (FontHeader *)g_fonts[index].pData;
-        g_fonts[index].ownsData = bInArchive == 0;
-        if (g_fonts[index].pHeader->glyphCount >= 1) {
-            p = (char *)g_fonts[index].pData + sizeof(FontHeader);
-            g_fonts[index].pCharMap = (short *)p;
-            p += 256 * sizeof(short);
-            // PORT: the original relocates the file's glyph table in place
-            // (pKern += pData). FontGlyph holds a pointer, so its table is
-            // built in native storage from the file's records instead, on
-            // every target; the file buffer stays as loaded.
-            {
-                FontGlyphFile *pFile = (FontGlyphFile *)p;
-                unsigned int count = g_fonts[index].pHeader->glyphCount;
-                FontGlyph *pGlyphs = (FontGlyph *)CFileBuffer::AllocateLockedBuffer(count * sizeof(FontGlyph));
-                if (pGlyphs == NULL)
-                    return;
-                for (i = 0; i < count; i++) {
-                    memset(&pGlyphs[i], 0, sizeof(FontGlyph));
-                    memcpy(&pGlyphs[i], pFile[i].header, sizeof(pFile[i].header));
-                    pGlyphs[i].pKern = (FontKernPair *)((char *)g_fonts[index].pData + pFile[i].kernOffset);
-                }
-                g_fonts[index].pGlyphs = pGlyphs;
-            }
-            g_fonts[index].loaded = 1;
-            // PORT: drawn from a distance field, sharp at any scale.
-            {
-                OutlineFontGlyph cells[256];
-                int count = 0;
-                for (i = 0; i < 256; i++) {
-                    short glyph = g_fonts[index].pCharMap[i];
-                    if (glyph < 0 || (unsigned int)glyph >= g_fonts[index].pHeader->glyphCount)
-                        continue;
-                    FontGlyph *pGlyph = &g_fonts[index].pGlyphs[glyph];
-                    cells[count].code = (BYTE)i;
-                    cells[count].x = ((short *)pGlyph->field_0x0)[0];
-                    cells[count].y = ((short *)pGlyph->field_0x0)[1];
-                    cells[count].width = pGlyph->width;
-                    cells[count].height = pGlyph->height;
-                    count++;
-                }
-                OutlineFont_Replace(pTexture->name, pTexture->pSurface, cells, count);
-            }
+    if (index >= g_fontCount || pData == NULL || pTexture == NULL)
+        return;
+    font = &g_fonts[index];
+    font->pData = pData;
+    font->pTexture = pTexture;
+    font->ownsData = bInArchive == 0;
+    // PORT: AMIGA: the .pcf tables are little-endian and may sit in the
+    // read-only archive, so the fork-owned parser builds native copies.
+    if (!FontPcf_Setup(font, index, pData, dataSize))
+        return;
+    font->loaded = 1;
+    // PORT: drawn from a distance field, sharp at any scale.
+    {
+        OutlineFontGlyph cells[256];
+        int cellCount = 0;
+        for (i = 0; i < 256; i++) {
+            short glyph = font->pCharMap[i];
+            if (glyph < 0)
+                continue;
+            FontGlyph *pGlyph = &font->pGlyphs[glyph];
+            cells[cellCount].code = (BYTE)i;
+            cells[cellCount].x = ((short *)pGlyph->field_0x0)[0];
+            cells[cellCount].y = ((short *)pGlyph->field_0x0)[1];
+            cells[cellCount].width = pGlyph->width;
+            cells[cellCount].height = pGlyph->height;
+            cellCount++;
         }
+        OutlineFont_Replace(pTexture->name, pTexture->pSurface, cells, cellCount);
     }
 }
 
@@ -140,7 +121,7 @@ void Font_Load(char *name, GenericFile *pFile, unsigned int index)
             sprintf(path + strlen(path) - 4, g_fontPcfExtension);
             pData = CGenericFileLoader::FindFile(pFile, path, &bInArchive, NULL, 0);
             if (pData != NULL)
-                Font_Setup(pData, pTexture, index, bInArchive);
+                Font_Setup(pData, pTexture, index, bInArchive, FontPcf_ArchiveExtent(pFile, pData, bInArchive));
         }
     }
 }
@@ -160,7 +141,7 @@ void Font_Reload(char *name, GenericFile *pFile, unsigned int index)
         sprintf(path, g_fontPcfFormat, CInstallInfo::GetFontsDir(), name);
         pData = CGenericFileLoader::FindFile(pFile, path, &bInArchive, NULL, 0);
         if (pData != NULL)
-            Font_Setup(pData, pTexture, index, bInArchive);
+            Font_Setup(pData, pTexture, index, bInArchive, FontPcf_ArchiveExtent(pFile, pData, bInArchive));
     }
 }
 
@@ -288,9 +269,16 @@ void Font_DrawChar(BYTE ch, short x, short y)
     FontGlyph *pGlyph;
     Texture *pTexture;
     int centre[3];
+    short glyph;
 
     pFont = g_pCurrentFont;
-    pGlyph = &pFont->pGlyphs[pFont->pCharMap[ch & 0xff]];
+    // PORT: AMIGA: a font that failed to load has no glyph table.
+    if (pFont == NULL || pFont->loaded == 0 || pFont->pGlyphs == NULL)
+        return;
+    glyph = pFont->pCharMap[ch & 0xff];
+    if (glyph < 0)
+        return;
+    pGlyph = &pFont->pGlyphs[glyph];
     pTexture = pFont->pTexture;
     centre[0] = 0;
     centre[1] = 0;

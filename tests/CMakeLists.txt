@@ -204,6 +204,12 @@ add_executable(vector_sprites_test vector_sprites.cpp)
 target_link_libraries(vector_sprites_test PRIVATE opencmr2_platform)
 add_test(NAME vector_sprites COMMAND vector_sprites_test)
 
+# The fork-owned .pcf parser (src/port/font_pcf.cpp): little-endian tables,
+# bounds checks and char-map sanitisation.
+add_executable(font_pcf_test font_pcf.cpp)
+target_link_libraries(font_pcf_test PRIVATE opencmr2_platform)
+add_test(NAME font_pcf COMMAND font_pcf_test)
+
 add_executable(saved_game_test saved_game.cpp)
 target_link_libraries(saved_game_test PRIVATE opencmr2_platform)
 add_test(NAME saved_game COMMAND saved_game_test)

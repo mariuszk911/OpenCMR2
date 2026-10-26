@@ -5959,20 +5959,26 @@ Texture *CGraphics::CreateTextureFromImageData(char *name, void *pData, unsigned
     // the call is a no-op (kept so the code matches the original).
     if (CGraphics::m_textureCount == 0)
         memset(m_pTextureManager->textureBuffer, 0x98000, 0);
-    if (*(DWORD *)pData == 0x20534444)
+    // PORT: AMIGA: compare the four bytes. Reading a DWORD here is little-
+    // endian only and made every archive DDS go to the TGA loader.
+    if (memcmp(pData, "DDS ", 4) == 0)
         isDDS = TRUE;
     for (i = 0; i < 0x800; i++) {
         if (m_pTextureManager->textureBuffer[i] == NULL) {
             m_pTextureManager->textureBuffer[i] = (Texture *)CFileBuffer::AllocateLockedBuffer(sizeof(Texture));
             pTexture = m_pTextureManager->textureBuffer[i];
-            pTexture->textureId = i;
-            Frontend_SetObjectField118(pTexture, 0);
+            // PORT: AMIGA: check before writing through the pointer; the
+            // original dereferenced it first.
             if (pTexture == NULL)
                 return NULL;
+            pTexture->textureId = i;
+            Frontend_SetObjectField118(pTexture, 0);
             m_textureCount++;
             break;
         }
     }
+    if (pTexture == NULL)
+        return NULL;
     if (isDDS)
         strncpy(name + strlen(name) - 4, m_ddsExtension, 4);
     sprintf(pTexture->name, name);
@@ -6625,7 +6631,8 @@ void Graphics_ReloadTexture(Texture *pTexture)
                 sprintf(CFrontend::m_stringDest, g_strTextureNotFound, p->name);
                 return;
             }
-            if (*pData == 0x20534444)
+            // PORT: AMIGA: byte compare; the raw DWORD read is big-endian.
+            if (memcmp(pData, "DDS ", 4) == 0)
                 CGraphics::LoadDDSTexture((DDSFile *)pData, p);
             else
                 CGraphics::LoadTGATexture((BYTE *)pData, p);

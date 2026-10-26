@@ -13,6 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
+
 #include <new>
 
 #include <exec/types.h>
@@ -42,10 +46,21 @@ struct GfxVertexBuffer {
 namespace {
 
 void *s_context;
+int s_stageAddress = GFX_ADDRESS_WRAP;
+GfxTexture *s_boundTexture;
+static const float kMenuDotCircle[20][2] = {
+    {1.0f, 0.0f}, {0.95106f, 0.30902f}, {0.80902f, 0.58779f}, {0.58779f, 0.80902f},
+    {0.30902f, 0.95106f}, {0.0f, 1.0f}, {-0.30902f, 0.95106f}, {-0.58779f, 0.80902f},
+    {-0.80902f, 0.58779f}, {-0.95106f, 0.30902f}, {-1.0f, 0.0f}, {-0.95106f, -0.30902f},
+    {-0.80902f, -0.58779f}, {-0.58779f, -0.80902f}, {-0.30902f, -0.95106f}, {0.0f, -1.0f},
+    {0.30902f, -0.95106f}, {0.58779f, -0.80902f}, {0.80902f, -0.58779f}, {0.95106f, -0.30902f},
+};
 int s_width = 640;
 int s_height = 480;
 int s_locked;
 int s_fullscreen;
+// Windowed mode: the application owns this window and MiniGL renders into it.
+void *s_gameWindow;
 void UploadTexture(GfxTexture *texture);
 int s_virtualWidth;
 int s_virtualHeight;
@@ -158,13 +173,41 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
         Sys_Log("gfx: MiniGLOpen failed");
         return 0;
     }
-    s_context = mglCreateContext(0, 0, width, height);
-    if (s_context == NULL) {
-        Sys_Log("gfx: mglCreateContext %dx%d failed", width, height);
-        MiniGLClose();
-        return 0;
+    // PORT: AMIGA: windowed mode follows reVC. The application owns the
+    // visible window (close gadget, focus, IDCMP port) and MiniGL renders into
+    // its inner area with mglCreateContextFromWindow.
+    s_gameWindow = NULL;
+    if (!fullscreen) {
+        s_gameWindow = AmigaSys_CreateGameWindow(width, height, "OpenCMR2");
+        if (s_gameWindow != NULL) {
+            s_context = mglCreateContextFromWindow((struct Window *)s_gameWindow);
+            if (s_context == NULL) {
+                Sys_Log("gfx: mglCreateContextFromWindow failed, using the MiniGL screen");
+                AmigaSys_SetWindow(NULL);
+                s_gameWindow = NULL;
+            }
+        }
     }
-    Sys_Log("gfx: MiniGL %dx%d context ready", width, height);
+    if (s_context == NULL) {
+        s_context = mglCreateContext(0, 0, width, height);
+        if (s_context == NULL) {
+            Sys_Log("gfx: mglCreateContext %dx%d failed", width, height);
+            if (s_gameWindow != NULL) {
+                AmigaSys_SetWindow(NULL);
+                s_gameWindow = NULL;
+            }
+            MiniGLClose();
+            return 0;
+        }
+        // Fullscreen: v3dWindow is NULL and inputWindow is MiniGL's borderless
+        // backdrop; it has no UserPort, so AmigaSys_SetWindow owns a 1x1 window.
+        void *inputWindow = mglGetInputWindowHandle();
+        AmigaSys_SetWindow(inputWindow);
+        Sys_Log("gfx: MiniGL %dx%d context ready (screen), input window %lx",
+                width, height, (unsigned long)inputWindow);
+    } else {
+        Sys_Log("gfx: MiniGL %dx%d context ready (window)", width, height);
+    }
     s_width = width;
     s_height = height;
     s_fullscreen = fullscreen != 0;
@@ -175,6 +218,10 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
     if (!EnsureLocked()) {
         mglDeleteContext();
         s_context = NULL;
+        if (s_gameWindow != NULL) {
+            AmigaSys_SetWindow(NULL);
+            s_gameWindow = NULL;
+        }
         MiniGLClose();
         return 0;
     }
@@ -183,7 +230,6 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     mglUnlockDisplay();
     s_locked = 0;
-    AmigaSys_SetWindow(mglGetWindowHandle());
     return 1;
 }
 
@@ -201,11 +247,21 @@ extern "C" void Gfx_Shutdown(void)
             mglUnlockDisplay();
             s_locked = 0;
         }
+        if (s_gameWindow == NULL) {
+            // Fullscreen: our port lives on MiniGL's input backdrop, which
+            // goes away with the context. Detach it before deleting.
+            AmigaSys_SetWindow(NULL);
+        }
         mglDeleteContext();
         s_context = NULL;
-        MiniGLClose();
     }
-    AmigaSys_SetWindow(NULL);
+    if (s_gameWindow != NULL) {
+        // The adopted window outlives the context; close it before MiniGLClose
+        // (proto/intuition.h stubs need the library's IntuitionBase).
+        AmigaSys_SetWindow(NULL);
+        s_gameWindow = NULL;
+    }
+    MiniGLClose();
 }
 
 extern "C" int Gfx_GetDisplayModeCount(void)
@@ -401,20 +457,29 @@ extern "C" void Gfx_SetAlphaFunc(int compare) { (void)compare; }
 extern "C" void Gfx_SetAlphaRef(uint32_t reference) { (void)reference; }
 extern "C" void Gfx_SetTextureFactor(uint32_t color) { s_textureFactor = color; }
 
+static GLint StageWrapMode(void);
+
 extern "C" void Gfx_SetTexture(int stage, GfxTexture *texture)
 {
     if (stage != 0)
         return;
     if (texture == NULL || texture->parent != NULL) {
+        s_boundTexture = NULL;
         glDisable(GL_TEXTURE_2D);
         return;
     }
-    if (texture->dirty)
-        UploadTexture(texture);
-    if (texture->glId != 0) {
+    GfxTexture *drawn = texture->replacement != NULL ? texture->replacement : texture;
+    if (drawn->dirty)
+        UploadTexture(drawn);
+    if (drawn->glId != 0) {
+        const GLint wrap = StageWrapMode();
         glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, texture->glId);
+        glBindTexture(GL_TEXTURE_2D, drawn->glId);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+        s_boundTexture = drawn;
     } else {
+        s_boundTexture = NULL;
         glDisable(GL_TEXTURE_2D);
     }
 }
@@ -425,7 +490,26 @@ extern "C" void Gfx_SetStageColorArg2(int stage, int arg) { (void)stage; (void)a
 extern "C" void Gfx_SetStageAlphaOp(int stage, int op) { (void)stage; (void)op; }
 extern "C" void Gfx_SetStageAlphaArg1(int stage, int arg) { (void)stage; (void)arg; }
 extern "C" void Gfx_SetStageAlphaArg2(int stage, int arg) { (void)stage; (void)arg; }
-extern "C" void Gfx_SetStageAddress(int stage, int address) { (void)stage; (void)address; }
+static GLint StageWrapMode(void)
+{
+    switch (s_stageAddress) {
+    case GFX_ADDRESS_CLAMP: return GL_CLAMP_TO_EDGE;
+    case GFX_ADDRESS_MIRROR: return GL_REPEAT;
+    default: return GL_REPEAT;
+    }
+}
+
+extern "C" void Gfx_SetStageAddress(int stage, int address)
+{
+    if (stage != 0)
+        return;
+    s_stageAddress = address;
+    if (EnsureLocked()) {
+        const GLint wrap = StageWrapMode();
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+    }
+}
 extern "C" void Gfx_SetStageMinFilter(int stage, int filter)
 {
     if (stage == 0 && EnsureLocked())
@@ -519,6 +603,34 @@ extern "C" void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, 
     glOrtho(0.0, (double)s_width, (double)s_height, 0.0, -1.0, 1.0);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
+    if (s_boundTexture != NULL && (s_boundTexture->flags & GFX_TEXTURE_MENU_DOT) != 0 &&
+        vertexCount >= 4) {
+        float minX = vertices[0].sx, maxX = minX;
+        float minY = vertices[0].sy, maxY = minY;
+        for (uint32_t i = 1; i < vertexCount; ++i) {
+            if (vertices[i].sx < minX) minX = vertices[i].sx;
+            if (vertices[i].sx > maxX) maxX = vertices[i].sx;
+            if (vertices[i].sy < minY) minY = vertices[i].sy;
+            if (vertices[i].sy > maxY) maxY = vertices[i].sy;
+        }
+        const float cx = (minX + maxX) * 0.5f;
+        const float cy = (minY + maxY) * 0.5f;
+        const float rx = (maxX - minX) * 0.5f;
+        const float ry = (maxY - minY) * 0.5f;
+        const uint32_t c = vertices[0].color;
+        glDisable(GL_TEXTURE_2D);
+        glColor4ub((GLubyte)((c >> 16) & 0xff), (GLubyte)((c >> 8) & 0xff),
+                   (GLubyte)(c & 0xff), (GLubyte)((c >> 24) & 0xff));
+        glBegin(GL_TRIANGLE_FAN);
+        glVertex2f(cx, cy);
+        for (int i = 0; i <= 20; ++i) {
+            const float *p = kMenuDotCircle[i % 20];
+            glVertex2f(cx + rx * p[0], cy + ry * p[1]);
+        }
+        glEnd();
+        glEnable(GL_TEXTURE_2D);
+        return;
+    }
     glBegin(mode);
     for (uint32_t i = 0; i < vertexCount; ++i) {
         const GfxTLVertex *v = &vertices[i];
@@ -762,8 +874,9 @@ void UploadTexture(GfxTexture *texture)
     glBindTexture(GL_TEXTURE_2D, texture->glId);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    const GLint wrap = StageWrapMode();
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
     unsigned char *rgba = TextureToRGBA(texture);
     if (rgba != NULL) {
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -808,6 +921,10 @@ extern "C" void Gfx_DestroyTexture(GfxTexture *texture)
     if (texture == NULL)
         return;
     if (texture->parent == NULL) {
+        if (texture->replacement != NULL) {
+            Gfx_DestroyTexture(texture->replacement);
+            texture->replacement = NULL;
+        }
         if (texture->glId != 0 && s_context != NULL) {
             const int wasLocked = s_locked;
             if (EnsureLocked()) {
@@ -862,13 +979,32 @@ extern "C" int Gfx_GetDistanceFieldScale(GfxTexture *texture)
 
 extern "C" void Gfx_VectorizeMenuDot(GfxTexture *texture)
 {
-    (void)texture;
+    if (texture == NULL || texture->replacement != NULL)
+        return;
+    if (texture->width != texture->height ||
+        (texture->width != 16 && texture->width != 32))
+        return;
+    if ((texture->flags & GFX_TEXTURE_MENU_DOT) != 0)
+        return;
+    if (Sys_GetOption("video.vector_flags", 1) == 0)
+        return;
+    GfxTexture *dot = Gfx_CreateTexture(texture->width, texture->height, texture->format, 1,
+                                       GFX_TEXTURE_MENU_DOT);
+    if (dot == NULL)
+        return;
+    Gfx_CopyTexture(dot, texture);
+    Gfx_SetTextureReplacement(texture, dot);
 }
 
 extern "C" float Gfx_GetSpriteTexelInset(GfxTexture *texture)
 {
-    (void)texture;
-    return 0.0f;
+    // The sprite path now applies the inset to the UVs only, keeping the
+    // full destination; this excludes the atlas edge without shrinking
+    // glyphs. The menu dot is drawn from vector geometry and needs none.
+    GfxTexture *drawn = texture != NULL && texture->replacement != NULL ? texture->replacement : texture;
+    if (drawn != NULL && (drawn->flags & GFX_TEXTURE_MENU_DOT))
+        return 0.0f;
+    return 0.5f;
 }
 
 extern "C" void Gfx_GenerateMipmaps(GfxTexture *texture)
