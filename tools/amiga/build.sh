@@ -235,8 +235,9 @@ OpenCMR2 for AmigaOS 3.2 / PiStorm
   Libs/minigl.library         MiniGL 29.1, matching the SDK it was built with
   License_MiniGL_Library.txt  MiniGL licence
 
-Requirements: AmigaOS 3.2, 68040 with FPU, PiStorm, RTG (640x480 baseline),
-AHI and the original PC game data.
+Requirements: AmigaOS 3.2, PiStorm, RTG (640x480 baseline), AHI and the
+original PC game data. The binary targets 68040 + FPU; acceptance testing
+uses the 68060/PAL PiStorm.
 
 Install Libs/minigl.library in LIBS:, keep the game data next to opencmr2,
 and run:
