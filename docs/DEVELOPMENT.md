@@ -3,6 +3,22 @@
 Build requirements and platform presets are in the root [README](../README.md).
 CI builds each supported platform using the same presets.
 
+## Reproducible Linux host container
+
+`tools/host/Dockerfile` defines the `opencmr2-host` image: Ubuntu 22.04 with
+Clang 15, CMake 3.31, Ninja and the SDL3/X11/i386 dependencies. It builds the
+same presets as a local host:
+
+```sh
+docker build -t opencmr2-host -f tools/host/Dockerfile tools/host
+docker run --rm -v "$PWD":/src -w /src --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp opencmr2-host sh -c 'cmake --preset linux && cmake --build --preset linux && ctest --preset linux'
+```
+
+For the 32-bit reference build, add
+`-e PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/share/pkgconfig`
+and pass `-DOPENCMR2_VENDORED_SDL=ON` to the `linux-x86` configure.
+
 ## Build and test
 
 On Linux, run the native build and 32-bit reference build:
