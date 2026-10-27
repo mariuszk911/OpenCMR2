@@ -84,16 +84,20 @@ vendored SDL, the shared ASan runtime must be linked into both SDL and the
 game, and found at run time:
 
 ```sh
+ASAN_RUNTIME="$(dirname "$(clang -print-file-name=libclang_rt.asan-x86_64.so)")"
 cmake --preset linux-debug -DOPENCMR2_VENDORED_SDL=ON \
     -DOPENCMR2_BINK_TEST_DATA_DIR="$HOME/cmr2game" \
     "-DCMAKE_SHARED_LINKER_FLAGS=-shared-libasan -fsanitize=address,undefined" \
     "-DCMAKE_EXE_LINKER_FLAGS=-shared-libasan" \
     "-DCMAKE_CXX_FLAGS=-fsanitize-recover=address" "-DCMAKE_C_FLAGS=-fsanitize-recover=address"
-cmake --build --preset linux-debug --target stage_probe
-LD_LIBRARY_PATH="$(dirname "$(clang -print-file-name=libclang_rt.asan.so)")" \
-ASAN_OPTIONS=detect_leaks=0:halt_on_error=0 \
+LD_LIBRARY_PATH="$ASAN_RUNTIME" cmake --build --preset linux-debug --target stage_probe
+LD_LIBRARY_PATH="$ASAN_RUNTIME" ASAN_OPTIONS=detect_leaks=0:halt_on_error=0 \
     python3 tests/runtime_scenarios.py --probe build/linux-debug/tests/stage_probe --data "$HOME/cmr2game"
 ```
+
+The build also runs the ASan-instrumented `spirv-cross` tool. If it crashes at
+startup in a container with high ASLR entropy, configure with
+`-DOPENCMR2_RENDERER_GL=OFF`; `stage_probe` does not need the GL 3.3 renderer.
 
 Each scenario's `run.log` holds the reports. Some of the original's code
 reads a dword and keeps its low byte, running past its variable without
