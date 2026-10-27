@@ -4110,8 +4110,8 @@ void RallyData_SetupWeatherTextureEntries(void)
         pEntry->startTime2 = 0;
         pEntry->startTime = 0;
         // PORT: AMIGA: the original adds the panel index to stage % 4, which
-        // reads maps[4] past the four-entry array for residue 3. Clamp to the
-        // maps loaded for this rally group.
+        // reads maps[4] past the four-entry array on residue 3 with a second
+        // panel. Clamp to the maps loaded for this rally group.
         index = WeatherMap_Index(RallyDataStageIndex(), i,
                                  (int)(g_weatherMaps.count & 0xff));
         pEntry->texture = g_weatherMaps.maps[index];

@@ -23,8 +23,8 @@ int main()
         }
     }
 
-    /* Panels are consecutive stage indices. A group boundary repeats the
-       last loaded map instead of wrapping to the first one. */
+    /* Panels stay in stage order; a group boundary repeats the last loaded
+       map instead of wrapping to the first one. */
     REQUIRE(WeatherMap_Index(0, 0, 4) == 0);
     REQUIRE(WeatherMap_Index(0, 1, 4) == 1);
     REQUIRE(WeatherMap_Index(2, 1, 3) == 2);
