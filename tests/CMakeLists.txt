@@ -115,6 +115,12 @@ add_executable(intdiv_test intdiv.cpp ${PROJECT_SOURCE_DIR}/src/port/intdiv.cpp)
 target_include_directories(intdiv_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME intdiv COMMAND intdiv_test)
 
+# M3.1: the preview-panel weather map index stays inside the four maps and the
+# maps actually loaded for the rally group.
+add_executable(weather_map_test weather_map.cpp)
+target_include_directories(weather_map_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME weather_map COMMAND weather_map_test)
+
 # M0.7 core-slice fixture: WAV fmt fields are little-endian on disk.
 add_executable(wave_format_test wave_format.cpp)
 target_include_directories(wave_format_test PRIVATE ${PROJECT_SOURCE_DIR}/src)

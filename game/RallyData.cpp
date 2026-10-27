@@ -1,6 +1,7 @@
 #include "SavedGame.h"
 #include "port/save_slot.h"
 #include "port/sys.h"
+#include "port/weather_map.h"
 #include "ChampionshipDriver.h"
 #include "ProfileEventResults.h"
 #include "CallbackState.h"
@@ -3948,10 +3949,12 @@ char *g_unk0x00527128[9] = {
 };
 
 // Weather map textures of the current rally. One block in the original: the
-// clear loop in RallyData_LoadCurrentRallyWeatherTextures runs five times and spills into the next fields,
-// and RallyData_SetupWeatherTextureEntries indexes past maps[3]. As separate globals the clear loop
-// overran into unrelated data (it zeroed g_selectedRallyData: France asked for
-// the CD because the weather textures were looked up under FINLAND).
+// clear loop in RallyData_LoadCurrentRallyWeatherTextures runs five times and
+// spills into the next fields, and RallyData_SetupWeatherTextureEntries
+// indexed past maps[3] (now clamped by WeatherMap_Index). As separate globals
+// the clear loop overran into unrelated data (it zeroed g_selectedRallyData:
+// France asked for the CD because the weather textures were looked up under
+// FINLAND).
 struct WeatherMapSet {
     unsigned int count; // 0x00, low byte used
     void *mainMap;      // 0x04
@@ -3961,6 +3964,9 @@ struct WeatherMapSet {
 };
 // GLOBAL: CMR2 0x0082cb48
 WeatherMapSet g_weatherMaps;
+// PORT: AMIGA: WeatherMap_Index assumes four map slots.
+static_assert(sizeof(g_weatherMaps.maps) / sizeof(g_weatherMaps.maps[0]) == WEATHER_MAP_SLOTS,
+              "WeatherMapSet::maps must match WEATHER_MAP_SLOTS");
 // GLOBAL: CMR2 0x0082c690
 void *g_unk0x0082c690;
 extern int g_optionPreviewPanelCount;
@@ -4103,7 +4109,11 @@ void RallyData_SetupWeatherTextureEntries(void)
         pEntry->startTime3 = 0;
         pEntry->startTime2 = 0;
         pEntry->startTime = 0;
-        index = (RallyDataStageIndex() & 0xff) % 4 + i;
+        // PORT: AMIGA: the original adds the panel index to stage % 4, which
+        // reads maps[4] past the four-entry array for residue 3. Clamp to the
+        // maps loaded for this rally group.
+        index = WeatherMap_Index(RallyDataStageIndex(), i,
+                                 (int)(g_weatherMaps.count & 0xff));
         pEntry->texture = g_weatherMaps.maps[index];
         pEntry->count = g_weatherMaps.slots[index];
         pEntry->srcX1 = g_weatherMaps.rects[index * 2] + g_optionPreviewExpandedRect[0];
