@@ -11,7 +11,10 @@
 #include "Mesh.h"
 #include "MeshVertex.h"
 #include "ShadowPart.h"
+#include "port/c3d_payload.h"
+#include "port/endian.h"
 #include "LightZone.h"
+#include "TrackCollisionData.h"
 
 SceneNode *g_sceneNodes[4096];
 int g_sceneNodeCount;
@@ -1279,6 +1282,18 @@ char g_strShadowMeshName[] = "SHAD%d";
 
 // PORT: native copies of the lighting records (see Scene_LoadLighting).
 static BYTE *g_sceneLightNative;
+static BYTE *g_sceneLightPayload;
+static BYTE *g_sceneLightHeights;
+static unsigned short g_sceneLightZoneCount;
+
+static_assert(offsetof(LightZone, sector) == 0x00, "light zone layout drifted");
+static_assert(offsetof(LightZone, itemCount) == 0x02, "light zone layout drifted");
+static_assert(offsetof(LightZone, x) == 0x04, "light zone layout drifted");
+static_assert(offsetof(LightZone, z) == 0x08, "light zone layout drifted");
+static_assert(offsetof(LightZoneItem, ownerX) == 0x00, "light item layout drifted");
+static_assert(offsetof(LightZoneItem, vertexCount) == 0x28, "light item layout drifted");
+static_assert(offsetof(LightZoneMesh, triangleCount) == 0x00, "light mesh layout drifted");
+static_assert(offsetof(LightZoneMesh, vertexCount) == 0x04, "light mesh layout drifted");
 
 // Reads the lighting data of a stage: the light direction and basis, then
 // the shadow zones (one per sector with a shadow mesh). Offsets in the data
@@ -1292,8 +1307,6 @@ void Scene_LoadLighting(int *pData)
     LightZoneItem *pItem;
     StageObject *pObj;
     Mesh *pMesh;
-    FixVector *pBasis;
-    unsigned short *pCursor;
     unsigned int s;
     unsigned int found;
     unsigned int next;
@@ -1306,18 +1319,20 @@ void Scene_LoadLighting(int *pData)
 
     if (pData == NULL)
         return;
-    g_sceneLightDir.x = pData[0];
-    g_sceneLightDir.y = pData[1];
-    g_sceneLightDir.z = pData[2];
-    pBasis = g_sceneLightBasis;
-    pCursor = (unsigned short *)(pData + 3);
-    do {
-        pBasis->x = *(int *)pCursor;
-        pBasis->y = *(int *)(pCursor + 2);
-        pBasis->z = *(int *)(pCursor + 4);
-        pBasis++;
-        pCursor += 6;
-    } while (pBasis < &g_sceneLightBasis[3]);
+    // PORT: AMIGA: the lighting payload is little-endian and may be unaligned.
+    // Decode scalars and build aligned native arrays; the record pointers and
+    // the vertex/triangle/level arrays are native for the shadow meshes.
+    const BYTE *tre = (const BYTE *)pData;
+    const unsigned int zoneCount = ReadLE16(tre + 48);
+    const BYTE *pZoneDisk = tre + 50;
+    g_sceneLightDir.x = (int)ReadLE32(tre + 0);
+    g_sceneLightDir.y = (int)ReadLE32(tre + 4);
+    g_sceneLightDir.z = (int)ReadLE32(tre + 8);
+    for (i = 0; i < 3; i++) {
+        g_sceneLightBasis[i].x = (int)ReadLE32(tre + 12 + i * 12);
+        g_sceneLightBasis[i].y = (int)ReadLE32(tre + 16 + i * 12);
+        g_sceneLightBasis[i].z = (int)ReadLE32(tre + 20 + i * 12);
+    }
     g_sceneLightRight.x = g_sceneLightBasis[0].x;
     g_sceneLightDirF[0] = X87S_MUL(X87S_FILD(float, g_sceneLightDir.x), (float)CGraphics::m_oneOver65536);
     g_sceneLightRight.z = g_sceneLightBasis[0].z;
@@ -1337,53 +1352,110 @@ void Scene_LoadLighting(int *pData)
     g_sceneLightBasisF[7] = X87S_MUL(X87S_FILD(float, g_sceneLightBasis[2].y), (float)CGraphics::m_oneOver65536);
     g_sceneLightBasisF[8] = X87S_MUL(X87S_FILD(float, g_sceneLightBasis[2].z), (float)CGraphics::m_oneOver65536);
 
-    // PORT: the zones, their items and the zones' mesh headers hold 32-bit
-    // file offsets that the original turns into pointers in place, and a
-    // native pointer does not fit there. They are copied into native records
-    // (one buffer, freed by Scene_FreeLighting); vertices, triangles and
-    // levels have no pointers and stay in the file, which the original
-    // also reads in this order.
     {
-        unsigned int zoneCount = *pCursor;
-        const BYTE *pDisk = (const BYTE *)(pCursor + 1);
-        const BYTE *pFile;
-        unsigned int itemCount = 0;
+        const BYTE *pItemDisk;
+        const BYTE *pMeshDisk;
+        const BYTE *pArrayDisk;
+        const BYTE *pVertFile;
+        const BYTE *pTriFile;
+        const BYTE *pLevelFile;
+        uint64_t itemCount = 0;
+        uint64_t payloadBytes = 0;
+        BYTE *pOut;
         LightZone *pZones;
         LightZoneMesh *pMeshes;
         LightZoneItem *pNextItem;
 
         for (zone = 0; zone < (int)zoneCount; zone++)
-            itemCount += *(const unsigned short *)(pDisk + zone * 0x14 + 2);
+            itemCount += ReadLE16(pZoneDisk + zone * 0x14 + 2);
+        if (itemCount > (uint64_t)(size_t)-1 / sizeof(LightZoneItem))
+            return;
         g_sceneLightNative = (BYTE *)CFileBuffer::AllocateLockedBuffer(
-            zoneCount * (sizeof(LightZone) + sizeof(LightZoneMesh)) + itemCount * sizeof(LightZoneItem) + 1);
+            zoneCount * (sizeof(LightZone) + sizeof(LightZoneMesh)) + (size_t)itemCount * sizeof(LightZoneItem) + 1);
+        if (g_sceneLightNative == NULL)
+            return;
         pZones = (LightZone *)g_sceneLightNative;
         pMeshes = (LightZoneMesh *)(pZones + zoneCount);
         pNextItem = (LightZoneItem *)(pMeshes + zoneCount);
-        pFile = pDisk + zoneCount * 0x14;
+        pItemDisk = pZoneDisk + zoneCount * 0x14;
         for (zone = 0; zone < (int)zoneCount; zone++) {
-            memcpy(&pZones[zone], pDisk + zone * 0x14, offsetof(LightZone, pItems));
+            const BYTE *zoneFile = pZoneDisk + zone * 0x14;
+            pZones[zone].sector = (short)ReadLE16(zoneFile + 0);
+            pZones[zone].itemCount = ReadLE16(zoneFile + 2);
+            pZones[zone].x = (int)ReadLE32(zoneFile + 4);
+            pZones[zone].z = (int)ReadLE32(zoneFile + 8);
             pZones[zone].pItems = pNextItem;
             pZones[zone].pMesh = &pMeshes[zone];
-            for (item = 0; item < pZones[zone].itemCount; item++, pFile += 0x30, pNextItem++) {
+            for (item = 0; item < pZones[zone].itemCount; item++, pItemDisk += 0x30, pNextItem++) {
+                const BYTE *itemFile = pItemDisk;
                 memset(pNextItem, 0, sizeof(*pNextItem));
-                memcpy(pNextItem, pFile, offsetof(LightZoneItem, vertexCount) + sizeof(int));
+                pNextItem->ownerX = (int)ReadLE32(itemFile + 0x00);
+                pNextItem->ownerZ = (int)ReadLE32(itemFile + 0x04);
+                pNextItem->x = (int)ReadLE32(itemFile + 0x08);
+                pNextItem->z = (int)ReadLE32(itemFile + 0x0c);
+                pNextItem->halfSizeRight = (int)ReadLE32(itemFile + 0x10);
+                pNextItem->halfSizeForward = (int)ReadLE32(itemFile + 0x14);
+                pNextItem->field_0x18 = (int)ReadLE32(itemFile + 0x18);
+                pNextItem->field_0x1c = (int)ReadLE32(itemFile + 0x1c);
+                pNextItem->intensity = (int)ReadLE32(itemFile + 0x20);
+                pNextItem->field_0x24 = (int)ReadLE32(itemFile + 0x24);
+                pNextItem->vertexCount = (int)ReadLE32(itemFile + 0x28);
             }
         }
-        for (zone = 0; zone < (int)zoneCount; zone++, pFile += 0x14)
-            memcpy(&pMeshes[zone], pFile, offsetof(LightZoneMesh, pVertices));
+        pMeshDisk = pItemDisk;
         for (zone = 0; zone < (int)zoneCount; zone++) {
-            pMeshes[zone].pVertices = (MeshVertexF *)pFile;
-            pFile += pMeshes[zone].vertexCount * 0x30;
+            const BYTE *meshFile = pMeshDisk + zone * 0x14;
+            pMeshes[zone].triangleCount = (int)ReadLE32(meshFile + 0);
+            pMeshes[zone].vertexCount = (int)ReadLE32(meshFile + 4);
+            if (pMeshes[zone].triangleCount < 0 || pMeshes[zone].vertexCount < 0) {
+                CFileBuffer::FreeGenericFileBuffer(g_sceneLightNative);
+                g_sceneLightNative = NULL;
+                return;
+            }
+            payloadBytes += (uint64_t)pMeshes[zone].vertexCount * 0x30;
+            payloadBytes += (uint64_t)pMeshes[zone].triangleCount * 0x4c;
+            payloadBytes += (uint64_t)pMeshes[zone].vertexCount * 4;
         }
+        if (payloadBytes > (uint64_t)(size_t)-1) {
+            CFileBuffer::FreeGenericFileBuffer(g_sceneLightNative);
+            g_sceneLightNative = NULL;
+            return;
+        }
+        g_sceneLightPayload = (BYTE *)CFileBuffer::AllocateLockedBuffer(
+            payloadBytes != 0 ? (size_t)payloadBytes : 1);
+        if (g_sceneLightPayload == NULL) {
+            CFileBuffer::FreeGenericFileBuffer(g_sceneLightNative);
+            g_sceneLightNative = NULL;
+            return;
+        }
+        pArrayDisk = pMeshDisk + zoneCount * 0x14;
+        pOut = g_sceneLightPayload;
+        pVertFile = pArrayDisk;
         for (zone = 0; zone < (int)zoneCount; zone++) {
-            pMeshes[zone].pTriangles = (MeshTriangle *)pFile;
-            pFile += pMeshes[zone].triangleCount * 0x4c;
+            const size_t bytes = (size_t)pMeshes[zone].vertexCount * 0x30;
+            pMeshes[zone].pVertices = (MeshVertexF *)pOut;
+            C3D_DecodeWords(pOut, pVertFile, bytes);
+            pOut += bytes;
+            pVertFile += bytes;
         }
+        pTriFile = pVertFile;
         for (zone = 0; zone < (int)zoneCount; zone++) {
-            pMeshes[zone].pLevels = (int *)pFile;
-            pFile += pMeshes[zone].vertexCount * 4;
+            pMeshes[zone].pTriangles = (MeshTriangle *)pOut;
+            for (item = 0; item < pMeshes[zone].triangleCount; item++)
+                C3D_DecodeTriangle((BYTE *)pMeshes[zone].pTriangles + item * 0x4c, pTriFile + item * 0x4c);
+            pOut += (size_t)pMeshes[zone].triangleCount * 0x4c;
+            pTriFile += (size_t)pMeshes[zone].triangleCount * 0x4c;
         }
-        g_sceneLightData = pCursor;
+        pLevelFile = pTriFile;
+        for (zone = 0; zone < (int)zoneCount; zone++) {
+            const size_t bytes = (size_t)pMeshes[zone].vertexCount * 4;
+            pMeshes[zone].pLevels = (int *)pOut;
+            C3D_DecodeWords(pOut, pLevelFile, bytes);
+            pOut += bytes;
+            pLevelFile += bytes;
+        }
+        g_sceneLightZoneCount = (unsigned short)zoneCount;
+        g_sceneLightData = &g_sceneLightZoneCount;
         g_sceneLightZones = pZones;
     }
 
@@ -1541,12 +1613,21 @@ int Scene_FreeLighting(void)
         CFileBuffer::FreeGenericFileBuffer(g_sceneSectorZone);
         g_sceneSectorZone = NULL;
     }
-    // PORT: the native lighting records.
+    // PORT: the native lighting records and payload.
+    if (g_sceneLightPayload != NULL) {
+        CFileBuffer::FreeGenericFileBuffer(g_sceneLightPayload);
+        g_sceneLightPayload = NULL;
+    }
+    if (g_sceneLightHeights != NULL) {
+        CFileBuffer::FreeGenericFileBuffer(g_sceneLightHeights);
+        g_sceneLightHeights = NULL;
+    }
     if (g_sceneLightNative != NULL) {
         CFileBuffer::FreeGenericFileBuffer(g_sceneLightNative);
         g_sceneLightNative = NULL;
         g_sceneLightZones = NULL;
     }
+    g_sceneLightData = NULL;
     g_triangleVertexHeights = NULL;
     return 1;
 }
@@ -1591,8 +1672,22 @@ void Scene_InitLighting(int *pData, int *pHeights)
         } while (k < (unsigned int)g_sectorCount);
     }
     Scene_LoadLighting(pData);
-    if (pHeights != NULL)
-        g_triangleVertexHeights = pHeights;
+    // PORT: AMIGA: .xhi holds one height per track vertex; use the HPC vertex
+    // count and copy to native integers. The archive API has no member length,
+    // so a mismatched .xhi is not detected here.
+    if (pHeights != NULL && g_trackVertexCountRecord != NULL &&
+        g_trackVertexCountRecord->count != 0) {
+        const size_t heightBytes = (size_t)g_trackVertexCountRecord->count * 4;
+        g_sceneLightHeights = (BYTE *)CFileBuffer::AllocateLockedBuffer(heightBytes);
+        if (g_sceneLightHeights != NULL) {
+            C3D_DecodeWords(g_sceneLightHeights, pHeights, heightBytes);
+            g_triangleVertexHeights = (int *)g_sceneLightHeights;
+        } else {
+            g_triangleVertexHeights = NULL;
+        }
+    } else {
+        g_triangleVertexHeights = NULL;
+    }
     CGame::RegisterCallback((void *)Scene_FreeLighting, NULL);
 }
 

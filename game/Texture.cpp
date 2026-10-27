@@ -56,6 +56,13 @@ Texture* CTexture::FindLoadTexture(GenericFile* pFile, char* textureName, bool *
             if (didLoadTexture != NULL)
                 *didLoadTexture = true;
             pTexture = CGraphics::CreateTextureFromImageData(textureName, pData, flag);
+            // PORT: AMIGA: the loader can reject a staging texture; return
+            // the failure instead of dereferencing the NULL result.
+            if (pTexture == NULL) {
+                if (didLoadTexture != NULL)
+                    *didLoadTexture = false;
+                return NULL;
+            }
             pTexture->pArchive = pFile;
             return pTexture;
         }

@@ -116,44 +116,64 @@ int EnsureLocked(void)
     return 1;
 }
 
-uint32_t TextureBytes(int width, int height, int format)
+bool MulSize(uint32_t a, uint32_t b, uint32_t *out)
 {
+    if (a != 0 && b > 0xffffffffu / a)
+        return false;
+    *out = a * b;
+    return true;
+}
+
+bool TextureBytes(int width, int height, int format, uint32_t *out)
+{
+    uint32_t pixels;
+    uint32_t blocks;
+
+    if (width <= 0 || height <= 0 || out == NULL)
+        return false;
     switch (format) {
     case GFX_FORMAT_BGRX8:
     case GFX_FORMAT_BGRA8:
-        return (uint32_t)width * (uint32_t)height * 4u;
-    case GFX_FORMAT_BC1: {
-        const uint32_t blocksWide = ((uint32_t)width + 3u) / 4u;
-        const uint32_t blocksHigh = ((uint32_t)height + 3u) / 4u;
-        return blocksWide * blocksHigh * 8u;
-    }
-    case GFX_FORMAT_BC3: {
-        const uint32_t blocksWide = ((uint32_t)width + 3u) / 4u;
-        const uint32_t blocksHigh = ((uint32_t)height + 3u) / 4u;
-        return blocksWide * blocksHigh * 16u;
-    }
+        return MulSize((uint32_t)width, (uint32_t)height, &pixels) &&
+               MulSize(pixels, 4u, out);
+    case GFX_FORMAT_BC1:
+        if (!MulSize(((uint32_t)width + 3u) / 4u, ((uint32_t)height + 3u) / 4u, &blocks))
+            return false;
+        return MulSize(blocks, 8u, out);
+    case GFX_FORMAT_BC3:
+        if (!MulSize(((uint32_t)width + 3u) / 4u, ((uint32_t)height + 3u) / 4u, &blocks))
+            return false;
+        return MulSize(blocks, 16u, out);
     case GFX_FORMAT_BUMP_DUDVL:
-        return (uint32_t)width * (uint32_t)height * 3u;
+        return MulSize((uint32_t)width, (uint32_t)height, &pixels) &&
+               MulSize(pixels, 3u, out);
     default:
-        return 0;
+        return false;
     }
 }
 
 int32_t TexturePitch(int width, int format)
 {
+    int64_t pitch;
+
     switch (format) {
     case GFX_FORMAT_BGRX8:
     case GFX_FORMAT_BGRA8:
-        return width * 4;
+        pitch = (int64_t)width * 4;
+        break;
     case GFX_FORMAT_BC1:
-        return ((width + 3) / 4) * 8;
+        pitch = ((int64_t)width + 3) / 4 * 8;
+        break;
     case GFX_FORMAT_BC3:
-        return ((width + 3) / 4) * 16;
+        pitch = ((int64_t)width + 3) / 4 * 16;
+        break;
     case GFX_FORMAT_BUMP_DUDVL:
-        return width * 3;
+        pitch = (int64_t)width * 3;
+        break;
     default:
         return 0;
     }
+    return pitch > 0 && pitch <= 0x7fffffff ? (int32_t)pitch : 0;
 }
 
 } // namespace
@@ -256,6 +276,8 @@ extern "C" void Gfx_SetFullscreen(int fullscreen)
 extern "C" void Gfx_Shutdown(void)
 {
     if (s_context != NULL) {
+        s_boundTexture = NULL;
+        s_renderTarget = NULL;
         if (s_locked) {
             mglUnlockDisplay();
             s_locked = 0;
@@ -964,18 +986,33 @@ void DecodeBC3Block(const unsigned char *src, unsigned char *dst, int dstPitch)
 
 unsigned char *TextureToRGBA(const GfxTexture *texture)
 {
-    const unsigned int width = (unsigned int)texture->width;
-    const unsigned int height = (unsigned int)texture->height;
-    unsigned char *rgba = (unsigned char *)malloc(width * height * 4);
+    const size_t width = (size_t)texture->width;
+    const size_t height = (size_t)texture->height;
+    const size_t maxSize = (size_t)-1;
+    size_t pixels;
+    unsigned char *rgba;
+
+    if (width == 0 || height == 0 || width > maxSize / height)
+        return NULL;
+    pixels = width * height;
+    if (pixels > maxSize / 4)
+        return NULL;
+    rgba = (unsigned char *)malloc(pixels * 4);
     if (rgba == NULL)
         return NULL;
 
     if (texture->format == GFX_FORMAT_BC1 || texture->format == GFX_FORMAT_BC3) {
-        const unsigned int blocksWide = (width + 3) / 4;
-        const unsigned int blocksHigh = (height + 3) / 4;
-        const int blockSize = texture->format == GFX_FORMAT_BC1 ? 8 : 16;
-        for (unsigned int by = 0; by < blocksHigh; ++by) {
-            for (unsigned int bx = 0; bx < blocksWide; ++bx) {
+        const size_t blocksWide = (width + 3) / 4;
+        const size_t blocksHigh = (height + 3) / 4;
+        const size_t blockSize = texture->format == GFX_FORMAT_BC1 ? 8 : 16;
+        if (blocksWide > maxSize / blocksHigh ||
+            blocksWide * blocksHigh > maxSize / blockSize ||
+            (uint64_t)blocksWide * blocksHigh * blockSize > texture->dataSize) {
+            free(rgba);
+            return NULL;
+        }
+        for (size_t by = 0; by < blocksHigh; ++by) {
+            for (size_t bx = 0; bx < blocksWide; ++bx) {
                 const unsigned char *block = texture->data + (by * blocksWide + bx) * blockSize;
                 unsigned char pixels[16 * 4];
                 if (texture->format == GFX_FORMAT_BC1)
@@ -984,20 +1021,26 @@ unsigned char *TextureToRGBA(const GfxTexture *texture)
                     DecodeBC3Block(block, pixels, 16);
                 // Edge blocks of a texture whose size is not a multiple of
                 // four only cover part of the 4x4 block.
-                const unsigned int rows = height - by * 4 < 4 ? height - by * 4 : 4;
-                const unsigned int columns = width - bx * 4 < 4 ? width - bx * 4 : 4;
-                for (unsigned int y = 0; y < rows; ++y) {
+                const size_t rows = height - by * 4 < 4 ? height - by * 4 : 4;
+                const size_t columns = width - bx * 4 < 4 ? width - bx * 4 : 4;
+                for (size_t y = 0; y < rows; ++y) {
                     unsigned char *dst = rgba + ((by * 4 + y) * width + bx * 4) * 4;
                     memcpy(dst, pixels + y * 16, columns * 4);
                 }
             }
         }
     } else {
-        const unsigned int srcBytes = texture->format == GFX_FORMAT_BUMP_DUDVL ? 3 : 4;
-        for (unsigned int y = 0; y < height; ++y) {
+        const size_t srcBytes = texture->format == GFX_FORMAT_BUMP_DUDVL ? 3 : 4;
+        if (texture->pitch <= 0 || width > maxSize / srcBytes ||
+            (size_t)texture->pitch < width * srcBytes ||
+            (uint64_t)texture->pitch * height > texture->dataSize) {
+            free(rgba);
+            return NULL;
+        }
+        for (size_t y = 0; y < height; ++y) {
             const unsigned char *src = texture->data + y * texture->pitch;
             unsigned char *dst = rgba + y * width * 4;
-            for (unsigned int x = 0; x < width; ++x) {
+            for (size_t x = 0; x < width; ++x) {
                 PutPixelRGBA(dst + x * 4, src + x * srcBytes, texture->format);
             }
         }
@@ -1015,6 +1058,10 @@ void UploadTexture(GfxTexture *texture)
         return;
     if (texture->glId == 0)
         glGenTextures(1, &texture->glId);
+    if (texture->glId == 0) {
+        Sys_Log("gfx: glGenTextures failed for %dx%d", texture->width, texture->height);
+        return;
+    }
     glBindTexture(GL_TEXTURE_2D, texture->glId);
     ApplyStageSampler();
     unsigned char *rgba = TextureToRGBA(texture);
@@ -1033,8 +1080,9 @@ extern "C" GfxTexture *Gfx_CreateTexture(int width, int height, int format, int 
 {
     if (width <= 0 || height <= 0)
         return NULL;
-    const uint32_t bytes = TextureBytes(width, height, format);
-    if (bytes == 0)
+    uint32_t bytes;
+    const int32_t pitch = TexturePitch(width, format);
+    if (!TextureBytes(width, height, format, &bytes) || bytes == 0 || pitch == 0)
         return NULL;
     GfxTexture *texture = new (std::nothrow) GfxTexture;
     if (texture == NULL)
@@ -1051,7 +1099,7 @@ extern "C" GfxTexture *Gfx_CreateTexture(int width, int height, int format, int 
     texture->mipLevels = mipLevels > 0 ? mipLevels : 1;
     texture->flags = flags;
     texture->dataSize = bytes;
-    texture->pitch = TexturePitch(width, format);
+    texture->pitch = pitch;
     texture->dirty = 1;
     return texture;
 }
@@ -1063,6 +1111,9 @@ extern "C" void Gfx_DestroyTexture(GfxTexture *texture)
     // The TL path reads s_boundTexture's flags; never leave it dangling. A
     // bound texture always has a GL name, so texturing is disabled below
     // while the display is locked for glDeleteTextures.
+    if (s_renderTarget == texture ||
+        (texture->replacement != NULL && s_renderTarget == texture->replacement))
+        s_renderTarget = NULL;
     const bool wasBound = s_boundTexture == texture;
     if (wasBound)
         s_boundTexture = NULL;
@@ -1090,13 +1141,16 @@ extern "C" void Gfx_DestroyTexture(GfxTexture *texture)
 
 extern "C" int Gfx_GetTextureMipCount(GfxTexture *texture)
 {
-    return texture != NULL ? texture->mipLevels : 0;
+    // Only the top level has CPU storage; reporting the requested count made
+    // callers believe levels 1..n exist.
+    return texture != NULL && texture->data != NULL ? 1 : 0;
 }
 
 extern "C" int Gfx_LockTexture(GfxTexture *texture, int face, int mip, GfxLockedRect *out)
 {
     (void)face;
-    if (texture == NULL || out == NULL || mip != 0 || texture->parent != NULL)
+    if (texture == NULL || out == NULL || mip != 0 || texture->parent != NULL ||
+        texture->data == NULL || texture->pitch <= 0)
         return 0;
     out->pixels = texture->data;
     out->pitch = texture->pitch;
@@ -1176,6 +1230,10 @@ extern "C" void Gfx_CopyTexture(GfxTexture *dst, GfxTexture *src)
         return;
     }
     if (dst->width == src->width && dst->height == src->height && dst->format == src->format) {
+        if (dst->dataSize < src->dataSize) {
+            Sys_Log("gfx: copy destination is smaller than the source");
+            return;
+        }
         memcpy(dst->data, src->data, src->dataSize);
         dst->dirty = 1;
         return;
@@ -1186,17 +1244,31 @@ extern "C" void Gfx_CopyTexture(GfxTexture *dst, GfxTexture *src)
         Sys_Log("gfx: cannot convert a texture to a compressed format");
         return;
     }
+    // Keep the scaling products in 32 bits on the 68060. Game textures are at
+    // most 2048 wide; the guard rejects only malformed geometry, which the
+    // caller could not have locked anyway.
+    if (src->width > 32767 || src->height > 32767 ||
+        dst->width > 32767 || dst->height > 32767) {
+        Sys_Log("gfx: refusing to scale a texture with invalid dimensions");
+        return;
+    }
     unsigned char *rgba = TextureToRGBA(src);
     if (rgba == NULL) {
         Sys_Log("gfx: out of memory converting a %dx%d texture", src->width, src->height);
         return;
     }
-    const unsigned int dstBytes = dst->format == GFX_FORMAT_BUMP_DUDVL ? 3 : 4;
+    const size_t dstBytes = dst->format == GFX_FORMAT_BUMP_DUDVL ? 3 : 4;
+    if (dst->pitch <= 0 || (size_t)dst->pitch < (size_t)dst->width * dstBytes ||
+        (uint64_t)dst->pitch * (size_t)dst->height > dst->dataSize) {
+        Sys_Log("gfx: destination texture geometry is inconsistent");
+        free(rgba);
+        return;
+    }
     for (int y = 0; y < dst->height; ++y) {
-        const int sy = (int)((int64_t)y * src->height / dst->height);
+        const int sy = (int)((uint32_t)y * (uint32_t)src->height / (uint32_t)dst->height);
         unsigned char *out = dst->data + y * dst->pitch;
         for (int x = 0; x < dst->width; ++x) {
-            const int sx = (int)((int64_t)x * src->width / dst->width);
+            const int sx = (int)((uint32_t)x * (uint32_t)src->width / (uint32_t)dst->width);
             const unsigned char *p = rgba + ((size_t)sy * src->width + sx) * 4;
             // The CPU copy is stored as in Direct3D memory: blue, green, red
             // (then alpha for the 32-bit formats).

@@ -8,6 +8,8 @@
 #include "StageTiming.h"
 #include "ReplayStream.h"
 #include "TrackCollisionData.h"
+#include "port/c3d_payload.h"
+#include "port/disk.h"
 #include "StageWeather.h"
 #include <stdio.h>
 #include <stddef.h>
@@ -1714,40 +1716,120 @@ BYTE StageTiming_NoOpLightRelease(void)
 // FUNCTION: CMR2 0x00490d50
 void StageTiming_IndexSerializedStageTables(BYTE *pData)
 {
-    BYTE *p;
+    // PORT: AMIGA: the serialized collision block is little-endian and can be
+    // unaligned. Build one aligned native block, attach it to the archive
+    // buffer, and point the runtime views at the native records and arrays.
+    g_trackVertexCountRecord = NULL;
+    g_trackCollisionHeader = NULL;
+    g_trackTriangles = NULL;
+    g_trackVertices = NULL;
+    g_trackTriangleIndices = NULL;
+    g_trackGridColumns = NULL;
+    g_trackGridRows = NULL;
+    g_trackTriangleListCount = NULL;
+    const BYTE *pFile = pData;
+    int levelCounts[5];
+    unsigned int vertexCount;
+    unsigned int triangleCount;
+    unsigned int listCount;
+    uint64_t nodeCount = 0;
+    uint64_t totalBytes;
+    BYTE *native;
+    BYTE *out;
+    TrackCollisionHeader *pHeader;
+    TrackCollisionCount *pCount;
     int i;
 
+    for (i = 0; i < 5; i++) {
+        levelCounts[i] = (short)ReadLE16(pFile + offsetof(TrackCollisionHeader, levelCounts) + i * 2);
+        if (levelCounts[i] < 0)
+            return;
+        nodeCount += (unsigned int)levelCounts[i];
+    }
+    pFile += 0x14;
+    pFile += nodeCount * sizeof(TrackQuadNode);
+    vertexCount = ReadLE16(pFile);
+    pFile += sizeof(TrackCollisionCount);
+    pFile += vertexCount * sizeof(FixVector);
+    triangleCount = ReadLE16(pFile);
+    pFile += sizeof(TrackCollisionCount);
+    pFile += triangleCount * sizeof(TrackTriangle);
+    listCount = ReadLE32(pFile);
+    pFile += sizeof(int);
+    pFile += listCount * sizeof(short);
+
+    totalBytes = 0x14 + nodeCount * sizeof(TrackQuadNode) +
+                 sizeof(TrackCollisionCount) + vertexCount * sizeof(FixVector) +
+                 sizeof(TrackCollisionCount) + triangleCount * sizeof(TrackTriangle) +
+                 sizeof(int) + listCount * sizeof(short) + 2 * sizeof(short);
+    if (totalBytes > (uint64_t)(size_t)-1)
+        return;
+    native = (BYTE *)CFileBuffer::AllocateLockedBuffer((size_t)totalBytes);
+    if (native == NULL)
+        return;
+    Disk_AttachToBuffer(pData, native);
     g_trackCollisionBlock = pData;
-    g_trackCollisionHeader = (TrackCollisionHeader *)pData;
-    p = pData + offsetof(TrackCollisionHeader, levelCounts);
+
+    out = native;
+    pHeader = (TrackCollisionHeader *)out;
+    pHeader->x = (int)ReadLE32(pData + 0x00);
+    pHeader->z = (int)ReadLE32(pData + 0x04);
     for (i = 0; i < 5; i++) {
-        g_trackLevelNodeCounts[i] = *(short *)p;
-        p += sizeof(short);
+        pHeader->levelCounts[i] = (short)levelCounts[i];
+        g_trackLevelNodeCounts[i] = levelCounts[i];
     }
-    p += sizeof(short);
+    pHeader->field_0x12 = (short)ReadLE16(pData + 0x12);
+    g_trackCollisionHeader = pHeader;
+    out += 0x14;
+    pFile = pData + 0x14;
     for (i = 0; i < 5; i++) {
-        g_trackCollisionTables.levels[i] = (TrackQuadNode *)p;
-        p += g_trackLevelNodeCounts[i] * (int)sizeof(TrackQuadNode);
+        TrackQuadNode *pNodes = (TrackQuadNode *)out;
+        g_trackCollisionTables.levels[i] = pNodes;
+        for (int j = 0; j < levelCounts[i]; j++, pFile += 8, out += 8) {
+            pNodes[j].triangleCount = (short)ReadLE16(pFile + 0);
+            pNodes[j].field_0x2 = (short)ReadLE16(pFile + 2);
+            pNodes[j].firstIndex = (int)ReadLE32(pFile + 4);
+        }
     }
-    g_trackVertexCountRecord = (TrackCollisionCount *)p;
-    p += sizeof(TrackCollisionCount);
-    g_trackVertices = (FixVector *)p;
-    i = g_trackVertexCountRecord->count;
-    p = p + i * sizeof(FixVector);
-    g_trackTriangleCountRecord = (TrackCollisionCount *)p;
-    p += sizeof(TrackCollisionCount);
-    g_trackTriangles = (TrackTriangle *)p;
-    i = g_trackTriangleCountRecord->count;
-    p = p + i * sizeof(TrackTriangle);
-    BYTE *pCount = p;
-    p += sizeof(TrackCollisionCount);
-    g_trackTriangleListCount = (int *)pCount;
-    g_trackTriangleIndices = (short *)p;
-    i = *(int *)pCount;
-    p = p + i * (int)sizeof(short);
-    g_trackGridColumns = (short *)p;
-    p += sizeof(short);
-    g_trackGridRows = (short *)p;
+    pCount = (TrackCollisionCount *)out;
+    g_trackVertexCountRecord = pCount;
+    pCount->count = ReadLE16(pFile + 0);
+    pCount->field_0x2 = ReadLE16(pFile + 2);
+    pFile += sizeof(TrackCollisionCount);
+    out += sizeof(TrackCollisionCount);
+    g_trackVertices = (FixVector *)out;
+    C3D_DecodeWords(g_trackVertices, pFile, vertexCount * sizeof(FixVector));
+    pFile += vertexCount * sizeof(FixVector);
+    out += vertexCount * sizeof(FixVector);
+    pCount = (TrackCollisionCount *)out;
+    g_trackTriangleCountRecord = pCount;
+    pCount->count = ReadLE16(pFile + 0);
+    pCount->field_0x2 = ReadLE16(pFile + 2);
+    pFile += sizeof(TrackCollisionCount);
+    out += sizeof(TrackCollisionCount);
+    g_trackTriangles = (TrackTriangle *)out;
+    for (i = 0; i < (int)triangleCount; i++, pFile += 8, out += 8) {
+        TrackTriangle *pTriangle = &g_trackTriangles[i];
+        unsigned short bits = ReadLE16(pFile + 6);
+        pTriangle->v[0] = ReadLE16(pFile + 0);
+        pTriangle->v[1] = ReadLE16(pFile + 2);
+        pTriangle->v[2] = ReadLE16(pFile + 4);
+        pTriangle->surface = (unsigned short)(bits & 0x7f);
+        pTriangle->flags = (unsigned short)(bits >> 7);
+    }
+    g_trackTriangleListCount = (int *)out;
+    *g_trackTriangleListCount = (int)listCount;
+    pFile += sizeof(int);
+    out += sizeof(int);
+    g_trackTriangleIndices = (short *)out;
+    for (i = 0; i < (int)listCount; i++, pFile += 2, out += 2)
+        g_trackTriangleIndices[i] = (short)ReadLE16(pFile);
+    g_trackGridColumns = (short *)out;
+    *g_trackGridColumns = (short)ReadLE16(pFile);
+    pFile += 2;
+    out += 2;
+    g_trackGridRows = (short *)out;
+    *g_trackGridRows = (short)ReadLE16(pFile);
     CGame::RegisterCallback(StageTiming_NoOpLightRelease, NULL);
 }
 

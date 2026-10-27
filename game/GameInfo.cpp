@@ -7231,6 +7231,9 @@ void OptionPreview_FillTextureSetIndices(void)
     int i;
     int *pEntry;
 
+    // PORT: AMIGA: a failed weather atlas leaves the preview disabled.
+    if (g_optionPreviewPanelCount <= 0)
+        return;
     pStages = RallyData_GetDriverPrimaryPairRecord(0);
     pPairs = (BYTE *)RallyData_GetDriverSettingPair(0);
     // The original reads [index * 0x50 + 0x82c6c0]: byte 0x48 of the previous
@@ -9263,6 +9266,12 @@ void OptionMenu_AnimateSelectedPanel(void)
 // FUNCTION: CMR2 0x005059d0
 void OptionMenu_SelectDisplaySlot(int param_1)
 {
+    // PORT: AMIGA: do not index panel -1 or divide by zero when the preview
+    // has no usable weather maps.
+    if (g_optionPreviewPanelCount <= 0 ||
+        (signed char)g_selectedOptionPreviewPanel < 0 ||
+        (signed char)g_selectedOptionPreviewPanel >= g_optionPreviewPanelCount)
+        return;
     if (g_optionPreviewPanels[(signed char)g_selectedOptionPreviewPanel].active == 0) {
         if ((signed char)g_selectedOptionPreviewPanel != param_1) {
             param_1 = param_1 % g_optionPreviewPanelCount;

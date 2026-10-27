@@ -212,6 +212,12 @@ target_include_directories(amiga_save_slot_test PRIVATE
 target_compile_options(amiga_save_slot_test PRIVATE -malign-int)
 opencmr2_amiga_stack(amiga_save_slot_test)
 
+# M3.1: real 68060 BE/alignment coverage for the C3D header and payload.
+# The host forced-swap test is only a branch test.
+add_executable(amiga_c3d_header_test ${PROJECT_SOURCE_DIR}/tests/amiga/c3d_header_test.cpp)
+target_include_directories(amiga_c3d_header_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_c3d_header_test)
+
 add_executable(amiga_menu_layout_test ${PROJECT_SOURCE_DIR}/tests/amiga/menu_layout_test.cpp)
 target_link_libraries(amiga_menu_layout_test PRIVATE opencmr2_domain_a)
 target_include_directories(amiga_menu_layout_test PRIVATE

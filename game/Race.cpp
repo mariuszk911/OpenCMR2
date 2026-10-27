@@ -17,6 +17,7 @@
 #include "Frontend.h"
 #include "Graphics.h"
 #include "StageTiming.h"
+#include "TrackCollisionData.h"
 #include "GenericFileLoader.h"
 #include "FileBuffer.h"
 #include "Input.h"
@@ -3683,6 +3684,15 @@ void Race_LoadHPCData(void)
 {
     BYTE *pData;
 
+    // PORT: AMIGA: drop the previous stage's HPC views before a new lookup.
+    g_trackVertexCountRecord = NULL;
+    g_trackCollisionHeader = NULL;
+    g_trackTriangles = NULL;
+    g_trackVertices = NULL;
+    g_trackTriangleIndices = NULL;
+    g_trackGridColumns = NULL;
+    g_trackGridRows = NULL;
+    g_trackTriangleListCount = NULL;
     sprintf(CFrontend::m_stringDest, g_strHpcFormat, GameMenu_GetChampionshipTransitionState());
     pData = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(), CFrontend::m_stringDest,
                                                  0, 0, 0);

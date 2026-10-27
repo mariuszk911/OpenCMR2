@@ -9,6 +9,8 @@
 #include "Mesh.h"
 #include "MeshCollisionRecord.h"
 #include "FileBuffer.h"
+#include "port/c3d_header.h"
+#include "port/c3d_payload.h"
 #include "port/disk_layouts.h"
 #include "port/sys.h"
 
@@ -103,6 +105,29 @@ struct C3DFileHeader {
     BYTE reserved[6];
 };
 
+// PORT: AMIGA: pin the byte-level decode to this file-header struct.
+static_assert(sizeof(MeshFileHeader) == C3D_HEADER_SIZE, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, textureFile) == 0x04, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, field_0x8) == 0x08, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, field_0xc) == 0x0c, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, field_0x10) == 0x10, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, field_0x14) == 0x14, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, nodeCount) == 0x18, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, meshCount) == 0x1a, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, objectCount) == 0x1c, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, sectorCount) == 0x1e, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, triangleCount) == 0x20, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, field_0x24) == 0x24, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, recordCount) == 0x26, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, partCount) == 0x28, "C3D header layout drifted");
+static_assert(offsetof(MeshFileHeader, field_0x2c) == 0x2c, "C3D header layout drifted");
+static_assert(sizeof(MeshTriangle) == C3D_TRIANGLE_SIZE, "C3D triangle layout drifted");
+static_assert(offsetof(MeshTriangle, flags) == 0x00, "C3D triangle layout drifted");
+static_assert(offsetof(MeshTriangle, textures) == 0x04, "C3D triangle layout drifted");
+static_assert(offsetof(MeshTriangle, field_0x2c) == 0x2c, "C3D triangle layout drifted");
+static_assert(offsetof(MeshTriangle, field_0x30) == 0x30, "C3D triangle layout drifted");
+static_assert(offsetof(MeshTriangle, vertexIndex) == 0x40, "C3D triangle layout drifted");
+
 
 // Relocates the stage mesh file: turns the offsets stored in the node, mesh,
 // object and sector records into pointers, registers them in the scene node,
@@ -112,30 +137,53 @@ struct C3DFileHeader {
 // objects, sectors and collision records hold pointers, which do not fit the
 // file's 32-bit offsets on 64-bit targets, so they are copied to native
 // storage (port/disk.h) that lives as long as the file buffer, on every
-// target; the pointer-free arrays (triangles, vertices, light levels, vertex
-// flags) stay in the file. Registration order and the -1 = none rule are the
-// original's.
+// target. The pointer-free arrays (triangles, vertices, light levels, vertex
+// flags) are also copied to native storage because they contain little-endian
+// scalars. Registration order and the -1 = none rule are the original's.
 // FUNCTION: CMR2 0x004b93c0
 void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *archive)
 {
-    MeshFileHeader *pHeader = (MeshFileHeader *)pData;
-    unsigned int nodeCount = pHeader->nodeCount;
-    unsigned int meshCount = pHeader->meshCount;
-    unsigned int objectCount = pHeader->objectCount;
-    unsigned int sectorCount = pHeader->sectorCount;
-    unsigned int recordCount = pHeader->recordCount;
-    unsigned int triangleCount = (unsigned int)pHeader->triangleCount;
+    // PORT: AMIGA: the C3D header is little-endian and can be unaligned inside
+    // the BFL member. Decode it before using any count or offset; reading the
+    // struct in place crashes on the 68060.
+    C3DHeaderValues header;
+    if (!C3DHeader_Decode(pData, &header)) {
+        Sys_Log("stage: invalid C3D header");
+        return NULL;
+    }
+    unsigned int nodeCount = header.nodeCount;
+    unsigned int meshCount = header.meshCount;
+    unsigned int objectCount = header.objectCount;
+    unsigned int sectorCount = header.sectorCount;
+    unsigned int recordCount = header.recordCount;
+    unsigned int triangleCount = header.triangleCount;
+    if (triangleCount > (size_t)-1 / sizeof(MeshTriangle) ||
+        header.vertexCount > (size_t)-1 / 0x30 ||
+        header.vertexFlagCount > (size_t)-1 / 0x14) {
+        Sys_Log("stage: C3D array size overflows");
+        return NULL;
+    }
     BYTE *pNodeFile = pData + sizeof(MeshFileHeader);
     BYTE *pMeshFile = pNodeFile + nodeCount * g_diskLayout_SceneNode.diskSize;
     BYTE *pObjectFile = pMeshFile + (meshCount + objectCount) * g_diskLayout_Mesh.diskSize;
     BYTE *pSectorFile = pObjectFile + objectCount * g_diskLayout_StageObject.diskSize;
-    BYTE *pTriangles = pSectorFile + sectorCount * g_diskLayout_Sector.diskSize + pHeader->partCount * 0x1c;
-    BYTE *pVertexData = pTriangles + triangleCount * sizeof(MeshTriangle);
-    BYTE *pLightLevels = pVertexData + pHeader->field_0x14 * 0x30;
-    BYTE *pVertexFlags = pLightLevels + pHeader->field_0x14 * 4;
-    BYTE *pRecordFile = pVertexFlags + pHeader->field_0x10 * 0x14;
+    BYTE *pTrianglesFile = pSectorFile + sectorCount * g_diskLayout_Sector.diskSize + header.partCount * 0x1c;
+    BYTE *pVertexDataFile = pTrianglesFile + triangleCount * sizeof(MeshTriangle);
+    BYTE *pLightLevelsFile = pVertexDataFile + header.vertexCount * 0x30;
+    BYTE *pVertexFlagsFile = pLightLevelsFile + header.vertexCount * 4;
+    BYTE *pRecordFile = pVertexFlagsFile + header.vertexFlagCount * 0x14;
     BYTE *pEnd = pRecordFile + recordCount * g_diskLayout_MeshCollisionRecord.diskSize;
-    char *textureRecords = (char *)pData + pHeader->field_0xc;
+    char *textureRecords = (char *)pData + header.textureNamesOffset;
+    const uint64_t triangleBytes = ((uint64_t)triangleCount * sizeof(MeshTriangle) + 7) & ~(uint64_t)7;
+    const uint64_t vertexBytes = ((uint64_t)header.vertexCount * 0x30 + 7) & ~(uint64_t)7;
+    const uint64_t lightBytes = ((uint64_t)header.vertexCount * 4 + 7) & ~(uint64_t)7;
+    const uint64_t flagBytes = ((uint64_t)header.vertexFlagCount * 0x14 + 7) & ~(uint64_t)7;
+    const uint64_t payloadBytes = triangleBytes + vertexBytes + lightBytes + flagBytes;
+    BYTE *pPayload;
+    MeshTriangle *pTriangles;
+    BYTE *pVertexData;
+    int *pLightLevels;
+    BYTE *pVertexFlags;
     size_t nodeBytes = (nodeCount * sizeof(SceneNode) + 7) & ~(size_t)7;
     size_t meshBytes = ((meshCount + objectCount) * sizeof(Mesh) + 7) & ~(size_t)7;
     size_t objectBytes = (objectCount * sizeof(StageObject) + 7) & ~(size_t)7;
@@ -150,8 +198,28 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
     unsigned int i;
     unsigned int k;
 
+    if (payloadBytes > (uint64_t)(size_t)-1) {
+        Sys_Log("stage: C3D payload size overflows");
+        return NULL;
+    }
+    pPayload = (BYTE *)CFileBuffer::AllocateLockedBuffer((size_t)payloadBytes);
+    if (pPayload == NULL) {
+        Sys_Log("stage: cannot allocate %lu bytes for the C3D payload",
+                (unsigned long)payloadBytes);
+        return NULL;
+    }
+    Disk_AttachToBuffer(pData, pPayload);
+    pTriangles = (MeshTriangle *)pPayload;
+    pVertexData = pPayload + (size_t)triangleBytes;
+    pLightLevels = (int *)(pPayload + (size_t)(triangleBytes + vertexBytes));
+    pVertexFlags = pPayload + (size_t)(triangleBytes + vertexBytes + lightBytes);
+
     pNative = (BYTE *)CFileBuffer::AllocateLockedBuffer(
         nodeBytes + meshBytes + objectBytes + sectorBytes + recordCount * sizeof(MeshCollisionRecord) + 8);
+    if (pNative == NULL) {
+        Sys_Log("stage: cannot allocate native record storage");
+        return NULL;
+    }
     Disk_AttachToBuffer(pData, pNative);
     pNodes = (SceneNode *)pNative;
     pMeshes = (Mesh *)(pNative + nodeBytes);
@@ -159,15 +227,21 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
     pSectors = (Sector *)(pNative + nodeBytes + meshBytes + objectBytes);
     pRecords = (MeshCollisionRecord *)(pNative + nodeBytes + meshBytes + objectBytes + sectorBytes);
 
-    // Ten texture indices per triangle are moved past the textures already loaded.
+    // Ten texture indices per triangle are moved past the textures already
+    // loaded. Decode the file records first; the native copies are aligned
+    // and host-endian.
     for (i = 0; i < triangleCount; i++) {
-        int *pField = (int *)(pTriangles + i * sizeof(MeshTriangle) + 4);
+        const BYTE *pFile = pTrianglesFile + i * sizeof(MeshTriangle);
+        C3D_DecodeTriangle(&pTriangles[i], pFile);
         for (k = 0; k < 10; k++) {
-            if (pField[k] != -1)
-                pField[k] += (int)CGraphics::m_textureCount;
+            if (pTriangles[i].textures[k] != -1)
+                pTriangles[i].textures[k] += (int)CGraphics::m_textureCount;
         }
     }
-    Graphics_LoadTextureRecordList(pEnd, textureRecords, pHeader->field_0x24, pHeader->textureFile, archive);
+    C3D_DecodeWords(pVertexData, pVertexDataFile, (size_t)header.vertexCount * 0x30);
+    C3D_DecodeWords(pLightLevels, pLightLevelsFile, (size_t)header.vertexCount * 4);
+    C3D_DecodeWords(pVertexFlags, pVertexFlagsFile, (size_t)header.vertexFlagCount * 0x14);
+    Graphics_LoadTextureRecordList(pEnd, textureRecords, header.textureCount, (int)header.textureFile, archive);
 
     savedNodeCount = g_sceneNodeCount;
     for (i = 0; i < nodeCount; i++) {

@@ -524,6 +524,10 @@ int main(int argc, char **argv) {
             const unsigned value = unsigned(atoi(stage)) & 0x1f;
             g_selectedRallyData = (g_selectedRallyData & ~(0x1fu << 5)) | (value << 5);
         }
+        if (const char *country = getenv("OPENCMR2_PROBE_FORCE_COUNTRY")) {
+            const unsigned value = unsigned(atoi(country)) & 0x1f;
+            g_selectedRallyData = (g_selectedRallyData & ~0x1fu) | value;
+        }
         // Exercise the actual bracket renderer with the existing texture set
         // on a larger display, then continue into a real Rally Challenge race.
         if (probe.challengeWidth && !probe.challengeSizeSet && mode == 3 &&

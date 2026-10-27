@@ -109,6 +109,16 @@ target_compile_options(save_image_disk_be_test PRIVATE
 target_compile_definitions(save_image_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 add_test(NAME save_image_disk_be COMMAND save_image_disk_be_test)
 
+# M3.1: the C3D stage header is little-endian. The forced-swap variant
+# exercises the decoder branch on a little-endian host; real BE/alignment
+# coverage is the amiga_c3d_header_test built for the 68060 target.
+foreach(c3d_variant c3d_header c3d_header_forced)
+    add_executable(${c3d_variant}_test c3d_header.cpp)
+    target_include_directories(${c3d_variant}_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    add_test(NAME ${c3d_variant} COMMAND ${c3d_variant}_test)
+endforeach()
+target_compile_definitions(c3d_header_forced_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # The -malign-int workaround keeps 64-bit division in a Domain B TU; these
 # helpers must be bit-exact against the original expressions.
 add_executable(intdiv_test intdiv.cpp ${PROJECT_SOURCE_DIR}/src/port/intdiv.cpp)

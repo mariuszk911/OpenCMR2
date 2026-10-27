@@ -4084,6 +4084,13 @@ void RallyData_SetupWeatherTextureEntries(void)
     int index;
     int i;
 
+    // PORT: AMIGA: the weather atlas can fail to load; do not read its
+    // dimensions through a NULL texture.
+    if (g_weatherMaps.mainMap == NULL) {
+        g_unk0x0082c9e8 = NULL;
+        g_optionPreviewPanelCount = 0;
+        return;
+    }
     g_unk0x0082c9e8 = g_weatherMaps.mainMap;
     g_optionPreviewExpandedRect[0] = 0x1c;
     g_optionPreviewExpandedRect[1] = 0x72;
@@ -4114,6 +4121,11 @@ void RallyData_SetupWeatherTextureEntries(void)
         // panel. Clamp to the maps loaded for this rally group.
         index = WeatherMap_Index(RallyDataStageIndex(), i,
                                  (int)(g_weatherMaps.count & 0xff));
+        if (g_weatherMaps.maps[index] == NULL) {
+            pEntry->texture = NULL;
+            pEntry->count = 0;
+            continue;
+        }
         pEntry->texture = g_weatherMaps.maps[index];
         pEntry->count = g_weatherMaps.slots[index];
         pEntry->srcX1 = g_weatherMaps.rects[index * 2] + g_optionPreviewExpandedRect[0];
@@ -6726,6 +6738,9 @@ void RallyData_QueueSelectedCarSplitPanel(void)
     short src[4];
     if (g_selectedOptionPreviewPanel != 0xff) {
         FixInterp *pEntry = g_optionPreviewPanels + (signed char)g_selectedOptionPreviewPanel;
+        // PORT: AMIGA: a failed panel map has no rectangle to queue.
+        if (pEntry->texture == NULL)
+            return;
         int start = pEntry->dstX1 << 16;
         int end = (pEntry->dstX2 + pEntry->dstX1) << 16;
         int first = FixDiv(start - (g_optionPreviewExpandedRect[0] << 16), g_optionPreviewExpandedRect[2] << 16);
@@ -6917,9 +6932,14 @@ void RallyData_DrawCarSplitTimePanels(void)
     int grow;
     short rect[4];
 
-    if (g_selectedOptionPreviewPanel == 0xff)
+    if (g_optionPreviewPanelCount <= 0 ||
+        (signed char)g_selectedOptionPreviewPanel < 0 ||
+        (signed char)g_selectedOptionPreviewPanel >= g_optionPreviewPanelCount)
         return;
     p = g_optionPreviewPanels + (signed char)g_selectedOptionPreviewPanel;
+    // PORT: AMIGA: a missing weather map must not feed zero sizes to FixDiv.
+    if (p->texture == NULL || p->srcX2 == 0 || p->srcY2 == 0)
+        return;
     alpha = 0xff0000 - FixMul(p->current, 0xff0000);
     *(int *)&colour[0] = g_unk0x005270ec;
     *(int *)&colour[8] = g_unk0x005270f0;
@@ -6934,6 +6954,8 @@ void RallyData_DrawCarSplitTimePanels(void)
     for (i = 0; i < g_optionPreviewPanelCount; i++) {
         pEntry = g_optionPreviewPanels + i;
         if (i == (signed char)g_selectedOptionPreviewPanel)
+            continue;
+        if (pEntry->texture == NULL || pEntry->srcX2 == 0 || pEntry->srcY2 == 0)
             continue;
         rect[0] = (short)(p->dstX1 + (FixMul((pEntry->srcX1 - p->srcX1) << 16, scaleX) >> 16));
         rect[1] = (short)(p->dstY1 + (FixMul(scaleY, (pEntry->srcY1 - p->srcY1) << 16) >> 16));
@@ -7045,7 +7067,7 @@ void RallyData_DrawCarSplitTimesPanel(int param1)
     *(int *)textColour = g_unk0x005270fc;
     *(int *)shadowColour = g_unk0x00527100;
     colour[3] = (BYTE)(FixMul(pEntry->current, 0xff0000) >> 16);
-    if (pEntry->current == 0)
+    if (pEntry->current == 0 || pEntry->texture == NULL)
         return;
     *(int *)&src[0] = *(int *)&pEntry->texture->field_0x11c;
     *(int *)&src[2] = *(int *)&pEntry->texture->width;

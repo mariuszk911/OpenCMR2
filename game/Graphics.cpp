@@ -1243,8 +1243,23 @@ RenderTexture *CGraphics::CreateCubeMapSurfaces(RenderTexture *pTexture)
 
     pTexture->faces[0].pSurface = Gfx_CreateTexture(m_cubeMapSize, m_cubeMapSize, m_pTextureManager->textureInfo1->gfxFormat, 1,
                                                     GFX_TEXTURE_RENDER_TARGET | GFX_TEXTURE_CUBE);
-    for (i = 1; i < 6; i++)
+    // PORT: AMIGA: a failed cube face must not be used as a render target.
+    if (pTexture->faces[0].pSurface == NULL) {
+        Sys_Log("graphics: cannot allocate the %dx%d reflection cube map",
+                (unsigned)m_cubeMapSize, (unsigned)m_cubeMapSize);
+        return NULL;
+    }
+    for (i = 1; i < 6; i++) {
         pTexture->faces[i].pSurface = Gfx_GetCubeFace(pTexture->faces[0].pSurface, i);
+        if (pTexture->faces[i].pSurface == NULL) {
+            Sys_Log("graphics: cannot create reflection cube face %d", i);
+            for (int j = 0; j < i; j++) {
+                Gfx_DestroyTexture(pTexture->faces[j].pSurface);
+                pTexture->faces[j].pSurface = NULL;
+            }
+            return NULL;
+        }
+    }
     for (i = 0; i < 6; i++)
         pTexture->pZBuffers[i] = NULL;
     return pTexture;
@@ -1729,10 +1744,22 @@ void CGraphics::GenerateBumpMap(Texture *pSrc, Texture *pDst)
     BYTE *pOut;
     WORD *pOut16;
 
+    if (pSrc == NULL || pDst == NULL || pSrc->pSurface == NULL || pDst->pSurface == NULL)
+        return;
+    // PORT: AMIGA: a failed lock leaves the descriptors zero; never read the
+    // source through a NULL pointer.
     memset(&srcDesc, 0, sizeof(srcDesc));
     memset(&dstDesc, 0, sizeof(dstDesc));
-    Gfx_LockTexture(pSrc->pSurface, 0, 0, &srcDesc);
-    Gfx_LockTexture(pDst->pSurface, 0, 0, &dstDesc);
+    const bool srcLocked = Gfx_LockTexture(pSrc->pSurface, 0, 0, &srcDesc) != 0;
+    const bool dstLocked = Gfx_LockTexture(pDst->pSurface, 0, 0, &dstDesc) != 0;
+    if (!srcLocked || !dstLocked) {
+        if (srcLocked)
+            Gfx_UnlockTexture(pSrc->pSurface, 0, 0);
+        if (dstLocked)
+            Gfx_UnlockTexture(pDst->pSurface, 0, 0);
+        Sys_Log("graphics: cannot lock bump-map textures");
+        return;
+    }
 
     if (dstDesc.format.bitsPerPixel != 16 && dstDesc.format.bitsPerPixel != 24 &&
         dstDesc.format.bitsPerPixel != 32) {
@@ -2173,8 +2200,12 @@ void Graphics_ReloadAllTextures(void)
             }
         }
     }
-    for (i = 0; i < CGraphics::m_unk0x0065fa28; i++)
-        CGraphics::CreateCubeMapSurfaces((RenderTexture *)CGraphics::m_pTextureManager->textureBuffer2[i]);
+    // PORT: AMIGA: a failed cube face leaves an unusable slot; do not leave
+    // the reload pass believing every face was recreated.
+    for (i = 0; i < CGraphics::m_unk0x0065fa28; i++) {
+        if (CGraphics::CreateCubeMapSurfaces((RenderTexture *)CGraphics::m_pTextureManager->textureBuffer2[i]) == NULL)
+            Sys_Log("graphics: reflection cube %d could not be reloaded", i);
+    }
 }
 
 // Whether a 2D point lies inside a triangle (x0, y0, x1, y1, x2, y2), all
@@ -2436,6 +2467,10 @@ int Graphics_RenderNodeCubeMapFaces(SceneNode *pNode, int bit)
     cubeIndex = (pNodeMesh->flags >> 15) & 7;
     if (CGraphics::m_pTextureManager->textureBuffer2[cubeIndex] == NULL)
         return 1;
+    for (i = 0; i < 6; i++) {
+        if (((RenderTexture *)CGraphics::m_pTextureManager->textureBuffer2[cubeIndex])->faces[i].pSurface == NULL)
+            return 1;
+    }
 
     Graphics_SetShadowGeometryState(1);
     Graphics_SwitchAlphaBlendAndTest(0);
@@ -2610,6 +2645,15 @@ int Graphics_RenderNodeCubeMapFaces(SceneNode *pNode, int bit)
     return 1;
 }
 
+// PORT: AMIGA: a failed image load must release a disk-loaded source buffer;
+// archive sources are owned by the archive (0x1000 is set by
+// CreateTextureFromImageData).
+static void ReleaseTextureSource(Texture *pTexture, void *pData)
+{
+    if (pData != NULL && pTexture != NULL && !(pTexture->flags & 0x1000))
+        CFileBuffer::FreeGenericFileBuffer(pData);
+}
+
 // FUNCTION: CMR2 0x004a6e30
 Texture *CGraphics::LoadDDSTexture(DDSFile *pDDS, Texture *pTexture)
 {
@@ -2658,7 +2702,22 @@ Texture *CGraphics::LoadDDSTexture(DDSFile *pDDS, Texture *pTexture)
     else
         format = header.ddpfPixelFormat.dwRGBAlphaBitMask != 0 ? GFX_FORMAT_BGRA8 : GFX_FORMAT_BGRX8;
     pTemp = Gfx_CreateTexture(header.dwWidth, header.dwHeight, format, 1, GFX_TEXTURE_STAGING);
-    Gfx_LockTexture(pTemp, 0, 0, &desc);
+    // PORT: AMIGA: a failed staging allocation must not fall through to a
+    // memcpy through an unlocked descriptor.
+    if (pTemp == NULL) {
+        Sys_Log("graphics: cannot allocate a %ldx%ld DDS staging texture",
+                (long)header.dwWidth, (long)header.dwHeight);
+        ReleaseTextureSource(pTexture, pDDS);
+        return NULL;
+    }
+    memset(&desc, 0, sizeof(desc));
+    if (!Gfx_LockTexture(pTemp, 0, 0, &desc)) {
+        Sys_Log("graphics: cannot lock a %ldx%ld DDS staging texture",
+                (long)header.dwWidth, (long)header.dwHeight);
+        Gfx_DestroyTexture(pTemp);
+        ReleaseTextureSource(pTexture, pDDS);
+        return NULL;
+    }
     pSrc = pDDS->data;
     if (header.dwFlags & DDS_LINEARSIZE) {
         memcpy(desc.pixels, pSrc, header.dwLinearSize);
@@ -2712,6 +2771,13 @@ Texture *CGraphics::LoadDDSTexture(DDSFile *pDDS, Texture *pTexture)
     } else {
         tmpTexture.pSurface = Gfx_CreateTexture(header.dwWidth, header.dwHeight, m_pTextureManager->textureInfo2->gfxFormat, 1,
                                                 GFX_TEXTURE_STAGING);
+        if (tmpTexture.pSurface == NULL) {
+            Sys_Log("graphics: cannot allocate a %ldx%ld bump source texture",
+                    (long)header.dwWidth, (long)header.dwHeight);
+            Gfx_DestroyTexture(pTemp);
+            ReleaseTextureSource(pTexture, pDDS);
+            return NULL;
+        }
         Gfx_CopyTexture(tmpTexture.pSurface, pTemp);
         CreateTextureSurface(pTexture, header.dwWidth, header.dwHeight, pTexture->flags);
         GenerateBumpMap(&tmpTexture, pTexture);
@@ -3723,7 +3789,6 @@ char g_str0x00521118[4] = "B2";
 // FUNCTION: CMR2 0x004b9910
 void Graphics_LoadTextureRecordList(BYTE *param1, char *param2, unsigned int param3, int param4, GenericFile *archive)
 {
-    unsigned short *pEntry;
     unsigned int remaining;
     char *pName;
     char fileName[260];
@@ -3733,33 +3798,30 @@ void Graphics_LoadTextureRecordList(BYTE *param1, char *param2, unsigned int par
     if (param3 != 0) {
         remaining = param3;
         do {
-            i = 0;
-            if (*(unsigned short *)(param1 + 0xc) > 0) {
-                pEntry = (unsigned short *)(param1 + 0x14);
-                do {
-                    pName = param2 + *pEntry * 0x104;
-                    CGenericFileLoader::StrUpperPolish((BYTE *)pName);
-                    strcpy(CFrontend::m_stringDest, CInstallInfo::GetTexturesDirectory());
-                    // PORT: preserve the variadic ABI (macOS ARM64).
-                    sprintf(fileName, g_fontTgaFormat, CFrontend::m_stringDest,
-                            strchr(pName, '\\') + 1);
-                    if (param4 == 6) {
-                        if (Graphics_FindAndEnsureResidentTexture(fileName) != 0)
-                            goto nextEntry;
-                        if (strncmp(fileName + strlen(fileName) - 6, CGraphics::m_strSuffixBU, 2) != 0 &&
-                            strncmp(fileName + strlen(fileName) - 6, g_str0x00521118, 2) != 0 &&
-                            strncmp(fileName + strlen(fileName) - 6, g_str0x00521114, 2) != 0)
-                            flags = Graphics_HasLocalSuffix(fileName) != 0 ? 0x40 : 0x100;
-                    } else {
-                        flags = param4 != 10 ? 0x90 : 0;
-                    }
-                    CTexture::FindLoadTexture(archive, fileName, 0, 0, 0, flags);
-nextEntry:
-                    pEntry += 4;
-                    i++;
-                } while (i < *(unsigned short *)(param1 + 0xc));
+            // PORT: AMIGA: the record count and name indices are little-endian
+            // and the record can be unaligned inside the C3D payload.
+            const unsigned int count = ReadLE16(param1 + 0xc);
+            for (i = 0; i < count; i++) {
+                const unsigned int nameIndex = ReadLE16(param1 + 0x14 + i * 8);
+                pName = param2 + nameIndex * 0x104;
+                CGenericFileLoader::StrUpperPolish((BYTE *)pName);
+                strcpy(CFrontend::m_stringDest, CInstallInfo::GetTexturesDirectory());
+                // PORT: preserve the variadic ABI (macOS ARM64).
+                sprintf(fileName, g_fontTgaFormat, CFrontend::m_stringDest,
+                        strchr(pName, '\\') + 1);
+                if (param4 == 6) {
+                    if (Graphics_FindAndEnsureResidentTexture(fileName) != 0)
+                        continue;
+                    if (strncmp(fileName + strlen(fileName) - 6, CGraphics::m_strSuffixBU, 2) != 0 &&
+                        strncmp(fileName + strlen(fileName) - 6, g_str0x00521118, 2) != 0 &&
+                        strncmp(fileName + strlen(fileName) - 6, g_str0x00521114, 2) != 0)
+                        flags = Graphics_HasLocalSuffix(fileName) != 0 ? 0x40 : 0x100;
+                } else {
+                    flags = param4 != 10 ? 0x90 : 0;
+                }
+                CTexture::FindLoadTexture(archive, fileName, 0, 0, 0, flags);
             }
-            param1 = param1 + 0x10 + i * 8;
+            param1 = param1 + 0x10 + count * 8;
             remaining--;
         } while (remaining != 0);
     }
@@ -4837,9 +4899,10 @@ RenderTexture *Graphics_AllocateCubeMapTextureSlot(void)
         memset(CGraphics::m_pTextureManager->textureBuffer2, 0x9060, 0);
     for (i = 0; i < 0x14; i++) {
         if (CGraphics::m_pTextureManager->textureBuffer2[i] == NULL) {
-            CGraphics::m_pTextureManager->textureBuffer2[i] =
-                (Texture *)CFileBuffer::AllocateLockedBuffer(sizeof(RenderTexture));
-            p = CGraphics::m_pTextureManager->textureBuffer2[i];
+            p = (Texture *)CFileBuffer::AllocateLockedBuffer(sizeof(RenderTexture));
+            if (p == NULL)
+                return NULL;
+            CGraphics::m_pTextureManager->textureBuffer2[i] = p;
             for (j = 0; j < 6; j++) {
                 p[j].textureId = (unsigned short)i;
                 p[j].field_0x11c = 0;
@@ -4847,13 +4910,22 @@ RenderTexture *Graphics_AllocateCubeMapTextureSlot(void)
                 p[j].width = CGraphics::m_cubeMapSize;
                 p[j].height = CGraphics::m_cubeMapSize;
             }
-            if (p == NULL)
-                return NULL;
             CGraphics::m_unk0x0065fa28++;
             break;
         }
     }
-    return CGraphics::CreateCubeMapSurfaces((RenderTexture *)p);
+    if (p == NULL)
+        return NULL;
+    {
+        RenderTexture *result = CGraphics::CreateCubeMapSurfaces((RenderTexture *)p);
+        if (result == NULL) {
+            CFileBuffer::FreeGenericFileBuffer(p);
+            CGraphics::m_pTextureManager->textureBuffer2[i] = NULL;
+            if (CGraphics::m_unk0x0065fa28 > 0)
+                CGraphics::m_unk0x0065fa28--;
+        }
+        return result;
+    }
 }
 
 // GLOBAL: CMR2 0x0067f228
@@ -5993,9 +6065,21 @@ Texture *CGraphics::CreateTextureFromImageData(char *name, void *pData, unsigned
         strncpy(name + strlen(name) - 4, m_ddsExtension, 4);
     sprintf(pTexture->name, name);
     pTexture->flags |= flags | 0x1000;
-    if (isDDS)
-        return LoadDDSTexture((DDSFile *)pData, pTexture);
-    return LoadTGATexture((BYTE *)pData, pTexture);
+    {
+        Texture *result = isDDS ? LoadDDSTexture((DDSFile *)pData, pTexture)
+                                : LoadTGATexture((BYTE *)pData, pTexture);
+        if (result == NULL) {
+            if (pTexture->pSurface != NULL) {
+                Gfx_DestroyTexture(pTexture->pSurface);
+                pTexture->pSurface = NULL;
+            }
+            m_pTextureManager->textureBuffer[i] = NULL;
+            if (m_textureCount > 0)
+                m_textureCount--;
+            CFileBuffer::FreeGenericFileBuffer(pTexture);
+        }
+        return result;
+    }
 }
 
 // Loads a texture by file name, trying the .DDS file first and the .TGA
@@ -6025,26 +6109,52 @@ Texture *CGraphics::LoadDDSThenTGATexture(char *name, unsigned int flags)
         strncpy(pExtension, m_tgaExtension, 4);
         pData = CFileBuffer::GetGenericFileBuffer(name, FALSE);
     }
+    if (pData == NULL)
+        return NULL;
     for (i = 0; i < 0x800; i++) {
         if (m_pTextureManager->textureBuffer[i] == NULL) {
-            m_pTextureManager->textureBuffer[i] = (Texture *)CFileBuffer::AllocateLockedBuffer(sizeof(Texture));
-            pTexture = m_pTextureManager->textureBuffer[i];
+            pTexture = (Texture *)CFileBuffer::AllocateLockedBuffer(sizeof(Texture));
+            if (pTexture == NULL) {
+                // PORT: AMIGA: the disk image is already open; release it.
+                CFileBuffer::FreeGenericFileBuffer(pData);
+                return NULL;
+            }
+            m_pTextureManager->textureBuffer[i] = pTexture;
             pTexture->textureId = i;
             pTexture->pArchive = NULL;
             Frontend_SetObjectField118(pTexture, 0);
-            if (pTexture == NULL)
-                return NULL;
             m_textureCount++;
             break;
         }
     }
+    if (pTexture == NULL) {
+        CFileBuffer::FreeGenericFileBuffer(pData);
+        return NULL;
+    }
     sprintf(pTexture->name, name);
     pTexture->flags |= flags;
-    if ((pTexture->flags & 0x20) && (g_pGraphics->field913_0x3bc & 0x10))
-        return LoadTGABumpMap((BYTE *)pData, pTexture);
-    if (isDDS)
-        return LoadDDSTexture((DDSFile *)pData, pTexture);
-    return LoadTGATexture((BYTE *)pData, pTexture);
+    {
+        Texture *result;
+        if ((pTexture->flags & 0x20) && (g_pGraphics->field913_0x3bc & 0x10)) {
+            result = LoadTGABumpMap((BYTE *)pData, pTexture);
+            if (result == NULL)
+                ReleaseTextureSource(pTexture, pData);
+        } else if (isDDS)
+            result = LoadDDSTexture((DDSFile *)pData, pTexture);
+        else
+            result = LoadTGATexture((BYTE *)pData, pTexture);
+        if (result == NULL) {
+            if (pTexture->pSurface != NULL) {
+                Gfx_DestroyTexture(pTexture->pSurface);
+                pTexture->pSurface = NULL;
+            }
+            m_pTextureManager->textureBuffer[i] = NULL;
+            if (m_textureCount > 0)
+                m_textureCount--;
+            CFileBuffer::FreeGenericFileBuffer(pTexture);
+        }
+        return result;
+    }
 }
 
 // Converts a TGA image into a texture: the pixels (read through
@@ -6087,8 +6197,10 @@ Texture *CGraphics::LoadTGATexture(BYTE *pTGA, Texture *pTexture)
     DWORD *pDst32;
 
     pInfo = ParseTGAHeader(pTGA);
-    if (pInfo == NULL)
+    if (pInfo == NULL) {
+        ReleaseTextureSource(pTexture, pTGA);
         return NULL;
+    }
     if (pInfo->bytesPerPixel == 4)
         pTexture->flags |= 1;
     height = pInfo->height;
@@ -6099,7 +6211,16 @@ Texture *CGraphics::LoadTGATexture(BYTE *pTGA, Texture *pTexture)
     else
         tmpTexture.pSurface = Gfx_CreateTexture(width, height, m_pTextureManager->textureInfo1->gfxFormat, 1, GFX_TEXTURE_STAGING);
     memset(&lockDesc, 0, sizeof(lockDesc));
-    Gfx_LockTexture(tmpTexture.pSurface, 0, 0, &lockDesc);
+    // PORT: AMIGA: same rule for TGA staging textures.
+    if (tmpTexture.pSurface == NULL ||
+        !Gfx_LockTexture(tmpTexture.pSurface, 0, 0, &lockDesc)) {
+        Sys_Log("graphics: cannot create/lock a %ux%u TGA staging texture",
+                width, height);
+        Gfx_DestroyTexture(tmpTexture.pSurface);
+        tmpTexture.pSurface = NULL;
+        ReleaseTextureSource(pTexture, pTGA);
+        return NULL;
+    }
 
     rMask = lockDesc.format.redMask;
     gMask = lockDesc.format.greenMask;
@@ -6188,6 +6309,7 @@ Texture *CGraphics::LoadTGATexture(BYTE *pTGA, Texture *pTexture)
             Gfx_DestroyTexture(pTexture->pSurface);
             pTexture->pSurface = NULL;
         }
+        ReleaseTextureSource(pTexture, pTGA);
         return NULL;
     }
 
@@ -6414,7 +6536,7 @@ Texture *CGraphics::LoadTGABumpMap(BYTE *pTGA, Texture *pTexture)
         }
     }
     Gfx_UnlockTexture(pTexture->pSurface, 0, 0);
-    CFileBuffer::FreeGenericFileBuffer(pTGA);
+    ReleaseTextureSource(pTexture, pTGA);
     return pTexture;
 }
 
@@ -6684,7 +6806,9 @@ int Graphics_ReserveCubeMapsAndLoadEnvironment(char *name, int count, GenericFil
     if ((*(BYTE *)&g_pGraphics->field913_0x3bc & 0x80) != 0 && count > 0) {
         pId = g_carReflectionCubeMaps;
         do {
-            *pId++ = *(unsigned short *)Graphics_AllocateCubeMapTextureSlot();
+            RenderTexture *pCube = Graphics_AllocateCubeMapTextureSlot();
+            // PORT: AMIGA: 0xffffffff is the established "no cube" value.
+            *pId++ = pCube != NULL ? *(unsigned short *)pCube : 0xffffffffu;
         } while (--count != 0);
     }
     pTexture = (unsigned short *)CTexture::FindLoadTexture(pFile, name, NULL, 0, 0, 0x8000);
