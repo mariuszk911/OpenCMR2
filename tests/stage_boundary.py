@@ -3,8 +3,10 @@
 
 Rally stage 3 in a two-panel mode makes RallyData_SetupWeatherTextureEntries
 compute the old maps[4] index for the second preview panel. The probe selects
-Single Rally (two panels) and forces stage 3 before the options screen; run it
-under the linux-debug preset to check the boundary under ASan/UBSan.
+Single Rally (two panels), forces stage 3 before the options screen, and
+expands the preview map so the panel's map texture is used. Pre-fix builds
+segfault here; the fixed build completes. Run it under linux-debug to check
+the boundary under ASan/UBSan.
 """
 import argparse
 import os
@@ -42,7 +44,8 @@ def main():
                    OPENCMR2_HEADLESS="1",
                    OPENCMR2_PROBE_CURSORS="88:1",
                    OPENCMR2_PROBE_EXPECT_STAGE="3",
-                   OPENCMR2_PROBE_FORCE_STAGE="3")
+                   OPENCMR2_PROBE_FORCE_STAGE="3",
+                   OPENCMR2_PROBE_EXPAND_MAP="1")
         try:
             with log.open("w") as output:
                 result = subprocess.run(
