@@ -52,9 +52,6 @@ set_target_properties(cmr2_game PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_include_directories(cmr2_game PUBLIC
     ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
 target_link_libraries(cmr2_game PRIVATE opencmr2_domain_a)
-# Car-menu breadcrumbs are always on for the target while the first-entry
-# menu state is being diagnosed; host builds opt in with the same macro.
-target_compile_definitions(cmr2_game PRIVATE OPENCMR2_MENU_DIAGNOSTICS)
 set_source_files_properties(${GAME_QIFIST_UNITS} TARGET_DIRECTORY cmr2_game
     PROPERTIES COMPILE_DEFINITIONS CMR2_QIFIST)
 
@@ -207,6 +204,14 @@ opencmr2_amiga_stack(amiga_callback_state_test)
 # compiles them through port/menu_layout.h, which declares the bitfields in
 # reverse so GCC's MSB-first allocation stores the original byte
 # (scalar_storage_order does not change bitfield order on GCC 6.5).
+# M1: SaveSlot keeps the MSVC LSB-first bitfield word on 68k; the profile
+# code reads category/car both by name and from the packed slot DWORD.
+add_executable(amiga_save_slot_test ${PROJECT_SOURCE_DIR}/tests/amiga/save_slot_test.cpp)
+target_include_directories(amiga_save_slot_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
+target_compile_options(amiga_save_slot_test PRIVATE -malign-int)
+opencmr2_amiga_stack(amiga_save_slot_test)
+
 add_executable(amiga_menu_layout_test ${PROJECT_SOURCE_DIR}/tests/amiga/menu_layout_test.cpp)
 target_link_libraries(amiga_menu_layout_test PRIVATE opencmr2_domain_a)
 target_include_directories(amiga_menu_layout_test PRIVATE

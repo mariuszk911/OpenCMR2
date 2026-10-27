@@ -1,4 +1,5 @@
 #include "SavedGame.h"
+#include "port/save_slot.h"
 #include "port/sys.h"
 #include "port/disk.h"
 #include "ChampionshipDriver.h"
@@ -255,27 +256,27 @@ BYTE Profile_LoadAndLinkSavedRecord(int param_1, int param_2)
             }
         }
 notfound:
-        SLOT(param_1).category = 0xf;
+        SaveSlot_SetCategory(&SLOT(param_1), 0xf);
         Profile_AssignAvailableCategory(param_1, -1);
         Profile_ResetCategoryData(param_1);
 found:
-        memcpy(&g_saveProfiles[SLOT(param_1).category], pBuffer, sizeof(DriverProfile));
-        g_saveProfiles[SLOT(param_1).category].identifier.counters[2] = 0;
-        g_saveProfiles[SLOT(param_1).category].identifier.counters[1] = 0;
-        g_saveProfiles[SLOT(param_1).category].identifier.counters[0] = 0;
-        SLOT(param_1).car = g_saveProfiles[SLOT(param_1).category].options & 0x1f;
-        SLOT(param_1).bit25 = (g_saveProfiles[SLOT(param_1).category].options & 0x40) >> 6;
-        SLOT(param_1).seconds = 0;
-        SLOT(param_1).bit13 = 1;
+        memcpy(&g_saveProfiles[SaveSlot_GetCategory(&SLOT(param_1))], pBuffer, sizeof(DriverProfile));
+        g_saveProfiles[SaveSlot_GetCategory(&SLOT(param_1))].identifier.counters[2] = 0;
+        g_saveProfiles[SaveSlot_GetCategory(&SLOT(param_1))].identifier.counters[1] = 0;
+        g_saveProfiles[SaveSlot_GetCategory(&SLOT(param_1))].identifier.counters[0] = 0;
+        SaveSlot_SetCar(&SLOT(param_1), g_saveProfiles[SaveSlot_GetCategory(&SLOT(param_1))].options & 0x1f);
+        SaveSlot_SetBit25(&SLOT(param_1), (g_saveProfiles[SaveSlot_GetCategory(&SLOT(param_1))].options & 0x40) >> 6);
+        SaveSlot_SetSeconds(&SLOT(param_1), 0);
+        SaveSlot_SetBit13(&SLOT(param_1), 1);
         SLOT(param_1).time = 0;
-        SLOT(param_1).bits22 = 0;
+        SaveSlot_SetBits22(&SLOT(param_1), 0);
         CFileBuffer::FreeGenericFileBuffer(pBuffer);
         return 1;
 matched:
         // the search loop's result: a match at a valid index, else the not-found path
         if (i == 0xffffffff)
             goto notfound;
-        SLOT(param_1).category = i;
+        SaveSlot_SetCategory(&SLOT(param_1), i);
         goto found;
     }
     return 0;
@@ -344,7 +345,7 @@ void Profile_AssignAvailableCategory(int index, int profile)
     }
     if (c < 4 && c != -1) {
         for (i = 0; i < index; i++) {
-            if ((g_saveSlots[i].category) == (unsigned int)c)
+            if ((SaveSlot_GetCategory(&g_saveSlots[i])) == (unsigned int)c)
                 c = -1;
         }
         if (c != -1) {
@@ -356,7 +357,7 @@ void Profile_AssignAvailableCategory(int index, int profile)
     for (c = 0; c < 4; c++) {
         free[count] = -1;
         for (pRec = g_saveSlots; pRec < g_saveSlots + 16; pRec++) {
-            if (pRec->category == (unsigned int)c)
+            if (SaveSlot_GetCategory(pRec) == (unsigned int)c)
                 break;
         }
         if (pRec >= g_saveSlots + 16) {
@@ -399,7 +400,7 @@ void Profile_ResetCategoryData(int index)
     unsigned int category;
 
     RallyData_ValidateIndex(index);
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     memset(&g_saveProfiles[category], 0, sizeof(DriverProfile));
     g_saveProfiles[category].car = 4;
     g_saveProfiles[category].identifier.flags =
@@ -408,7 +409,7 @@ void Profile_ResetCategoryData(int index)
     g_saveProfiles[category].awards = 0xf11;
     g_saveProfiles[category].hudFlags = (g_saveProfiles[category].hudFlags & 0xfc) | 0x3c;
     RallyData_SetPlayerDefaultCarSetup(index);
-    g_saveDirty[(g_saveSlots[index].category)] = 0;
+    g_saveDirty[(SaveSlot_GetCategory(&g_saveSlots[index]))] = 0;
 }
 
 // Reads the profile file and copies its identifier (offset 0x10) into *pOut.

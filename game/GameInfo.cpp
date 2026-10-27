@@ -26,6 +26,7 @@ inline int OptionMenu_AddPackedScreenRectangleWords(int *pWords)
 #include "Sound.h"
 #include "RallyData.h"
 #include "SavedGame.h"
+#include "port/save_slot.h"
 #include "NetPlayers.h"
 
 #include <stdio.h>
@@ -10432,8 +10433,8 @@ BYTE SavedGames_WriteSessionImage(int index, const char *name)
     {
     for (int i = 0; i < 16; i++) {
         const SaveSlot &slot = *(const SaveSlot *)RallyData_GetDriverEntryRecord(i);
-        image.drivers[i].car = slot.car;
-        image.drivers[i].seconds = slot.seconds;
+        image.drivers[i].car = SaveSlot_GetCar(&slot);
+        image.drivers[i].seconds = SaveSlot_GetSeconds(&slot);
         image.drivers[i].time = slot.time;
         image.tieBreak[i] = (BYTE)RallyTiming_GetStageTieBreak(i);
     }

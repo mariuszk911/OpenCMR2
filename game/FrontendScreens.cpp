@@ -1,4 +1,5 @@
 #include "SavedGame.h"
+#include "port/save_slot.h"
 #include "port/sys.h"
 #include "ChampionshipDriver.h"
 #include "Frontend.h"
@@ -61,21 +62,6 @@ int g_creditsStartTime;
 // GLOBAL: CMR2 0x008196e8
 int g_screenPaletteIds[23];
 
-#if defined(OPENCMR2_MENU_DIAGNOSTICS)
-// PORT: AMIGA: one-shot diagnostics for car setup texture selection/binding
-// and the layer-1 progress-bar triangles. Armed only when the cursor changes.
-Texture *g_carSetupDiagnosticTextures[3];
-unsigned int g_carSetupDiagnosticTextureMask;
-unsigned int g_carSetupDiagnosticProgressStart;
-unsigned int g_carSetupDiagnosticProgressEnd;
-unsigned int g_carSetupDiagnosticProgressBarsRemaining;
-int g_carSetupDiagnosticProgressFlushPending;
-
-// PORT: AMIGA: entry sequence correlates menu initialization with its first draw.
-static unsigned int s_carMenuEntrySequence;
-static unsigned int s_carMenuDrawnSequence = 0xffffffffu;
-static int s_carMenuPlayerIndex = -1;
-#endif
 
 // GLOBAL: CMR2 0x00819864
 BYTE g_unk0x00819864;
@@ -3691,30 +3677,12 @@ void FrontendScroller_InitRallyStageSelection(Menu *pMenu, int param)
         if (player < 0 || player >= 16)
             player = 0;
         memcpy(&rawSlot, &g_saveSlots[player], sizeof(rawSlot));
-        Sys_Log("AMIGA: car-init slot player=%d raw=%08lx category=%d",
-                player, (unsigned long)rawSlot, (int)g_saveSlots[player].category);
-        if (g_saveSlots[player].category < 4)
-            Sys_Log("AMIGA: car-init profile awards=%08lx",
-                    (unsigned long)g_saveProfiles[g_saveSlots[player].category].awards);
         if ((rawSlot & 0x3c0000) == 0x3c0000) {
             Profile_AssignAvailableCategory(player, -1);
             Profile_ResetCategoryData(player);
             RallyData_SetPlayerProfileInUse(player, 0);
             memcpy(&rawSlot, &g_saveSlots[player], sizeof(rawSlot));
-            Sys_Log("AMIGA: car-init default profile assigned player=%d raw=%08lx category=%d",
-                    player, (unsigned long)rawSlot, (int)g_saveSlots[player].category);
         }
-    }
-#endif
-#if defined(OPENCMR2_MENU_DIAGNOSTICS)
-    // PORT: AMIGA: identify each car-menu initialization and player context.
-    if (pMenu == FrontendMenu_GetCarSetup()) {
-        s_carMenuEntrySequence++;
-        s_carMenuPlayerIndex = CGameInfo::GetConfiguredPlayerCount() - g_profilePlayersRemaining - 1;
-        Sys_Log("AMIGA: car-init begin seq=%u menu=%08lx param=%d player=%d players=%d remaining=%d res=%dx%d",
-                s_carMenuEntrySequence, (unsigned long)pMenu, param, s_carMenuPlayerIndex,
-                CGameInfo::GetConfiguredPlayerCount(), (int)g_profilePlayersRemaining,
-                g_pGraphics->resX, g_pGraphics->resY);
     }
 #endif
     Frontend_SetOverlayMode(CGameInfo::GetConfiguredPlayerCount() - g_profilePlayersRemaining - 1);
@@ -3751,23 +3719,6 @@ void FrontendScroller_InitRallyStageSelection(Menu *pMenu, int param)
         pWidths++;
         p++;
     }
-#if defined(OPENCMR2_MENU_DIAGNOSTICS)
-    if (pMenu == FrontendMenu_GetCarSetup()) {
-        Sys_Log("AMIGA: car-init map seq=%u itemCount=%d cursor=%d scroller(count=%d spacing=%d current=%d previous=%d offset=%d start=%d time=%d) globals(selection=%d time=%d)",
-                s_carMenuEntrySequence, pMenu->itemCount, pMenu->cursor,
-                pScroller->count, pScroller->spacing, pScroller->current,
-                pScroller->previous, pScroller->offset, pScroller->startOffset,
-                pScroller->startTime, g_scrollerSelection, g_scrollerSelectionTimestamp);
-        for (i = 0; i < count; ++i) {
-            strcpy(CFrontend::m_stringDest, CFrontend::GetTextString(pMenu->items[i].id));
-            CGenericFileLoader::StrLowerPolish(CFrontend::m_stringDest);
-            Sys_Log("AMIGA: car-init item seq=%u index=%d id=%d palette=%d width=%d text=%.48s",
-                    s_carMenuEntrySequence, i, pMenu->items[i].id,
-                    g_screenPaletteIds[i], g_menuScroller0x00819230.widths[i],
-                    CFrontend::m_stringDest);
-        }
-    }
-#endif
 }
 
 void GameInfo_ResetSessionTimestamp(void);
@@ -6164,9 +6115,6 @@ int FrontendDraw_ModeProgressBar(int param_1, int param_2, int param_3, int para
     int x;
     int step;
     int scale;
-#if defined(OPENCMR2_MENU_DIAGNOSTICS)
-    unsigned int triangleStart;
-#endif
 
     rect[1] = param_2;
     rect[2] = (int)(g_pGraphics->resX * 8) / 640;
@@ -6175,9 +6123,6 @@ int FrontendDraw_ModeProgressBar(int param_1, int param_2, int param_3, int para
     rect[0] = (short)(x >> 16);
     scale = 0xa0000;
     step = FixMul(g_pGraphics->resX << 16, FixDiv(scale, 0x2800000));
-#if defined(OPENCMR2_MENU_DIAGNOSTICS)
-    triangleStart = g_tri2DCount1;
-#endif
     for (i = 0; i < param_3; i++) {
         if (i < param_4)
             Sprite_FillRect(&g_pGraphics->field309_0x150, rect, g_colourWhite0x00524968, 1);
@@ -6186,22 +6131,6 @@ int FrontendDraw_ModeProgressBar(int param_1, int param_2, int param_3, int para
         x += step;
         rect[0] = (short)(x >> 16);
     }
-#if defined(OPENCMR2_MENU_DIAGNOSTICS)
-    // PORT: AMIGA: capture both bar coordinates and queued layer-1 triangles
-    // only on the selection change armed by FrontendMenu_DrawCarSetup.
-    if (param_5 != NULL && g_carSetupDiagnosticProgressBarsRemaining != 0) {
-        if (g_carSetupDiagnosticProgressBarsRemaining == 2)
-            g_carSetupDiagnosticProgressStart = triangleStart;
-        g_carSetupDiagnosticProgressEnd = g_tri2DCount1;
-        Sys_Log("AMIGA: car bar label=%s screen=%dx%d start=%d,%d endX=%d rect=%dx%d cells=%d fill=%d queued=%u",
-                param_5, g_pGraphics->resX, g_pGraphics->resY, param_1, param_2,
-                (int)rect[0], (int)rect[2], (int)rect[3], param_3, param_4,
-                g_tri2DCount1 >= triangleStart ? g_tri2DCount1 - triangleStart : 0u);
-        g_carSetupDiagnosticProgressBarsRemaining--;
-        if (g_carSetupDiagnosticProgressBarsRemaining == 0)
-            g_carSetupDiagnosticProgressFlushPending = 1;
-    }
-#endif
     if (param_5 != 0) {
         // PORT: AMIGA: rect[0] is x; treating the first two shorts as an int
         // makes the big-endian low word (y) become Font_DrawText's short x.
@@ -6246,7 +6175,7 @@ void RallyData_SetDriverAutomaticGearbox(BYTE index, BYTE flag)
         *pEntry = ((*pEntry ^ flag) & 1) ^ *pEntry | 2;
         return;
     }
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf) {
         g_saveProfiles[category].options =
             (g_saveProfiles[category].options & 0xffffffdf) | (flag & 1) << 5;
@@ -6269,13 +6198,13 @@ void FrontendChampionship_RestoreStageTimes(void)
 
     for (i = 0; i < (BYTE)CGameInfo::GetConfiguredPlayerCount(); i++) {
         index = 15 - i;
-        RallyTiming_SetStageTimeSeconds(index, g_saveSlots[i].seconds);
+        RallyTiming_SetStageTimeSeconds(index, SaveSlot_GetSeconds(&g_saveSlots[i]));
         RallyTiming_SetOverallTimeRaw(index, g_saveSlots[i].time);
     }
     n = 16 - (BYTE)CGameInfo::GetConfiguredPlayerCount();
     for (i = 0; i < n; i++) {
         index = (BYTE)CGameInfo::GetConfiguredPlayerCount() + i;
-        RallyTiming_SetStageTimeSeconds(i, g_saveSlots[index].seconds);
+        RallyTiming_SetStageTimeSeconds(i, SaveSlot_GetSeconds(&g_saveSlots[index]));
         RallyTiming_SetOverallTimeRaw(i, g_saveSlots[index].time);
     }
     RallyTiming_SortStageAndOverallResults();
@@ -6291,7 +6220,7 @@ bool FrontendProfile_DoesDriverMatchEntry(int param_1, BYTE *param_2)
     DriverProfile *pProfile;
 
     RallyData_ValidateIndex(param_1);
-    category = g_saveSlots[param_1].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[param_1]);
     pProfile = &g_saveProfiles[category];
     CGenericFileLoader::StrLowerPolish((char *)param_2);
     if (strcmp((char *)param_2, pProfile->name) == 0)
@@ -6334,7 +6263,7 @@ void FrontendProfile_SetDateOfBirth(int param_1, unsigned int param_2, unsigned 
     unsigned int colour;
 
     RallyData_ValidateIndex(param_1);
-    category = g_saveSlots[param_1].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[param_1]);
     colour = ((((param_2 & 0x1f) << 8) | (param_3 & 0xf)) << 8) |
              (g_saveProfiles[category].identifier.flags & 0xffe0f0ff);
     g_saveProfiles[category].identifier.flags = ((colour ^ param_4) & 0xff) ^ colour;
@@ -8051,8 +7980,8 @@ unsigned int FrontendProfile_ApplyDriverProfileBlock(const SavedGameImage *pBloc
     {
     for (int i = 0; i < 16; i++) {
         SaveSlot &slot = *(SaveSlot *)RallyData_GetDriverEntryRecord(i);
-        slot.car = image.drivers[i].car;
-        slot.seconds = image.drivers[i].seconds;
+        SaveSlot_SetCar(&slot, image.drivers[i].car);
+        SaveSlot_SetSeconds(&slot, image.drivers[i].seconds);
         slot.time = image.drivers[i].time;
         RallyTiming_SetStageTieBreak(i, image.tieBreak[i]);
     }
@@ -8061,7 +7990,7 @@ unsigned int FrontendProfile_ApplyDriverProfileBlock(const SavedGameImage *pBloc
     for (unsigned i = 0; i < image.options.playerCount; i++) {
         RallyData_SetDriverAutomaticGearbox((BYTE)i, image.drivers[i].entryFlag);
         const SaveSlot &slot = *(const SaveSlot *)RallyData_GetDriverEntryRecord(i);
-        RallyData_SetCategoryAwardBit(i, slot.car);
+        RallyData_SetCategoryAwardBit(i, SaveSlot_GetCar(&slot));
     }
     }
     memcpy(RallyData_GetDriverSettingPair(0), image.settingPairs, sizeof(image.settingPairs));
@@ -10599,20 +10528,6 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
     int grip;
     short height;
     int x;
-#if defined(OPENCMR2_MENU_DIAGNOSTICS)
-    int paletteId;
-    int liveryIndex;
-    Texture *frontTexture;
-    Texture *backTexture;
-    Texture *liveryTexture;
-    unsigned int spriteCountBeforeCarArt;
-    int diagnosticSelectionChanged;
-    MenuScroller *carScroller;
-    int selectedItemId;
-    int selectedWidth;
-    static int previousDiagnosticCursor = -1;
-    static int previousDiagnosticPalette = -1;
-#endif
 
     if (CGameInfo::GetScreenWidth() < 0x400 || CFrontend::IsTextureWidthSupported(0x400) == 0 ||
         CFrontend::IsTextureHeightSupported(0x400) == 0)
@@ -10628,84 +10543,11 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
     names[1] = label;
     FrontendDraw_MenuPath(pMenu, PATH_X(), PATH_Y(), 1, 3, names, 2);
     FrontendDraw_ScrollerRow(FrontendScroller_GetRouteEntryScroller(), 1);
-#if defined(OPENCMR2_MENU_DIAGNOSTICS)
-    paletteId = g_screenPaletteIds[pMenu->cursor];
-    liveryIndex = g_paletteLiveryIndex[paletteId];
-    frontTexture = CFrontend::m_unk0x0081884c[paletteId];
-    backTexture = CFrontend::m_unk0x008182cc[paletteId];
-    liveryTexture = CFrontend::m_unk0x00818530[liveryIndex];
-    carScroller = FrontendScroller_GetRouteEntryScroller();
-    selectedItemId = -1;
-    selectedWidth = -1;
-    if (pMenu->cursor >= 0 && pMenu->cursor < pMenu->itemCount && pMenu->cursor < 22) {
-        selectedItemId = pMenu->items[pMenu->cursor].id;
-        selectedWidth = g_menuScroller0x00819230.widths[pMenu->cursor];
-    }
-    if (pMenu == FrontendMenu_GetCarSetup() && s_carMenuDrawnSequence != s_carMenuEntrySequence) {
-        // PORT: AMIGA: correlate the first draw with the matching init sequence.
-        Sys_Log("AMIGA: car-draw seq=%u player=%d menu=%08lx res=%dx%d items=%d cursor=%d item=%d palette=%d width=%d scroller(count=%d spacing=%d current=%d previous=%d offset=%d start=%d time=%d) globals(selection=%d time=%d)",
-                s_carMenuEntrySequence, s_carMenuPlayerIndex, (unsigned long)pMenu,
-                g_pGraphics->resX, g_pGraphics->resY, pMenu->itemCount, pMenu->cursor,
-                selectedItemId, paletteId, selectedWidth, carScroller->count,
-                carScroller->spacing, carScroller->current, carScroller->previous,
-                carScroller->offset, carScroller->startOffset, carScroller->startTime,
-                g_scrollerSelection, g_scrollerSelectionTimestamp);
-        s_carMenuDrawnSequence = s_carMenuEntrySequence;
-    }
-    diagnosticSelectionChanged = 0;
-    // PORT: AMIGA: capture selected assets only when the menu selection changes.
-    if (pMenu->cursor != previousDiagnosticCursor || paletteId != previousDiagnosticPalette) {
-        if (g_carSetupDiagnosticTextureMask != 0)
-            Sys_Log("AMIGA: car art previous selection stage0 mask=%u", g_carSetupDiagnosticTextureMask);
-        if (g_carSetupDiagnosticProgressFlushPending)
-            Sys_Log("AMIGA: car bars previous selection flush pending range=%u..%u layer1=%u",
-                    g_carSetupDiagnosticProgressStart, g_carSetupDiagnosticProgressEnd, g_tri2DCount1);
-        Sys_Log("AMIGA: car selection cursor=%d palette=%d livery=%d", pMenu->cursor, paletteId, liveryIndex);
-        if (frontTexture != NULL)
-            Sys_Log("AMIGA: car front id=%u name=%.48s size=%dx%d surface=%08lx",
-                    (unsigned int)frontTexture->textureId, frontTexture->name,
-                    (int)frontTexture->width, (int)frontTexture->height,
-                    (unsigned long)frontTexture->pSurface);
-        else
-            Sys_Log("AMIGA: car front texture=NULL");
-        if (backTexture != NULL)
-            Sys_Log("AMIGA: car rear id=%u name=%.48s size=%dx%d surface=%08lx",
-                    (unsigned int)backTexture->textureId, backTexture->name,
-                    (int)backTexture->width, (int)backTexture->height,
-                    (unsigned long)backTexture->pSurface);
-        else
-            Sys_Log("AMIGA: car rear texture=NULL");
-        if (liveryTexture != NULL)
-            Sys_Log("AMIGA: car livery id=%u name=%.48s size=%dx%d surface=%08lx",
-                    (unsigned int)liveryTexture->textureId, liveryTexture->name,
-                    (int)liveryTexture->width, (int)liveryTexture->height,
-                    (unsigned long)liveryTexture->pSurface);
-        else
-            Sys_Log("AMIGA: car livery texture=NULL");
-
-        g_carSetupDiagnosticTextures[0] = frontTexture;
-        g_carSetupDiagnosticTextures[1] = backTexture;
-        g_carSetupDiagnosticTextures[2] = liveryTexture;
-        g_carSetupDiagnosticTextureMask = (frontTexture != NULL ? 1u : 0u) |
-                                          (backTexture != NULL ? 2u : 0u) |
-                                          (liveryTexture != NULL ? 4u : 0u);
-        g_carSetupDiagnosticProgressBarsRemaining = 2;
-        g_carSetupDiagnosticProgressFlushPending = 0;
-        previousDiagnosticCursor = pMenu->cursor;
-        previousDiagnosticPalette = paletteId;
-        diagnosticSelectionChanged = 1;
-    }
-    spriteCountBeforeCarArt = g_spriteCount1;
-#endif
     if (CGameInfo::GetScreenWidth() >= 0x400 && CFrontend::IsTextureWidthSupported(0x400) && CFrontend::IsTextureHeightSupported(0x400))
         height = 0x1ce;
     else
         height = 0xe8;
-#if defined(OPENCMR2_MENU_DIAGNOSTICS)
-    pTexture = frontTexture;
-#else
     pTexture = CFrontend::m_unk0x0081884c[g_screenPaletteIds[pMenu->cursor]];
-#endif
     if (pTexture != NULL) {
         src = *(SpriteRect *)&pTexture->field_0x11c;
         dst = *(SpriteRect *)&pTexture->field_0x11c;
@@ -10717,11 +10559,7 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
         dst.y -= height;
         Sprite_Queue(&src, &dst, pTexture, 1, 0, 0, NULL, g_colourWhite0x00524968, 8);
     }
-#if defined(OPENCMR2_MENU_DIAGNOSTICS)
-    pTexture = backTexture;
-#else
     pTexture = CFrontend::m_unk0x008182cc[g_screenPaletteIds[pMenu->cursor]];
-#endif
     if (pTexture != NULL) {
         src = *(SpriteRect *)&pTexture->field_0x11c;
         dst = *(SpriteRect *)&pTexture->field_0x11c;
@@ -10733,11 +10571,7 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
         dst.y -= height;
         Sprite_Queue(&src, &dst, pTexture, 1, 0, 0, NULL, g_colourWhite0x00524968, 8);
     }
-#if defined(OPENCMR2_MENU_DIAGNOSTICS)
-    pTexture = liveryTexture;
-#else
     pTexture = CFrontend::m_unk0x00818530[g_paletteLiveryIndex[g_screenPaletteIds[pMenu->cursor]]];
-#endif
     if (pTexture != NULL) {
         g_frontendDrawRect[0] = (int)(g_pGraphics->resX * 0x22c) / 0x280;
         g_frontendDrawRect[1] = (int)(g_pGraphics->resY * 0xab) / 0x1e0;
@@ -10748,15 +10582,6 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
         Sprite_Queue((SpriteRect *)pRects[g_screenPaletteIds[pMenu->cursor]], (SpriteRect *)g_frontendDrawRect, pTexture, 1, 0, 0, NULL,
                      g_colourWhite0x00524968, 8);
     }
-#if defined(OPENCMR2_MENU_DIAGNOSTICS)
-    if (diagnosticSelectionChanged) {
-        const unsigned int expectedSprites = (frontTexture != NULL ? 1u : 0u) +
-                                             (backTexture != NULL ? 1u : 0u) +
-                                             (liveryTexture != NULL ? 1u : 0u);
-        Sys_Log("AMIGA: car art sprite queue before=%u after=%u expected=%u",
-                spriteCountBeforeCarArt, g_spriteCount1, expectedSprites);
-    }
-#endif
     FrontendCar_GetClassPerformance(CFrontend::GetArchivePrimaryIDEntry(g_screenPaletteIds[pMenu->cursor]), &speed, &accel, &grip);
     FrontendDraw_ModeProgressBar((int)(g_pGraphics->resX * 500) / 640, (int)(g_pGraphics->resY * 268) / 480, 0xb, speed,
                  CFrontend::GetTextString(0x186));

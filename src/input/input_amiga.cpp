@@ -115,29 +115,9 @@ extern "C" void Input_SetMouseExclusive(InputDevice *device, int exclusive)
 
 extern "C" int Input_ReadKeyboard(InputDevice *device, BYTE keys[256])
 {
-    static int s_lastDown = -1;
-    int down = 0;
-    int i;
-
     if (device == NULL || keys == NULL || device->kind != 1)
         return 0;
     AmigaSys_GetKeyState(keys);
-    for (i = 0; i < 256; i++) {
-        if ((keys[i] & 0x80) != 0)
-            down++;
-    }
-    /* One line per press/release transition, not per frame. */
-    if (down != s_lastDown) {
-        char codes[3 * 256 + 1];
-        int pos = 0;
-        for (i = 0; i < 256; i++) {
-            if ((keys[i] & 0x80) != 0 && pos < (int)sizeof(codes) - 3)
-                pos += sprintf(codes + pos, "%02x", i);
-        }
-        codes[pos] = '\0';
-        Sys_Log("input: keyboard poll %d key(s) down codes=%s", down, down != 0 ? codes : "-");
-        s_lastDown = down;
-    }
     return 1;
 }
 

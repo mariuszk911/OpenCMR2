@@ -1362,10 +1362,6 @@ static int PollEvent(SysEvent *event, int *consumed)
                 s_inputHeld[dik] = 0;
                 Enable();
             }
-            if (dik != 0 && (message->Qualifier & IEQUALIFIER_REPEAT) == 0)
-                Sys_Log("input: rawkey %02lx %s dik %d",
-                        (unsigned long)(message->Code & 0x7f),
-                        (message->Code & 0x80) != 0 ? "up" : "down", dik);
             if (dik != 0 && (message->Code & 0x80) == 0) {
                 if (EnsureKeymap()) {
                     struct InputEvent ie;

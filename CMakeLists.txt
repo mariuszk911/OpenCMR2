@@ -29,7 +29,6 @@ endif()
 
 option(OPENCMR2_SANITIZE "Build with AddressSanitizer and UBSan" OFF)
 option(OPENCMR2_VENDORED_SDL "Download and build SDL3 instead of using an installed one" ${ANDROID})
-option(OPENCMR2_MENU_DIAGNOSTICS "Emit the car-menu entry/binding breadcrumbs (always on for AmigaOS)" OFF)
 option(AMIGAOS "Build the native AmigaOS 68k target" OFF)
 
 # Target identity for the fork-owned platform layer. The host builds leave

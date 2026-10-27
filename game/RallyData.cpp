@@ -1,4 +1,5 @@
 #include "SavedGame.h"
+#include "port/save_slot.h"
 #include "port/sys.h"
 #include "ChampionshipDriver.h"
 #include "ProfileEventResults.h"
@@ -824,7 +825,7 @@ void RallyData_RecordRallyMedal(int index, int country, int place)
     int category;
 
     RallyData_ValidateIndex(index);
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     pMedals = (CategoryMedals *)g_saveProfiles[category].medals;
     medal = 3 - place;
     switch (CGameInfo::GetConfiguredDifficulty()) {
@@ -1019,9 +1020,9 @@ char RallyData_HasOnlySilverMedals(int index)
     CategoryMedals *pMedals;
 
     RallyData_ValidateIndex(index);
-    if (g_saveSlots[index].category == 0xf)
+    if (SaveSlot_GetCategory(&g_saveSlots[index]) == 0xf)
         return 0;
-    pMedals = (CategoryMedals *)g_saveProfiles[g_saveSlots[index].category].medals;
+    pMedals = (CategoryMedals *)g_saveProfiles[SaveSlot_GetCategory(&g_saveSlots[index])].medals;
     if (pMedals->championshipD0 == 2 && pMedals->championshipD1 == 2 && pMedals->championshipD2 == 2 &&
         pMedals->d0i0 == 2 && pMedals->d0i1 == 2 && pMedals->d0i2 == 2 && pMedals->d0i3 == 2 &&
         pMedals->d0i4 == 2 && pMedals->d0i5 == 2 && pMedals->d0i6 == 2 && pMedals->d0i7 == 2 &&
@@ -1392,7 +1393,7 @@ void RallyData_SetEditedDriverOrCategoryName(unsigned int slot, char *pName)
         g_saveCarRecords[slot].flags |= 2;
         return;
     }
-    category = g_saveSlots[slot].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[slot]);
     if (category == 0xf)
         return;
     strcpy(g_saveProfiles[category].identifier.name, pName);
@@ -1412,7 +1413,7 @@ void RallyData_CopyCategoryRecordName(BYTE index, char *name)
     unsigned int category;
 
     RallyData_ValidateIndex(index);
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     strcpy(g_saveProfiles[category].name, name);
     g_saveDirty[category] = 1;
 }
@@ -1490,12 +1491,12 @@ char RallyData_SaveEditedCategoryProfile(int param_1)
 
     RallyData_ValidateIndex(param_1);
     result = 1;
-    category = g_saveSlots[param_1].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[param_1]);
     if ((g_saveProfiles[category].identifier.flags & 0x200000) == 0 &&
         g_saveDirty[category] != 0) {
         result = Profile_WriteSaveFile(0, (BYTE *)&g_saveProfiles[category]);
         if (result != 0)
-            g_saveDirty[(g_saveSlots[param_1].category)] = 0;
+            g_saveDirty[(SaveSlot_GetCategory(&g_saveSlots[param_1]))] = 0;
     }
     return result;
 }
@@ -1507,7 +1508,7 @@ unsigned int RallyData_GetChampionshipMedal(int index, int difficulty)
     CategoryMedals *pMedals;
 
     RallyData_ValidateIndex(index);
-    pMedals = (CategoryMedals *)g_saveProfiles[g_saveSlots[index].category].medals;
+    pMedals = (CategoryMedals *)g_saveProfiles[SaveSlot_GetCategory(&g_saveSlots[index])].medals;
     switch (difficulty) {
     case 0: return pMedals->championshipD0;
     case 1: return pMedals->championshipD1;
@@ -1523,7 +1524,7 @@ unsigned int RallyData_GetRallyMedal(int index, int country, int difficulty)
     CategoryMedals *pMedals;
 
     RallyData_ValidateIndex(index);
-    pMedals = (CategoryMedals *)g_saveProfiles[g_saveSlots[index].category].medals;
+    pMedals = (CategoryMedals *)g_saveProfiles[SaveSlot_GetCategory(&g_saveSlots[index])].medals;
     switch (difficulty) {
     case 0:
         switch (country) {
@@ -1573,7 +1574,7 @@ unsigned int RallyData_GetArcadeMedal(int index, int arcade, int difficulty)
     CategoryMedals *pMedals;
 
     RallyData_ValidateIndex(index);
-    pMedals = (CategoryMedals *)g_saveProfiles[g_saveSlots[index].category].medals;
+    pMedals = (CategoryMedals *)g_saveProfiles[SaveSlot_GetCategory(&g_saveSlots[index])].medals;
     switch (difficulty) {
     case 0:
         return pMedals->arcadeD0;
@@ -1642,7 +1643,7 @@ void RallyData_SetPlayerProfileInUse(BYTE index, char set)
     for (p = 0; p < 4; p++) {                                                     \
         used[p] = 0;                                                              \
         for (pRecord = g_saveSlots; pRecord < g_saveSlots + 4; pRecord++) {          \
-            if (pRecord->category == p) {                                         \
+            if (SaveSlot_GetCategory(pRecord) == p) {                                         \
                 used[p] = 1;                                                      \
                 break;                                                            \
             }                                                                     \
@@ -1957,7 +1958,7 @@ void RallyData_SetDriverCarSelection(BYTE index, int value)
         g_saveCarRecords[index].flags |= 2;
         return;
     }
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf) {
         if ((g_saveProfiles[category].identifier.flags & 0x200000) != 0)
             CGameInfo::SetGameInfoField98(value);
@@ -1975,7 +1976,7 @@ int RallyData_GetDriverCarSelection(BYTE index)
     RallyData_ValidateIndex(index);
     if (CGameInfo::GetConfiguredGameMode() == 4)
         return g_saveCarRecords[index].car;
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf)
         return g_saveProfiles[category].car;
     return 0;
@@ -1986,7 +1987,7 @@ BYTE *RallyData_GetDriverCategoryProfile(int index)
 {
     unsigned int category;
     RallyData_ValidateIndex(index);
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf)
         return (BYTE *)&g_saveProfiles[category];
     return NULL;
@@ -2005,7 +2006,7 @@ void RallyData_SetDriverCameraRecord(BYTE index, ChaseCameraSettings *pValues)
         g_saveCarRecords[index].flags |= 2;
         return;
     }
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf) {
         memcpy(g_saveProfiles[category].chaseCamera, pValues, sizeof(ChaseCameraSettings));
         RallyData_MarkDriverRecordDirty(index);
@@ -2020,7 +2021,7 @@ ChaseCameraSettings *RallyData_GetDriverCameraRecord(BYTE index)
     RallyData_ValidateIndex(index);
     if (CGameInfo::GetConfiguredGameMode() == 4)
         return &g_saveCarRecords[index].chaseCamera;
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf)
         return (ChaseCameraSettings *)g_saveProfiles[category].chaseCamera;
     return NULL;
@@ -2037,7 +2038,7 @@ void RallyData_SetDriverHudFlags(BYTE index, BYTE *pValue)
         g_saveCarRecords[index].hudFlags = *pValue;
         return;
     }
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf)
         g_saveProfiles[category].hudFlags = *pValue;
 }
@@ -2051,7 +2052,7 @@ BYTE *RallyData_GetDriverHudFlags(BYTE index)
     RallyData_ValidateIndex(index);
     if (CGameInfo::GetConfiguredGameMode() == 4)
         return &g_saveCarRecords[index].hudFlags;
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf)
         return &g_saveProfiles[category].hudFlags;
     return NULL;
@@ -2071,7 +2072,7 @@ TyreWear *RallyData_GetDriverTyreWear(BYTE index)
     if (CGameInfo::GetConfiguredGameMode() == 4)
         return &g_saveCarRecords[index].wear;
     RallyData_ValidateIndex(index);
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf)
         return (TyreWear *)g_saveProfiles[category].wear;
     return NULL;
@@ -2085,7 +2086,7 @@ void RallyData_GetDriverDateOfBirth(int index, unsigned int *pHue, unsigned int 
     unsigned int category;
 
     RallyData_ValidateIndex(index);
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf) {
     if (pHue != NULL)
         *pHue = ((g_saveProfiles[category].identifier.flags) >> 16) & 0x1f;
@@ -2141,7 +2142,7 @@ ProfileEventResults *RallyData_GetDriverEventResults(int index)
 {
     unsigned int category;
     RallyData_ValidateIndex(index);
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf)
         return (ProfileEventResults *)g_saveProfiles[category].eventResults;
     return NULL;
@@ -2158,7 +2159,7 @@ void RallyData_MarkDriverRecordDirty(int index)
         g_saveCarRecords[index].flags |= 2;
         return;
     }
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf)
         g_saveDirty[category] = 1;
 }
@@ -2454,7 +2455,7 @@ void *RallyData_GetAssignedCategoryRecord(unsigned int param1)
 {
     unsigned int category;
 
-    category = g_saveSlots[(param1 & 0xff)].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[(param1 & 0xff)]);
     RallyData_ValidateIndex(param1 & 0xff);
     if (category != 0xf)
         return (BYTE *)g_saveProfiles[category].name;
@@ -2522,7 +2523,7 @@ BYTE RallyData_GetDriverAutomaticGearbox(BYTE param1)
         flag &= 1;
         return flag;
     }
-    category = g_saveSlots[param1].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[param1]);
     if (category != 0xf)
         return (g_saveProfiles[category].options >> 5) & 1;
     return 1;
@@ -3839,8 +3840,8 @@ void RallyData_IncrementSelectedCategoryCounters(void)
     if (CGameInfo::GetConfiguredPlayerCount() <= i)
         return;
     do {
-        unsigned int value = g_saveProfiles[g_saveSlots[i].category].options;
-        pEntry = (ProgressFlags *)&g_saveProfiles[g_saveSlots[i].category].options;
+        unsigned int value = g_saveProfiles[SaveSlot_GetCategory(&g_saveSlots[i])].options;
+        pEntry = (ProgressFlags *)&g_saveProfiles[SaveSlot_GetCategory(&g_saveSlots[i])].options;
         if ((value & 0x7f80) < 0x7f80)
             *(unsigned int *)pEntry = value ^ ((value ^ ((value & 0xffffff80) + 0x80)) & 0x7f80);
         i++;
@@ -4142,13 +4143,13 @@ void RallyData_CopyDriverStageTimesToRecords(void)
 
     for (i = 0; i < (BYTE)CGameInfo::GetConfiguredPlayerCount(); i++) {
         index = 15 - i;
-        g_saveSlots[i].seconds = RallyTiming_GetStageTimeSeconds(index);
+        SaveSlot_SetSeconds(&g_saveSlots[i], RallyTiming_GetStageTimeSeconds(index));
         g_saveSlots[i].time = RallyTiming_GetOverallTimeCentiseconds(index);
     }
     n = 16 - (BYTE)CGameInfo::GetConfiguredPlayerCount();
     for (i = 0; i < n; i++) {
         index = (BYTE)CGameInfo::GetConfiguredPlayerCount() + i;
-        g_saveSlots[index].seconds = RallyTiming_GetStageTimeSeconds(i);
+        SaveSlot_SetSeconds(&g_saveSlots[index], RallyTiming_GetStageTimeSeconds(i));
         g_saveSlots[index].time = RallyTiming_GetOverallTimeCentiseconds(i);
     }
 }
@@ -4519,7 +4520,7 @@ void *RallyData_GetRecord(BYTE index)
     if (CGameInfo::GetConfiguredGameMode() == 4)
         return (BYTE *)&g_saveCarRecords[index];
     RallyData_ValidateIndex(index);
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     if (category != 0xf)
         return (BYTE *)g_saveProfiles[category].identifier.name;
     return NULL;
@@ -5369,7 +5370,7 @@ BYTE RallyData_SetCategoryAwardBit(int index, int bit)
     RallyData_ValidateIndex(index);
     if ((*(unsigned int *)&g_saveSlots[index] & 0x3c0000) == 0x3c0000)
         return 0;
-    category = g_saveSlots[index].category;
+    category = SaveSlot_GetCategory(&g_saveSlots[index]);
     mask = 1 << bit;
     if ((mask & g_saveProfiles[category].awards) != 0)
         return 0;
@@ -5388,7 +5389,7 @@ void RallyData_RecordChampionshipMedal(int index, int place)
     unsigned int medal;
 
     RallyData_ValidateIndex(index);
-    pMedals = (CategoryMedals *)g_saveProfiles[g_saveSlots[index].category].medals;
+    pMedals = (CategoryMedals *)g_saveProfiles[SaveSlot_GetCategory(&g_saveSlots[index])].medals;
     medal = 3 - place;
     switch (CGameInfo::GetConfiguredDifficulty()) {
     case 0:
@@ -5588,7 +5589,7 @@ bool RallyData_HasCategoryAward(int index, int bit, char check)
         if (bit == 7 && CGameInfo::IsRecordFlagSet(0x12))
             return true;
     }
-    return (g_saveProfiles[(g_saveSlots[index].category)].awards &
+    return (g_saveProfiles[(SaveSlot_GetCategory(&g_saveSlots[index]))].awards &
             (1 << bit)) ? true : false;
 }
 
@@ -5912,7 +5913,7 @@ void RallyData_RecordArcadeMedal(int index, int arcade, int place)
     unsigned int medal;
 
     RallyData_ValidateIndex(index);
-    pMedals = (CategoryMedals *)g_saveProfiles[g_saveSlots[index].category].medals;
+    pMedals = (CategoryMedals *)g_saveProfiles[SaveSlot_GetCategory(&g_saveSlots[index])].medals;
     medal = 3 - place;
     mode = CGameInfo::GetConfiguredDifficulty();
     switch (mode) {
