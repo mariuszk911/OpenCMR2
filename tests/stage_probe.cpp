@@ -54,6 +54,7 @@ extern int StageTiming_GetCheckpointSplitIndex(int);
 extern BYTE StageTiming_GetCheckpointField19(int);
 extern int StageTiming_GetCarSplitTime(int, int);
 extern CarContact *g_carContacts;
+extern unsigned int g_selectedRallyData;
 // Match the production types: the MSVC ABI includes them in symbol names.
 struct Unk0x00542e78;
 struct CarStageTiming;
@@ -515,6 +516,14 @@ int main(int argc, char **argv) {
         // The dummy driver does not focus windows. This test dispatches frames
         // explicitly, so SDL focus and wall time cannot influence its clock.
         const int mode = CGame::GetFrontendResourceMode();
+        // OPENCMR2_PROBE_FORCE_STAGE: keep a test on a specific rally stage.
+        // The weather preview setup runs on the options screen, so the stage
+        // must be forced before its first frame. Same bitfield as
+        // RallyDataStageIndex().
+        if (const char *stage = getenv("OPENCMR2_PROBE_FORCE_STAGE")) {
+            const unsigned value = unsigned(atoi(stage)) & 0x1f;
+            g_selectedRallyData = (g_selectedRallyData & ~(0x1fu << 5)) | (value << 5);
+        }
         // Exercise the actual bracket renderer with the existing texture set
         // on a larger display, then continue into a real Rally Challenge race.
         if (probe.challengeWidth && !probe.challengeSizeSet && mode == 3 &&
