@@ -23,6 +23,7 @@
 #include <devices/timer.h>
 #include <devices/input.h>
 #include <devices/inputevent.h>
+#include <devices/keymap.h>
 #include <exec/interrupts.h>
 #include <dos/dos.h>
 #include <intuition/intuition.h>
@@ -30,6 +31,7 @@
 #include <proto/dos.h>
 #include <proto/intuition.h>
 #include <proto/timer.h>
+#include <proto/keymap.h>
 
 #include <map>
 #include <new>
@@ -38,9 +40,10 @@
 // proto/timer.h declares these; libnix supplies SysBase and DOSBase.
 struct Device *TimerBase;
 struct IntuitionBase *IntuitionBase;
+struct Library *KeymapBase;
 
 // The IDCMP classes the input pump understands (see Sys_PollEvent).
-static const ULONG kInputIDCMP = IDCMP_RAWKEY | IDCMP_VANILLAKEY | IDCMP_MOUSEMOVE | IDCMP_MOUSEBUTTONS |
+static const ULONG kInputIDCMP = IDCMP_RAWKEY | IDCMP_MOUSEMOVE | IDCMP_MOUSEBUTTONS |
                                  IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW |
                                  IDCMP_ACTIVEWINDOW | IDCMP_INACTIVEWINDOW;
 
@@ -88,6 +91,43 @@ int s_inputDeviceState; /* 0 = not tried, 1 = open, 2 = handler installed, -1 = 
 static int s_inputExitRegistered;
 volatile unsigned char s_inputHeld[256];
 volatile unsigned char s_inputLatch[256];
+
+/* Text input: MapRawKey translates a RAWKEY through the user's keymap. The
+ * resulting characters are queued because Sys_PollEvent returns one event at
+ * a time; Sys_PollEvent/Sys_WaitEvent drain this queue before the IDCMP. */
+static unsigned char s_pendingText[32];
+static unsigned int s_pendingTextCount;
+static int s_keymapTried;
+
+static int EnsureKeymap(void)
+{
+    if (KeymapBase != NULL)
+        return 1;
+    if (!s_keymapTried) {
+        s_keymapTried = 1;
+        KeymapBase = OpenLibrary((STRPTR)"keymap.library", 36);
+        if (KeymapBase == NULL)
+            Sys_Log("keymap.library: OpenLibrary failed; text input unavailable");
+    }
+    return KeymapBase != NULL;
+}
+
+static void QueueTextByte(unsigned char c)
+{
+    if (s_pendingTextCount < sizeof(s_pendingText))
+        s_pendingText[s_pendingTextCount++] = c;
+}
+
+static int TakePendingText(SysEvent *event)
+{
+    if (s_pendingTextCount == 0)
+        return 0;
+    memset(event, 0, sizeof(*event));
+    event->type = SYS_EVENT_TEXT;
+    event->character = s_pendingText[0];
+    memmove(s_pendingText, s_pendingText + 1, --s_pendingTextCount);
+    return 1;
+}
 
 static void ResetKeyState(void)
 {
@@ -1327,18 +1367,28 @@ static int PollEvent(SysEvent *event, int *consumed)
                         (unsigned long)(message->Code & 0x7f),
                         (message->Code & 0x80) != 0 ? "up" : "down", dik);
             if (dik != 0 && (message->Code & 0x80) == 0) {
+                if (EnsureKeymap()) {
+                    struct InputEvent ie;
+                    char text[8];
+                    LONG n;
+                    LONG k;
+                    memset(&ie, 0, sizeof(ie));
+                    ie.ie_Class = IECLASS_RAWKEY;
+                    ie.ie_Code = message->Code & 0x7f;
+                    ie.ie_Qualifier = message->Qualifier;
+                    n = MapRawKey(&ie, text, sizeof(text), NULL);
+                    for (k = 0; k < n; ++k) {
+                        const unsigned char c = (unsigned char)text[k];
+                        if (c >= 0x20 && c != 0x7f)
+                            QueueTextByte(c);
+                    }
+                }
                 event->type = SYS_EVENT_KEY_DOWN;
                 event->key = dik;
                 event->character = 0;
                 event->repeat = (message->Qualifier & IEQUALIFIER_REPEAT) != 0;
                 handled = 1;
             }
-        } else if (messageClass == IDCMP_VANILLAKEY) {
-            event->type = SYS_EVENT_TEXT;
-            event->key = 0;
-            event->character = message->Code;
-            event->repeat = 0;
-            handled = 1;
         }
         ReplyMsg((struct Message *)message);
         if (handled)
@@ -1349,6 +1399,10 @@ static int PollEvent(SysEvent *event, int *consumed)
 
 extern "C" int Sys_PollEvent(SysEvent *event)
 {
+    if (event == NULL)
+        return 0;
+    if (TakePendingText(event))
+        return 1;
     return PollEvent(event, NULL);
 }
 
@@ -1388,6 +1442,8 @@ extern "C" int Sys_WaitEvent(SysEvent *event)
 {
     if (event == NULL)
         return 0;
+    if (TakePendingText(event))
+        return 1;
     if (s_inputWindow == NULL || s_inputWindow->UserPort == NULL) {
         // No MiniGL window yet: idle instead of spinning the event loop.
         Sys_Sleep(20);
@@ -1551,6 +1607,10 @@ extern "C" void AmigaSys_Shutdown(void)
     CloseTime();
     CloseInputState();
     AmigaSys_InputShutdown();
+    if (KeymapBase != NULL) {
+        CloseLibrary(KeymapBase);
+        KeymapBase = NULL;
+    }
     if (IntuitionBase != NULL) {
         CloseLibrary((struct Library *)IntuitionBase);
         IntuitionBase = NULL;

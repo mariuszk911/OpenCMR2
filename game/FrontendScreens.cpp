@@ -3681,6 +3681,31 @@ void FrontendScroller_InitRallyStageSelection(Menu *pMenu, int param)
     int count;
 
     count = 0;
+#if defined(__m68k__)
+    // PORT: AMIGA: car setup must never open with an unassigned slot. Paths
+    // that reach it before the profile flow (or a failed tag entry) otherwise
+    // build an empty list, which the menu cursor/index code cannot represent.
+    if (pMenu == FrontendMenu_GetCarSetup()) {
+        int player = CGameInfo::GetConfiguredPlayerCount() - g_profilePlayersRemaining - 1;
+        unsigned int rawSlot;
+        if (player < 0 || player >= 16)
+            player = 0;
+        memcpy(&rawSlot, &g_saveSlots[player], sizeof(rawSlot));
+        Sys_Log("AMIGA: car-init slot player=%d raw=%08lx category=%d",
+                player, (unsigned long)rawSlot, (int)g_saveSlots[player].category);
+        if (g_saveSlots[player].category < 4)
+            Sys_Log("AMIGA: car-init profile awards=%08lx",
+                    (unsigned long)g_saveProfiles[g_saveSlots[player].category].awards);
+        if ((rawSlot & 0x3c0000) == 0x3c0000) {
+            Profile_AssignAvailableCategory(player, -1);
+            Profile_ResetCategoryData(player);
+            RallyData_SetPlayerProfileInUse(player, 0);
+            memcpy(&rawSlot, &g_saveSlots[player], sizeof(rawSlot));
+            Sys_Log("AMIGA: car-init default profile assigned player=%d raw=%08lx category=%d",
+                    player, (unsigned long)rawSlot, (int)g_saveSlots[player].category);
+        }
+    }
+#endif
 #if defined(OPENCMR2_MENU_DIAGNOSTICS)
     // PORT: AMIGA: identify each car-menu initialization and player context.
     if (pMenu == FrontendMenu_GetCarSetup()) {
@@ -10554,6 +10579,16 @@ short g_carPictureRectsHigh[22][4] = {
 void FrontendMenu_DrawCarSetup(Menu *pMenu)
 {
     short (*pRects)[4];
+#if defined(__m68k__)
+    // PORT: AMIGA: the generic menu cursor has no lower bound for an empty
+    // list; clamp before any palette/rect/name index below.
+    if (pMenu->itemCount <= 0)
+        pMenu->cursor = 0;
+    else if (pMenu->cursor < 0)
+        pMenu->cursor = 0;
+    else if (pMenu->cursor >= pMenu->itemCount)
+        pMenu->cursor = pMenu->itemCount - 1;
+#endif
     char label[4];
     char *names[2];
     Texture *pTexture;
