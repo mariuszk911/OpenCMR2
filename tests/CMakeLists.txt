@@ -127,6 +127,16 @@ foreach(controller_variant controller_disk controller_disk_be)
 endforeach()
 target_compile_definitions(controller_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# .cin car-info sections: little-endian directory and section scalars. The
+# forced variant proves the decoder branch on the little-endian host.
+foreach(car_info_variant car_info_disk car_info_disk_be)
+    add_executable(${car_info_variant}_test car_info_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/car_info_disk.cpp)
+    target_include_directories(${car_info_variant}_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    add_test(NAME ${car_info_variant} COMMAND ${car_info_variant}_test)
+endforeach()
+target_compile_definitions(car_info_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # M3.1: the C3D stage header is little-endian. The forced-swap variant
 # exercises the decoder branch on a little-endian host; real BE/alignment
 # coverage is the amiga_c3d_header_test built for the 68060 target.

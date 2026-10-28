@@ -9,6 +9,7 @@
 #include "ReplayStream.h"
 #include "TrackCollisionData.h"
 #include "port/c3d_payload.h"
+#include "port/car_info_disk.h"
 #include "port/disk.h"
 #include "StageWeather.h"
 #include <stdio.h>
@@ -8387,7 +8388,17 @@ classes:
     strcpy(path, CFrontend::m_stringDest);
     g_carModelBuffers[car] = pData;
     sprintf(CFrontend::m_stringDest, g_strCinFormat, Car_GetDirectoryPath(model));
-    g_carInfoBuffers[car] = (CarInfoDirectory *)CFileBuffer::GetGenericFileBuffer(CFrontend::m_stringDest, FALSE);
+    {
+        BYTE *pCin = (BYTE *)CFileBuffer::GetGenericFileBuffer(CFrontend::m_stringDest, FALSE);
+        DWORD cinSize = pCin != NULL ? (DWORD)CGenericFileLoader::GetGenericFileSize() : 0;
+
+        // PORT: AMIGA: .cin sections are little-endian and subsystems cache
+        // pointers into them. Decode in the file buffer, so the sections and
+        // the buffer that owns them keep exactly one lifetime.
+        if (pCin != NULL && cinSize != 0)
+            CarInfoDisk_Decode(pCin, cinSize, pCin, cinSize);
+        g_carInfoBuffers[car] = (CarInfoDirectory *)pCin;
+    }
     if ((char)RallyData_GetFlag24())
         Graphics_SetTextureStageState(1);
     else

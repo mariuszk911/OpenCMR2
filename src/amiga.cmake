@@ -42,6 +42,7 @@ target_compile_options(opencmr2_domain_a INTERFACE
 add_library(cmr2_game OBJECT
     ${GAME_SOURCES}
     diagnostics/observer.cpp
+    port/car_info_disk.cpp
     port/credits_text.cpp
     port/controller_disk.cpp
     port/disk.cpp
@@ -194,6 +195,12 @@ target_include_directories(amiga_controller_disk_test PRIVATE
     ${GAME_DIR})
 target_link_libraries(amiga_controller_disk_test PRIVATE opencmr2_domain_a)
 opencmr2_amiga_stack(amiga_controller_disk_test)
+
+# .cin car-info: real 68060 decode of the section directory and scalars.
+add_executable(amiga_car_info_test ${PROJECT_SOURCE_DIR}/tests/amiga/car_info_disk_test.cpp
+    port/car_info_disk.cpp)
+target_include_directories(amiga_car_info_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_car_info_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)
