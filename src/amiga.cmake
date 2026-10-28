@@ -53,6 +53,7 @@ add_library(cmr2_game OBJECT
     port/replay_disk.cpp
     port/route_disk.cpp
     port/save_image_disk.cpp
+    port/split_table_disk.cpp
     port/stage_camera_disk.cpp
     port/stage_light_transform_disk.cpp
     port/start_table_disk.cpp)
@@ -260,6 +261,12 @@ add_executable(amiga_stage_light_transform_test ${PROJECT_SOURCE_DIR}/tests/amig
     port/stage_light_transform_disk.cpp)
 target_include_directories(amiga_stage_light_transform_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_stage_light_transform_test)
+
+# .tm? split tables: real 68060 decode of the mixed byte/32-bit record.
+add_executable(amiga_split_table_test ${PROJECT_SOURCE_DIR}/tests/amiga/split_table_test.cpp
+    port/split_table_disk.cpp)
+target_include_directories(amiga_split_table_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_split_table_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)

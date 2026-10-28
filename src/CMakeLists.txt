@@ -74,6 +74,7 @@ add_library(opencmr2_platform STATIC
     port/stage_light_transform_disk.cpp
     port/start_table_disk.cpp
     port/save_image_disk.cpp
+    port/split_table_disk.cpp
     $<TARGET_OBJECTS:cmr2_game>)
 target_sources(opencmr2_platform PRIVATE diagnostics/observer.cpp diagnostics/timing.cpp)
 target_include_directories(opencmr2_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)

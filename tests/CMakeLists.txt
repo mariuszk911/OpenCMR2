@@ -219,6 +219,15 @@ foreach(stage_light_variant stage_light_transform_disk stage_light_transform_dis
 endforeach()
 target_compile_definitions(stage_light_transform_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# .tm? split tables: signed-byte prefix preserved, 32-bit region swapped.
+foreach(split_table_variant split_table_disk split_table_disk_be)
+    add_executable(${split_table_variant}_test split_table_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/split_table_disk.cpp)
+    target_include_directories(${split_table_variant}_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    add_test(NAME ${split_table_variant} COMMAND ${split_table_variant}_test)
+endforeach()
+target_compile_definitions(split_table_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # M3.1: the C3D stage header is little-endian. The forced-swap variant
 # exercises the decoder branch on a little-endian host; real BE/alignment
 # coverage is the amiga_c3d_header_test built for the 68060 target.

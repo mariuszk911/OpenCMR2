@@ -11,6 +11,7 @@
 #include "port/c3d_payload.h"
 #include "port/car_info_disk.h"
 #include "port/disk.h"
+#include "port/split_table_disk.h"
 #include "port/start_table_disk.h"
 #include "StageWeather.h"
 #include <stdio.h>
@@ -5764,6 +5765,11 @@ void StageTiming_LoadSelectedTeamArchive(void)
             index = CGameInfo::GetConfiguredDifficulty();
         }
         memcpy(dest, bufs[index], sizes[index]);
+        // PORT: AMIGA: the .tm? table keeps its signed-byte prefix and stores
+        // the split samples/weights as little-endian 32-bit words. Normalise
+        // the private stage-buffer copy, never an archive-member fallback.
+        if (dest != bufs[0] && dest != bufs[1] && dest != bufs[2])
+            SplitTableDisk_Decode(dest, sizes[index], dest, sizes[index]);
         g_unk0x00541f8c = (BYTE *)dest + sizes[index];
         g_splitSpreadTable = (char *)dest;
         if (dest != NULL)
