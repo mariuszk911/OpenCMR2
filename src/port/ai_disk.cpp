@@ -54,10 +54,13 @@ void SwapWords(unsigned char *destination, const unsigned char *source, size_t b
         SwapWord(destination + i, source + i);
 }
 
-int ReadCount(const unsigned char *src, size_t offset, int maximum, unsigned int *out)
+int ReadCount(const unsigned char *src, size_t size, size_t offset, int maximum, unsigned int *out)
 {
-    int32_t value = (int32_t)ReadLE32(src + offset);
+    int32_t value;
 
+    if (offset > size || size - offset < 4)
+        return 0;
+    value = (int32_t)ReadLE32(src + offset);
     if (value < 0 || value > maximum)
         return 0;
     *out = (unsigned int)value;
@@ -73,7 +76,7 @@ bool ParseSections(const unsigned char *src, size_t size, Sections *sections)
     offset = kFirstCountOffset;
 
     sections->routeCount = offset;
-    if (!ReadCount(src, offset, kMaxRoutes, &sections->routeEntries))
+    if (!ReadCount(src, size, offset, kMaxRoutes, &sections->routeEntries))
         return false;
     offset += 4;
     sections->routes = offset;
@@ -82,7 +85,7 @@ bool ParseSections(const unsigned char *src, size_t size, Sections *sections)
     offset += (size_t)sections->routeEntries * AI_DISK_ROUTE_STRIDE;
 
     sections->descriptorCount = offset;
-    if (!ReadCount(src, offset, kMaxDescriptors, &sections->descriptorEntries))
+    if (!ReadCount(src, size, offset, kMaxDescriptors, &sections->descriptorEntries))
         return false;
     offset += 4;
     sections->descriptors = offset;
@@ -91,7 +94,7 @@ bool ParseSections(const unsigned char *src, size_t size, Sections *sections)
     offset += (size_t)sections->descriptorEntries * AI_DISK_DESCRIPTOR_STRIDE;
 
     sections->pointCount = offset;
-    if (!ReadCount(src, offset, kMaxPoints, &sections->pointEntries))
+    if (!ReadCount(src, size, offset, kMaxPoints, &sections->pointEntries))
         return false;
     offset += 4;
     sections->points = offset;
@@ -100,7 +103,7 @@ bool ParseSections(const unsigned char *src, size_t size, Sections *sections)
     offset += (size_t)sections->pointEntries * AI_DISK_POINT_STRIDE;
 
     sections->networkCount = offset;
-    if (!ReadCount(src, offset, kMaxNetworks, &sections->networkEntries))
+    if (!ReadCount(src, size, offset, kMaxNetworks, &sections->networkEntries))
         return false;
     offset += 4;
     sections->networks = offset;
@@ -161,7 +164,8 @@ extern "C" int AiDisk_Decode(void *destination, size_t destinationSize,
     Sections sections;
     unsigned int i;
 
-    if (destination == NULL || file == NULL || destinationSize < size)
+    if (destination == NULL || file == NULL || destinationSize < size ||
+            size < AI_DISK_CAR_COUNT * 4)
         return 0;
     for (i = 0; i < AI_DISK_CAR_COUNT; i++) {
         int32_t table = (int32_t)ReadLE32(src + kCarsOffset + (size_t)i * 4);

@@ -209,8 +209,20 @@ int main(int argc, char **argv)
     PutLE32(file + kNetworksOffset + 8, 5);
     CHECK(AiDisk_Decode(output, sizeof(output), file, sizeof(file)) == 0);
 
+    // Count words are read four bytes at a time: a member that ends exactly
+    // at a count offset must be rejected, not read past the end.
+    BuildSynthetic(file);
+    CHECK(AiDisk_Decode(output, sizeof(output), file, 23) == 0);
+    CHECK(AiDisk_Decode(output, sizeof(output), file, 24) == 0);
+    CHECK(AiDisk_Decode(output, sizeof(output), file, kDescriptorCountOffset) == 0);
+    CHECK(AiDisk_Decode(output, sizeof(output), file, kPointCountOffset) == 0);
+    CHECK(AiDisk_Decode(output, sizeof(output), file, kNetworkCountOffset) == 0);
+
     // A member shorter than the reference-route section, and NULL inputs.
     BuildSynthetic(file);
+    memset(output, 0x5a, sizeof(output));
+    CHECK(AiDisk_Decode(output, sizeof(output), file, 24) == 0);
+    CHECK(output[0] == 0x5a);
     CHECK(AiDisk_Decode(output, sizeof(output), file, sizeof(file) - 1 - AI_DISK_REFERENCE_ROUTE_SIZE) == 0);
     CHECK(AiDisk_Decode(output, sizeof(file) - 1, file, sizeof(file)) == 0);
     CHECK(AiDisk_Decode(NULL, sizeof(output), file, sizeof(file)) == 0);

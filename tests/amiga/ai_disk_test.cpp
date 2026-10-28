@@ -148,6 +148,12 @@ int main(int argc, char **argv)
     PutLE32(file + kNetworksOffset + 8, 5);
     CHECK(AiDisk_Decode(output, sizeof(output), file, sizeof(file)) == 0);
 
+    // A member that ends exactly at a count offset is rejected.
+    BuildSynthetic(file);
+    CHECK(AiDisk_Decode(output, sizeof(output), file, 23) == 0);
+    CHECK(AiDisk_Decode(output, sizeof(output), file, 24) == 0);
+    CHECK(AiDisk_Decode(output, sizeof(output), file, kDescriptorCountOffset) == 0);
+
     if (argc > 1) {
         FILE *f = fopen(argv[1], "rb");
         size_t got;
