@@ -210,6 +210,15 @@ foreach(light_preset_variant light_preset_disk light_preset_disk_be)
 endforeach()
 target_compile_definitions(light_preset_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# .bsp stage-light transform: four little-endian FixVectors.
+foreach(stage_light_variant stage_light_transform_disk stage_light_transform_disk_be)
+    add_executable(${stage_light_variant}_test stage_light_transform_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/stage_light_transform_disk.cpp)
+    target_include_directories(${stage_light_variant}_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    add_test(NAME ${stage_light_variant} COMMAND ${stage_light_variant}_test)
+endforeach()
+target_compile_definitions(stage_light_transform_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # M3.1: the C3D stage header is little-endian. The forced-swap variant
 # exercises the decoder branch on a little-endian host; real BE/alignment
 # coverage is the amiga_c3d_header_test built for the 68060 target.

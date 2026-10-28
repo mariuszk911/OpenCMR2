@@ -28,6 +28,7 @@
 #include "port/disk.h"
 #include "port/light_preset_disk.h"
 #include "port/stage_camera_disk.h"
+#include "port/stage_light_transform_disk.h"
 #include "RegKey.h"
 
 // Race session state (0x41e210-0x420190)
@@ -3691,9 +3692,19 @@ void Race_LoadSurfaceList(void)
 // FUNCTION: CMR2 0x00420020
 void Race_LoadStageLightPlacement(void)
 {
+    DWORD bspSize = 0;
+    BYTE *pBsp;
+    FixVector axes[4];
+
     sprintf(CFrontend::m_stringDest, g_strBspFormat, GameMenu_GetChampionshipTransitionState());
-    StageLights_SetTransform((FixVector *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
-                                                                     CFrontend::m_stringDest, 0, 0, 0));
+    pBsp = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
+                                                CFrontend::m_stringDest, 0, &bspSize, 0);
+    // PORT: AMIGA: .bsp is four little-endian FixVectors; SetTransform copies
+    // them immediately, so a stack copy is enough.
+    if (pBsp != NULL && StageLightTransformDisk_Decode(axes, sizeof(axes), pBsp, bspSize))
+        StageLights_SetTransform(axes);
+    else
+        StageLights_SetTransform((FixVector *)pBsp);
 }
 
 // Loads the stage's .hpc data when present.

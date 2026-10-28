@@ -71,6 +71,7 @@ add_library(opencmr2_platform STATIC
     port/replay_disk.cpp
     port/route_disk.cpp
     port/stage_camera_disk.cpp
+    port/stage_light_transform_disk.cpp
     port/start_table_disk.cpp
     port/save_image_disk.cpp
     $<TARGET_OBJECTS:cmr2_game>)

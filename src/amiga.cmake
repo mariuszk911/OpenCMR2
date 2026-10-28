@@ -54,6 +54,7 @@ add_library(cmr2_game OBJECT
     port/route_disk.cpp
     port/save_image_disk.cpp
     port/stage_camera_disk.cpp
+    port/stage_light_transform_disk.cpp
     port/start_table_disk.cpp)
 # M0 does not link the game yet, so keep it out of the default `all` target.
 # M1 removes this once the platform services exist and the executable links it.
@@ -253,6 +254,12 @@ add_executable(amiga_light_preset_test ${PROJECT_SOURCE_DIR}/tests/amiga/light_p
     port/light_preset_disk.cpp)
 target_include_directories(amiga_light_preset_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_light_preset_test)
+
+# .bsp stage-light transform: real 68060 decode of the four FixVectors.
+add_executable(amiga_stage_light_transform_test ${PROJECT_SOURCE_DIR}/tests/amiga/stage_light_transform_test.cpp
+    port/stage_light_transform_disk.cpp)
+target_include_directories(amiga_stage_light_transform_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_stage_light_transform_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)
