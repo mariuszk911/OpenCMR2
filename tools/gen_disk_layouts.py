@@ -32,11 +32,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "src/port/disk_layouts.h"
 HEADERS = ["SceneNode.h", "Mesh.h", "Sector.h", "MeshCollisionRecord.h", "Car.h", "CarParts.h", "ReplayStream.h",
-           "Input.h"]
+           "Input.h", "FinRecord.h"]
 # Stage mesh file records, then the per-car records the state capture writes
 # in the original layout (tests/stage_probe.cpp), then the controller file.
 RECORDS = ["SceneNode", "Mesh", "StageObject", "Sector", "MeshCollisionRecord", "Car", "CarPartSet", "ReplayStream",
-           "ControllerData"]
+           "ControllerData", "FinRecord"]
 TARGETS = {"disk": "i386-pc-linux-gnu", "native": "x86_64-pc-linux-gnu",
            "windows": "x86_64-pc-windows-msvc"}
 LINE = re.compile(r"^\s*(\d+)(?::\d+-\d+)? \|( *)(\S.*)$")
@@ -221,6 +221,13 @@ def layout(disk, native, record):
     nleaves, nsize = leaves(native, record)
     if [l[0] for l in dleaves] != [l[0] for l in nleaves]:
         sys.exit(f"{record}: field lists differ between targets")
+    # A union that aliases a pointer and a 32-bit scalar is a pointer in
+    # memory and a file offset/index on disk: the loader relocates it, so the
+    # scalar twin is neither copied nor swapped (FinRecord.sector/pNext).
+    pointer_offsets = {l[1] for l in dleaves if l[2]}
+    keep = [not (l[2] == 0 and l[1] in pointer_offsets) for l in dleaves]
+    dleaves = [l for l, k in zip(dleaves, keep) if k]
+    nleaves = [l for l, k in zip(nleaves, keep) if k]
     fields = sorted(((d[1], n[1], d[2], d[3], d[0]) for d, n in zip(dleaves, nleaves)),
                     key=lambda f: (f[0], -f[2]))
     runs, pointers, run = [], [], None

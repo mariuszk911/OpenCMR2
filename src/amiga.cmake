@@ -46,6 +46,7 @@ add_library(cmr2_game OBJECT
     port/credits_text.cpp
     port/controller_disk.cpp
     port/disk.cpp
+    port/finish_record_disk.cpp
     port/font_pcf.cpp
     port/replay_disk.cpp
     port/save_image_disk.cpp
@@ -208,6 +209,17 @@ add_executable(amiga_stage_camera_test ${PROJECT_SOURCE_DIR}/tests/amiga/stage_c
     port/stage_camera_disk.cpp)
 target_include_directories(amiga_stage_camera_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_stage_camera_test)
+
+# fin.dat: real 68060 decode of the pointer/scalar-union records.
+add_executable(amiga_fin_record_test ${PROJECT_SOURCE_DIR}/tests/amiga/fin_record_test.cpp
+    port/finish_record_disk.cpp
+    port/disk.cpp)
+target_include_directories(amiga_fin_record_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/port/compat
+    ${GAME_DIR})
+target_link_libraries(amiga_fin_record_test PRIVATE opencmr2_domain_a)
+opencmr2_amiga_stack(amiga_fin_record_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)

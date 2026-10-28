@@ -14,6 +14,7 @@
 #include "CarParts.h"
 #include "ReplayStream.h"
 #include "Input.h"
+#include "FinRecord.h"
 
 // SceneNode: 0x18c bytes in files, 0x1a0 on 64-bit targets.
 #if UINTPTR_MAX > 0xffffffffu
@@ -3096,5 +3097,49 @@ static const DiskSwap g_diskSwaps_ControllerData[] = {
 static_assert(sizeof(ControllerData) == 0x2f0, "run tools/gen_disk_layouts.py");
 #endif
 static const DiskLayout g_diskLayout_ControllerData = {0x2f0, sizeof(ControllerData), g_diskRuns_ControllerData, sizeof(g_diskRuns_ControllerData) / sizeof(DiskRun), g_diskPointers_ControllerData, sizeof(g_diskPointers_ControllerData) / sizeof(DiskPointer), g_diskSwaps_ControllerData, 40};
+
+// FinRecord: 0x30 bytes in files, 0x38 on 64-bit targets.
+#if UINTPTR_MAX > 0xffffffffu
+static const DiskRun g_diskRuns_FinRecord[] = {
+    {0x0, 0x0, 0x28},
+    {0x2c, 0x30, 0x4},
+};
+static const DiskPointer g_diskPointers_FinRecord[] = {
+    {0x28, 0x28}, // /src/game/FinRecord.h:15:5).pNext
+};
+static const DiskSwap g_diskSwaps_FinRecord[] = {
+    {0x0, 0x0, 4},
+    {0x4, 0x4, 4},
+    {0x8, 0x8, 4},
+    {0xc, 0xc, 4},
+    {0x10, 0x10, 4},
+    {0x14, 0x14, 4},
+    {0x18, 0x18, 4},
+    {0x1c, 0x1c, 4},
+    {0x20, 0x20, 4},
+    {0x24, 0x24, 4},
+};
+static_assert(sizeof(FinRecord) == 0x38, "run tools/gen_disk_layouts.py");
+#else
+static const DiskRun g_diskRuns_FinRecord[] = {{0, 0, 0x30}};
+static const DiskPointer g_diskPointers_FinRecord[] = {
+    {0x28, 0x28}, // /src/game/FinRecord.h:15:5).pNext
+};
+static const DiskSwap g_diskSwaps_FinRecord[] = {
+    {0x0, 0x0, 4},
+    {0x4, 0x4, 4},
+    {0x8, 0x8, 4},
+    {0xc, 0xc, 4},
+    {0x10, 0x10, 4},
+    {0x14, 0x14, 4},
+    {0x18, 0x18, 4},
+    {0x1c, 0x1c, 4},
+    {0x20, 0x20, 4},
+    {0x24, 0x24, 4},
+};
+static_assert(sizeof(FinRecord) == 0x30, "run tools/gen_disk_layouts.py");
+#endif
+static const DiskLayout g_diskLayout_FinRecord = {0x30, sizeof(FinRecord), g_diskRuns_FinRecord, sizeof(g_diskRuns_FinRecord) / sizeof(DiskRun), g_diskPointers_FinRecord, sizeof(g_diskPointers_FinRecord) / sizeof(DiskPointer), g_diskSwaps_FinRecord, 10};
+#define DISK_FinRecord_pNext 0x28
 
 #endif

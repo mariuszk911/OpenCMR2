@@ -146,6 +146,24 @@ foreach(stage_camera_variant stage_camera_disk stage_camera_disk_be)
 endforeach()
 target_compile_definitions(stage_camera_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# fin.dat: pointer/scalar union records decoded with the generated layout. The
+# forced variant proves the swap path; disk_swaps covers the layout itself.
+foreach(fin_record_variant finish_record_disk finish_record_disk_be)
+    add_executable(${fin_record_variant}_test finish_record_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/finish_record_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/disk.cpp)
+    target_include_directories(${fin_record_variant}_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/game
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/port/compat)
+    target_compile_options(${fin_record_variant}_test PRIVATE
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+        -fms-extensions)
+    add_test(NAME ${fin_record_variant} COMMAND ${fin_record_variant}_test)
+endforeach()
+target_compile_definitions(finish_record_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # M3.1: the C3D stage header is little-endian. The forced-swap variant
 # exercises the decoder branch on a little-endian host; real BE/alignment
 # coverage is the amiga_c3d_header_test built for the 68060 target.

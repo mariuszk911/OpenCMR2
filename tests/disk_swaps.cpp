@@ -100,5 +100,46 @@ int main()
         REQUIRE(result.allocated == node.allocated);
     }
 
+    {
+        /* FinRecord aliases a 32-bit sector index with a pointer at +0x28:
+         * the generated layout treats it as a pointer (zeroed on unpack) and
+         * converts the rest of the record. */
+        unsigned char record[0x30];
+        FinRecord native{};
+
+        WriteLE32(record + 0x00, 0x01020304);
+        WriteLE32(record + 0x04, 0x11121314);
+        WriteLE32(record + 0x08, 0x21222324);
+        WriteLE32(record + 0x0c, 0x31323334);
+        WriteLE32(record + 0x10, 0x41424344);
+        WriteLE32(record + 0x14, 0x51525354);
+        WriteLE32(record + 0x18, 0x61626364);
+        WriteLE32(record + 0x1c, 0x71727374);
+        WriteLE32(record + 0x20, 0x81828384);
+        WriteLE32(record + 0x24, 0x91929394);
+        WriteLE32(record + 0x28, 7);
+        record[0x2c] = 0x19;
+        record[0x2d] = 0x03;
+        record[0x2e] = 0x11;
+        record[0x2f] = 0x22;
+
+        Disk_Unpack(&native, record, &g_diskLayout_FinRecord);
+        REQUIRE(native.target.x == 0x01020304);
+        REQUIRE(native.target.y == 0x11121314);
+        REQUIRE(native.target.z == 0x21222324);
+        REQUIRE(native.lineStart.x == 0x31323334);
+        REQUIRE(native.lineStart.y == 0x41424344);
+        REQUIRE(native.lineStart.z == 0x51525354);
+        REQUIRE(native.direction.x == 0x61626364);
+        REQUIRE(native.direction.y == 0x71727374);
+        REQUIRE(native.direction.z == 0x81828384);
+        REQUIRE(native.field_0x24 == 0x91929394);
+        REQUIRE(native.pNext == nullptr);
+        REQUIRE(native.type == 0x19);
+        REQUIRE(native.flags == 0x03);
+        REQUIRE(native.surfaces[0] == 0x11);
+        REQUIRE(native.surfaces[1] == 0x22);
+    }
+
     return 0;
 }

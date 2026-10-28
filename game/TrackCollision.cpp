@@ -10,6 +10,7 @@
 #include "FinRecord.h"
 #include "FileBuffer.h"
 #include "port/disk.h"
+#include "port/finish_record_disk.h"
 #include <stdio.h>
 #include "Frontend.h"
 #include "GenericFileLoader.h"
@@ -254,26 +255,23 @@ void TrackCollision_LoadFinishRecords(void)
                                                     CFrontend::m_stringDest, 0, &size, 0);
     g_finData = NULL;
     g_finCount = size / 0x30;
-    // PORT: the records are linked in place through the 32-bit field at +0x28
-    // (Sector_RebuildStageGrid), which cannot hold a pointer on 64-bit
-    // targets: copy them to native FinRecords, freed with the file buffer.
+    // PORT: AMIGA: the records are little-endian and are linked in place
+    // through the 32-bit field at +0x28 (Sector_RebuildStageGrid), which
+    // cannot hold a pointer on 64-bit targets: decode native FinRecords,
+    // freed with the file buffer.
     if (pFile != NULL) {
         FinRecord *pNative = (FinRecord *)CFileBuffer::AllocateLockedBuffer(g_finCount * sizeof(FinRecord) + 1);
-        int i;
+        unsigned int count = 0;
 
-        for (i = 0; i < g_finCount; i++) {
-            BYTE *pDisk = pFile + i * 0x30;
-
-            memcpy(&pNative[i], pDisk, offsetof(FinRecord, sector));
-            pNative[i].pNext = NULL;
-            pNative[i].sector = (int)Disk_Offset(pDisk, 0x28);
-            pNative[i].type = (char)pDisk[0x2c];
-            pNative[i].flags = pDisk[0x2d];
-            pNative[i].surfaces[0] = pDisk[0x2e];
-            pNative[i].surfaces[1] = pDisk[0x2f];
+        if (pNative != NULL && FinishRecordDisk_Decode(pNative, pFile, size, &count)) {
+            Disk_AttachToBuffer(pFile, pNative);
+            g_finCount = count;
+            g_finData = pNative;
+        } else {
+            if (pNative != NULL)
+                CFileBuffer::FreeGenericFileBuffer(pNative);
+            g_finCount = 0;
         }
-        Disk_AttachToBuffer(pFile, pNative);
-        g_finData = pNative;
     }
 }
 
