@@ -237,6 +237,22 @@ foreach(cod_disk_variant cod_disk cod_disk_be)
 endforeach()
 target_compile_definitions(cod_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# .nlb leaderboards: native image <-> little-endian file form.
+foreach(leaderboard_variant leaderboard_disk leaderboard_disk_be)
+    add_executable(${leaderboard_variant}_test leaderboard_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/leaderboard_disk.cpp)
+    target_include_directories(${leaderboard_variant}_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/game
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/port/compat)
+    target_compile_options(${leaderboard_variant}_test PRIVATE
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+        -fms-extensions)
+    add_test(NAME ${leaderboard_variant} COMMAND ${leaderboard_variant}_test)
+endforeach()
+target_compile_definitions(leaderboard_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # M3.1: the C3D stage header is little-endian. The forced-swap variant
 # exercises the decoder branch on a little-endian host; real BE/alignment
 # coverage is the amiga_c3d_header_test built for the 68060 target.

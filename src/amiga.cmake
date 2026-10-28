@@ -50,6 +50,7 @@ add_library(cmr2_game OBJECT
     port/disk.cpp
     port/finish_record_disk.cpp
     port/font_pcf.cpp
+    port/leaderboard_disk.cpp
     port/light_preset_disk.cpp
     port/replay_disk.cpp
     port/route_disk.cpp
@@ -274,6 +275,16 @@ add_executable(amiga_cod_disk_test ${PROJECT_SOURCE_DIR}/tests/amiga/cod_disk_te
     port/cod_disk.cpp)
 target_include_directories(amiga_cod_disk_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_cod_disk_test)
+
+# .nlb leaderboards: real 68060 round-trip of the native image and file form.
+add_executable(amiga_leaderboard_test ${PROJECT_SOURCE_DIR}/tests/amiga/leaderboard_test.cpp
+    port/leaderboard_disk.cpp)
+target_include_directories(amiga_leaderboard_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/port/compat
+    ${GAME_DIR})
+target_link_libraries(amiga_leaderboard_test PRIVATE opencmr2_domain_a)
+opencmr2_amiga_stack(amiga_leaderboard_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)

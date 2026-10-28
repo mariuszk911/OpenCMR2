@@ -2,6 +2,7 @@
 #include "RegKey.h"
 #include "InstallInfo.h"
 #include "FileBuffer.h"
+#include "port/leaderboard_disk.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -39,12 +40,15 @@ bool CNetworkLeaderboards::LoadLeaderboards(void) {
     leaderboards = (NetworkLeaderboardsFile*)CFileBuffer::GetGenericFileBuffer(fileLocation, TRUE);
     if (leaderboards != NULL) {
         if (CGenericFileLoader::GetGenericFileSize() == 0x2088) {
-            m_leaderboardId = leaderboards->leaderboardID;
-            m_totalLeaderboards = leaderboards->totalLeaderboards;
-            
-            memcpy(&m_leaderboards, leaderboards->leaderboards, sizeof(leaderboards->leaderboards));
-            hasLoaded = TRUE;
-            
+            // PORT: AMIGA: the .nlb header ints and entry wins are
+            // little-endian; decode the private file buffer in place.
+            if (LeaderboardDisk_Decode(leaderboards, 0x2088, leaderboards, 0x2088)) {
+                m_leaderboardId = leaderboards->leaderboardID;
+                m_totalLeaderboards = leaderboards->totalLeaderboards;
+
+                memcpy(&m_leaderboards, leaderboards->leaderboards, sizeof(leaderboards->leaderboards));
+                hasLoaded = TRUE;
+            }
         }
 
         CFileBuffer::FreeGenericFileBuffer(leaderboards);
@@ -65,6 +69,8 @@ void CNetworkLeaderboards::SaveLeaderboards(void)
         pFile->leaderboardID = m_leaderboardId;
         pFile->totalLeaderboards = m_totalLeaderboards;
         memcpy(pFile->leaderboards, m_leaderboards, sizeof(pFile->leaderboards));
+        // PORT: AMIGA: write the header ints and entry wins little-endian.
+        LeaderboardDisk_Pack(pFile, 0x2088, pFile, 0x2088);
         sprintf(fileLocation, m_strNetworkLeaderboardsDir, CRegKey::GetValueFromKey(CRegKey::m_rkv_gameHDPath));
         CInstallInfo::WriteFileToDisk(fileLocation, 0, pFile, 0x2088);
         CFileBuffer::FreeGenericFileBuffer(pFile);
@@ -129,6 +135,10 @@ void CNetworkLeaderboards::AddLeaderboard(void)
 {
     int i;
 
+    // PORT: AMIGA: a corrupt/out-of-range count must not index past
+    // m_leaderboards[32].
+    if (m_totalLeaderboards < 0 || m_totalLeaderboards >= MAX_LEADERBOARDS)
+        return;
     *(BYTE *)&m_leaderboards[m_totalLeaderboards].isLoaded = 1;
     for (i = 0; i < MAX_LEADERBOARD_PLAYERS; i++) {
         sprintf(m_leaderboards[m_totalLeaderboards].entries[i].name, CMain::m_logFileBlankLine);
