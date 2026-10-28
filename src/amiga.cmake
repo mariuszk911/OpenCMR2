@@ -218,6 +218,12 @@ add_executable(amiga_c3d_header_test ${PROJECT_SOURCE_DIR}/tests/amiga/c3d_heade
 target_include_directories(amiga_c3d_header_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_c3d_header_test)
 
+# M2: the packed menu/split-panel colour word must put R, G, B, A in memory
+# on 68k; the host test can only check its own byte order.
+add_executable(amiga_menu_colour_test ${PROJECT_SOURCE_DIR}/tests/amiga/menu_colour_test.cpp)
+target_include_directories(amiga_menu_colour_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_menu_colour_test)
+
 add_executable(amiga_menu_layout_test ${PROJECT_SOURCE_DIR}/tests/amiga/menu_layout_test.cpp)
 target_link_libraries(amiga_menu_layout_test PRIVATE opencmr2_domain_a)
 target_include_directories(amiga_menu_layout_test PRIVATE

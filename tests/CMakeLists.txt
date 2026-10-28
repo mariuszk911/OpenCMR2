@@ -256,6 +256,12 @@ add_executable(country_flags_test country_flags.cpp)
 target_link_libraries(country_flags_test PRIVATE opencmr2_platform)
 add_test(NAME country_flags COMMAND country_flags_test ${CMAKE_CURRENT_SOURCE_DIR}/reference/menu-flags.txt)
 
+# The menu and split-panel colours are packed ints read back as R, G, B, A
+# bytes; the original x86 literals put the alpha byte first on 68k.
+add_executable(menu_colours_test menu_colours.cpp)
+target_link_libraries(menu_colours_test PRIVATE opencmr2_platform)
+add_test(NAME menu_colours COMMAND menu_colours_test)
+
 add_executable(vector_sprites_test vector_sprites.cpp)
 target_link_libraries(vector_sprites_test PRIVATE opencmr2_platform)
 add_test(NAME vector_sprites COMMAND vector_sprites_test)
@@ -280,6 +286,8 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/reference_capture.py)
     add_test(NAME raw_access_audit
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/raw_access_audit.py)
+    add_test(NAME portability_source_guard
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portability_source_guard.py)
 endif()
 
 set(OPENCMR2_BINK_TEST_DATA_DIR "" CACHE PATH "Optional original game data for movie and physics regression tests")

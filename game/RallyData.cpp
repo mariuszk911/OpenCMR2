@@ -1,4 +1,5 @@
 #include "SavedGame.h"
+#include "port/colour.h"
 #include "port/save_slot.h"
 #include "port/sys.h"
 #include "port/weather_map.h"
@@ -3956,7 +3957,7 @@ char *g_unk0x00527128[9] = {
 // France asked for the CD because the weather textures were looked up under
 // FINLAND).
 struct WeatherMapSet {
-    unsigned int count; // 0x00, low byte used
+    unsigned int count; // 0x00, number of maps loaded for this rally group
     void *mainMap;      // 0x04
     Texture *maps[4];   // 0x08
     short rects[8];     // 0x18, x/y pairs
@@ -4027,7 +4028,10 @@ void RallyData_LoadCurrentRallyWeatherTextures(void)
     int stage;
     int index;
 
-    *(BYTE *)&g_weatherMaps.count = 0;
+    // PORT: AMIGA: assign the count directly. The original wrote only its low
+    // byte, which on 68k is the most significant byte (0x04000000) and leaves
+    // `count & 0xff` zero, so no map is loaded.
+    g_weatherMaps.count = 0;
     // PORT: AMIGA: the original cleared five entries, writing maps[4] (the
     // storage of rects[0..1]) and rects[8..9] (slots[0..3]). Clear the same
     // bytes within each array's bounds.
@@ -4039,9 +4043,9 @@ void RallyData_LoadCurrentRallyWeatherTextures(void)
     memset(g_weatherMaps.slots, 0, 4);
     stage = (BYTE)RallyDataStageIndex() >> 2;
     if (stage < 2)
-        *(BYTE *)&g_weatherMaps.count = 4;
+        g_weatherMaps.count = 4;
     else
-        *(BYTE *)&g_weatherMaps.count = RallyDataCountryIndex() % 2 ? 3 : 2;
+        g_weatherMaps.count = RallyDataCountryIndex() % 2 ? 3 : 2;
     for (i = 0; i < 4; i++) {
         if (i < (int)(g_weatherMaps.count & 0xff)) {
             g_weatherMaps.slots[i] = (BYTE)(stage * 4 + i);
@@ -4096,8 +4100,14 @@ void RallyData_SetupWeatherTextureEntries(void)
     g_optionPreviewExpandedRect[1] = 0x72;
     g_optionPreviewExpandedRect[2] = 0x100;
     g_optionPreviewExpandedRect[3] = 0xf6;
-    *(int *)&g_mapSrcRect[0] = *(int *)&((Texture *)g_weatherMaps.mainMap)->field_0x11c;
-    *(int *)&g_mapSrcRect[2] = *(int *)&((Texture *)g_weatherMaps.mainMap)->width;
+    // PORT: AMIGA: copy the short fields one by one; the original read two
+    // shorts at a time through an int pointer.
+    {
+        Texture *pMain = (Texture *)g_weatherMaps.mainMap;
+        g_mapSrcRect[0] = pMain->field_0x11c;
+        g_mapSrcRect[1] = pMain->field_0x11e;
+        g_mapSrcRect[2] = pMain->width;
+    }
     g_mapSrcRect[3] = 0xf6;
     g_unk0x0082c9fc = 0xd8;
     g_unk0x0082c9fe = 0x7c;
@@ -6756,8 +6766,12 @@ void RallyData_QueueSelectedCarSplitPanel(void)
         rect[1] = (short)((pEntry->v0 - FixMul(first, scale)) >> 16);
         rect[3] = (short)(scale >> 16);
     } else {
-        *(int *)&rect[0] = *(int *)&g_mapSrcRect[0];
-        *(int *)&rect[2] = *(int *)&g_mapSrcRect[2];
+        // PORT: AMIGA: copy the four coordinates instead of an int-sized read
+        // of the short array.
+        rect[0] = g_mapSrcRect[0];
+        rect[1] = g_mapSrcRect[1];
+        rect[2] = g_mapSrcRect[2];
+        rect[3] = g_mapSrcRect[3];
     }
     src[0] = (short)((int)g_optionPreviewExpandedRect[0] * (int)g_pGraphics->resX / 0x280);
     src[1] = (short)((int)g_optionPreviewExpandedRect[1] * (int)g_pGraphics->resY / 0x1e0);
@@ -6905,9 +6919,10 @@ storeSplitColour:
 
 // Two packed colours (blue-ish and red) used as the base of the split panel.
 // GLOBAL: CMR2 0x005270ec
-int g_unk0x005270ec = 0xff005cf3;
+// PORT: AMIGA: keep the R, G, B, A bytes the little-endian original had.
+int g_unk0x005270ec = OPENCMR2_RGBA32(0xf3, 0x5c, 0x00, 0xff);
 // GLOBAL: CMR2 0x005270f0
-int g_unk0x005270f0 = 0xff0000ff;
+int g_unk0x005270f0 = OPENCMR2_RGBA32(0xff, 0x00, 0x00, 0xff);
 
 // 0x50-byte entry of 0x82c6c8 as seen by the per-car split draw: source and
 // destination rects plus the shared easing value at 0x1c.
@@ -6994,9 +7009,10 @@ extern BYTE g_unk0x0082ca18;
 
 // Two packed HUD colours (grey with alpha) used by the split panel.
 // GLOBAL: CMR2 0x005270fc
-int g_unk0x005270fc = 0xff4f4f4f;
+// PORT: AMIGA: keep the R, G, B, A bytes the little-endian original had.
+int g_unk0x005270fc = OPENCMR2_RGBA32(0x4f, 0x4f, 0x4f, 0xff);
 // GLOBAL: CMR2 0x00527100
-int g_unk0x00527100 = 0x804f4f4f;
+int g_unk0x00527100 = OPENCMR2_RGBA32(0x4f, 0x4f, 0x4f, 0x80);
 // Per-rally accent colours indexed by RallyDataCountryIndex().
 // GLOBAL: CMR2 0x00527104
 BYTE g_rallyAccentColours[0x138] = {

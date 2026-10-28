@@ -1,3 +1,4 @@
+#include "port/colour.h"
 #include "port/endian.h"
 #include <cstdio>
 #include <cstring>
@@ -197,6 +198,17 @@ static int TestArrays()
     return 0;
 }
 
+/* The packed colour word must expose R, G, B, A in memory on every host. */
+static int TestColourByteOrder()
+{
+    const int word = OPENCMR2_RGBA32(0x11, 0x22, 0x33, 0x44);
+    const unsigned char *bytes = (const unsigned char *)&word;
+
+    REQUIRE(sizeof(word) == 4);
+    REQUIRE(bytes[0] == 0x11 && bytes[1] == 0x22 && bytes[2] == 0x33 && bytes[3] == 0x44);
+    return 0;
+}
+
 int main()
 {
     if (TestStoredByteOrder()) return 1;
@@ -204,6 +216,7 @@ int main()
     if (TestFloatBitPatterns()) return 1;
     if (TestSwap()) return 1;
     if (TestArrays()) return 1;
+    if (TestColourByteOrder()) return 1;
     if (!EndianC_SelfTest()) {
         fprintf(stderr, "endian helpers failed when compiled as C\n");
         return 1;

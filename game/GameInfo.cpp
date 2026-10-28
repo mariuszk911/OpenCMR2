@@ -26,6 +26,7 @@ inline int OptionMenu_AddPackedScreenRectangleWords(int *pWords)
 #include "Sound.h"
 #include "RallyData.h"
 #include "SavedGame.h"
+#include "port/colour.h"
 #include "port/save_slot.h"
 #include "NetPlayers.h"
 
@@ -6281,9 +6282,14 @@ extern int g_unk0x0082ac48;
 // GLOBAL: CMR2 0x0082ab44
 BYTE g_unk0x0082ab44;
 // GLOBAL: CMR2 0x00527380
-int g_optionTextColours[3] = { -11579569, -11579569, -11579569 };
+// PORT: AMIGA: keep the R, G, B, A bytes the little-endian original had.
+int g_optionTextColours[3] = { OPENCMR2_RGBA32(0x4f, 0x4f, 0x4f, 0xff),
+                               OPENCMR2_RGBA32(0x4f, 0x4f, 0x4f, 0xff),
+                               OPENCMR2_RGBA32(0x4f, 0x4f, 0x4f, 0xff) };
 // GLOBAL: CMR2 0x0052738c
-int g_optionTextBrightColours[3] = { -1, -2130706433, 1078939471 };
+int g_optionTextBrightColours[3] = { OPENCMR2_RGBA32(0xff, 0xff, 0xff, 0xff),
+                                     OPENCMR2_RGBA32(0xff, 0xff, 0xff, 0x80),
+                                     OPENCMR2_RGBA32(0x4f, 0x4f, 0x4f, 0x40) };
 // Text of the option menu's status line (written elsewhere before it is drawn).
 // GLOBAL: CMR2 0x0082a93c
 char g_optionStatusLine[0x100];
@@ -8278,7 +8284,13 @@ void OptionMenu_ResetValueAnimation(int param1, int param2)
 // Colour pairs of the results screen: the second pointer (0x5297b4) starts two
 // entries into the first table.
 // GLOBAL: CMR2 0x005297ac
-int g_unk0x005297ac[6] = { -11579569, 1078939471, -1, -11579569, 538976288, 0 };
+// PORT: AMIGA: keep the R, G, B, A bytes the little-endian original had.
+int g_unk0x005297ac[6] = { OPENCMR2_RGBA32(0x4f, 0x4f, 0x4f, 0xff),
+                           OPENCMR2_RGBA32(0x4f, 0x4f, 0x4f, 0x40),
+                           OPENCMR2_RGBA32(0xff, 0xff, 0xff, 0xff),
+                           OPENCMR2_RGBA32(0x4f, 0x4f, 0x4f, 0xff),
+                           OPENCMR2_RGBA32(0x20, 0x20, 0x20, 0x20),
+                           OPENCMR2_RGBA32(0x00, 0x00, 0x00, 0x00) };
 // GLOBAL: CMR2 0x005297c4
 char g_str0x005297c4[] = "%s: %.2d.00";
 
@@ -8386,7 +8398,8 @@ void OptionMenu_ApplyFirstModeItem(Menu *pMenu, int param)
 
 // Colour pair used by the highlighted option rows and the value at 0x52737c.
 // GLOBAL: CMR2 0x00527378
-int g_unk0x00527378 = -11250490;
+// PORT: AMIGA: keep the R, G, B, A bytes the little-endian original had.
+int g_unk0x00527378 = OPENCMR2_RGBA32(0xc6, 0x54, 0x54, 0xff);
 // GLOBAL: CMR2 0x0052737c
 int g_unk0x0052737c = -1;
 // X multiplier of the option menu layout (450/640 of the resolution).
@@ -10368,7 +10381,8 @@ extern char g_strLabelText[];
 
 // Colour of a highlighted row (light grey).
 // GLOBAL: CMR2 0x00527398
-int g_highlightRowColour = -2142286001;
+// PORT: AMIGA: keep the R, G, B, A bytes the little-endian original had.
+int g_highlightRowColour = OPENCMR2_RGBA32(0x4f, 0x4f, 0x4f, 0x80);
 // Colour of a highlighted row (transparent white).
 // x/y/w/h of the background bar of the row being drawn.
 // Name of the current rally/weather of the rally screen rows.

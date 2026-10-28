@@ -8,6 +8,7 @@
  * little-endian host and only checked when one is running the tests.
  */
 #define OPENCMR2_TEST_FORCE_BIG_ENDIAN 1
+#include "port/colour.h"
 #include "port/endian.h"
 
 #include <string.h>
@@ -49,6 +50,10 @@ int EndianForcedBigSelfTest(void)
         return 0;
     ReadLE16Array(read16, bytes, 2);
     if (memcmp(read16, values16, sizeof(values16)) != 0) return 0;
+
+    /* The big-endian branch of the packed colour word stores R, G, B, A at
+       decreasing significance; the host's own memory order is not simulated. */
+    if (OPENCMR2_RGBA32(0x11, 0x22, 0x33, 0x44) != 0x11223344) return 0;
 #endif
 
     return 1;
