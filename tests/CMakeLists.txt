@@ -109,6 +109,24 @@ target_compile_options(save_image_disk_be_test PRIVATE
 target_compile_definitions(save_image_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 add_test(NAME save_image_disk_be COMMAND save_image_disk_be_test)
 
+# Controller.rcf: six little-endian ControllerData records and the slot
+# mappings. The forced variant proves the swap path on the little-endian host.
+foreach(controller_variant controller_disk controller_disk_be)
+    add_executable(${controller_variant}_test controller_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/controller_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/disk.cpp)
+    target_include_directories(${controller_variant}_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/game
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/port/compat)
+    target_compile_options(${controller_variant}_test PRIVATE
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+        -fms-extensions)
+    add_test(NAME ${controller_variant} COMMAND ${controller_variant}_test)
+endforeach()
+target_compile_definitions(controller_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # M3.1: the C3D stage header is little-endian. The forced-swap variant
 # exercises the decoder branch on a little-endian host; real BE/alignment
 # coverage is the amiga_c3d_header_test built for the 68060 target.

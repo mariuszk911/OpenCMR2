@@ -6,6 +6,7 @@
 #include "Frontend.h"
 #include "FileBuffer.h"
 #include "Game.h"
+#include "port/controller_disk.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -496,17 +497,24 @@ void CInput::LoadControllerInfo(void) {
     fileBuffer = (ControllerData*)CFileBuffer::GetGenericFileBuffer(CFrontend::m_stringDest, TRUE);
     if (fileBuffer != NULL) {
         if (CGenericFileLoader::GetGenericFileSize() == 0x11a4) {
-            memcpy(&m_controllerInfo, fileBuffer, sizeof(m_controllerInfo));
+            ControllerData decoded[CONTROLLER_DISK_RECORDS];
+            unsigned short mapping[CONTROLLER_DISK_MAPPINGS];
 
-            // write the first two elements of the array
-            memcpy(m_unk0x005168f4, &((unsigned int*)fileBuffer)[0x468], 4);
+            // PORT: AMIGA: Controller.rcf is little-endian. Decode into native
+            // copies; an invalid mapping rejects the file and keeps defaults.
+            if (ControllerDisk_Decode(decoded, mapping, fileBuffer, 0x11a4)) {
+                memcpy(&m_controllerInfo, decoded, sizeof(decoded));
 
-            CFileBuffer::FreeGenericFileBuffer(fileBuffer);
-            m_hasLoadedControllerInfo = TRUE;
+                // write the first two elements of the array
+                memcpy(m_unk0x005168f4, mapping, sizeof(mapping));
 
-            ApplyControllerButtonBindings(0);
-            ApplyControllerButtonBindings(1);
+                m_hasLoadedControllerInfo = TRUE;
+
+                ApplyControllerButtonBindings(0);
+                ApplyControllerButtonBindings(1);
+            }
         }
+        CFileBuffer::FreeGenericFileBuffer(fileBuffer);
     }
 }
 
