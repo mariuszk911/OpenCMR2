@@ -137,6 +137,15 @@ foreach(car_info_variant car_info_disk car_info_disk_be)
 endforeach()
 target_compile_definitions(car_info_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# .tsc trackside cameras: count-bounded little-endian 0x6c-byte records.
+foreach(stage_camera_variant stage_camera_disk stage_camera_disk_be)
+    add_executable(${stage_camera_variant}_test stage_camera_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/stage_camera_disk.cpp)
+    target_include_directories(${stage_camera_variant}_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    add_test(NAME ${stage_camera_variant} COMMAND ${stage_camera_variant}_test)
+endforeach()
+target_compile_definitions(stage_camera_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # M3.1: the C3D stage header is little-endian. The forced-swap variant
 # exercises the decoder branch on a little-endian host; real BE/alignment
 # coverage is the amiga_c3d_header_test built for the 68060 target.

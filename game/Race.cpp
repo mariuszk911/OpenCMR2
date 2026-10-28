@@ -25,6 +25,8 @@
 #include "main.h"
 #include "Sound.h"
 #include "NetworkLeaderboards.h"
+#include "port/disk.h"
+#include "port/stage_camera_disk.h"
 #include "RegKey.h"
 
 // Race session state (0x41e210-0x420190)
@@ -740,9 +742,24 @@ BYTE Race_LoadSelectedStage(void)
     StageTiming_LoadCspData();
     RallyData_LoadSelectedRouteNodes();
     Race_LoadCoDriverCallData();
-    sprintf(CFrontend::m_stringDest, g_str0x0051947c, GameMenu_GetChampionshipTransitionState());
-    pTsc = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
-                                                CFrontend::m_stringDest, 0, 0, 0);
+    {
+        DWORD tscSize = 0;
+        BYTE *pNativeTsc = NULL;
+
+        sprintf(CFrontend::m_stringDest, g_str0x0051947c, GameMenu_GetChampionshipTransitionState());
+        pTsc = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
+                                                    CFrontend::m_stringDest, 0, &tscSize, 0);
+        // PORT: AMIGA: .tsc records are little-endian and the stage keeps a
+        // pointer into the list; decode into a copy owned by the archive.
+        if (pTsc != NULL && tscSize != 0)
+            pNativeTsc = (BYTE *)CFileBuffer::AllocateLockedBuffer(tscSize);
+        if (pNativeTsc != NULL && StageCameraDisk_Decode(pNativeTsc, tscSize, pTsc, tscSize, NULL)) {
+            Disk_AttachToBuffer(pTsc, pNativeTsc);
+            pTsc = pNativeTsc;
+        } else if (pNativeTsc != NULL) {
+            CFileBuffer::FreeGenericFileBuffer(pNativeTsc);
+        }
+    }
     StageObject_SelectNonemptyRecordList((int *)pTsc);
     Sector_RebuildStageGrid();
     sprintf(CFrontend::m_stringDest, g_str0x00519474, GameMenu_GetChampionshipTransitionState());

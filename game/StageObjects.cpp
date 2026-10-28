@@ -2732,6 +2732,7 @@ struct CameraSpot {
     int dollyStep;          // 0x60 progress along the dolly track per frame (none when <= 0)
     int zoomStep[2];        // 0x64 step of the zoom, as aimStep
 };
+static_assert(sizeof(CameraSpot) == 0x6c, "CameraSpot file and native stride");
 // The stage's list of CameraSpot records (NULL without one). Keeps its address
 // name: any other name changes register ties in seven functions of this file.
 CameraSpot *g_unk0x00591750;

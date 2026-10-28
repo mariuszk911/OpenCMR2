@@ -48,7 +48,8 @@ add_library(cmr2_game OBJECT
     port/disk.cpp
     port/font_pcf.cpp
     port/replay_disk.cpp
-    port/save_image_disk.cpp)
+    port/save_image_disk.cpp
+    port/stage_camera_disk.cpp)
 # M0 does not link the game yet, so keep it out of the default `all` target.
 # M1 removes this once the platform services exist and the executable links it.
 set_target_properties(cmr2_game PROPERTIES EXCLUDE_FROM_ALL TRUE)
@@ -201,6 +202,12 @@ add_executable(amiga_car_info_test ${PROJECT_SOURCE_DIR}/tests/amiga/car_info_di
     port/car_info_disk.cpp)
 target_include_directories(amiga_car_info_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_car_info_test)
+
+# .tsc trackside cameras: real 68060 decode of the count and 0x6c records.
+add_executable(amiga_stage_camera_test ${PROJECT_SOURCE_DIR}/tests/amiga/stage_camera_disk_test.cpp
+    port/stage_camera_disk.cpp)
+target_include_directories(amiga_stage_camera_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_stage_camera_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)
