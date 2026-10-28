@@ -49,6 +49,7 @@ add_library(cmr2_game OBJECT
     port/disk.cpp
     port/finish_record_disk.cpp
     port/font_pcf.cpp
+    port/light_preset_disk.cpp
     port/replay_disk.cpp
     port/route_disk.cpp
     port/save_image_disk.cpp
@@ -246,6 +247,12 @@ add_executable(amiga_ai_disk_test ${PROJECT_SOURCE_DIR}/tests/amiga/ai_disk_test
     port/ai_disk.cpp)
 target_include_directories(amiga_ai_disk_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_ai_disk_test)
+
+# .hor light presets: real 68060 decode of the seven ints and the byte tail.
+add_executable(amiga_light_preset_test ${PROJECT_SOURCE_DIR}/tests/amiga/light_preset_test.cpp
+    port/light_preset_disk.cpp)
+target_include_directories(amiga_light_preset_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_light_preset_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)

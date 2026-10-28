@@ -26,6 +26,7 @@
 #include "Sound.h"
 #include "NetworkLeaderboards.h"
 #include "port/disk.h"
+#include "port/light_preset_disk.h"
 #include "port/stage_camera_disk.h"
 #include "RegKey.h"
 
@@ -4394,6 +4395,8 @@ void Race_ResolveStageTexturesAndPalettes(void)
 {
     char *pNames[48];
     BYTE *handles[48];
+    DWORD presetSizes[48];
+    StageLightPreset nativePresets[48];
     BYTE colour[6];
     StageLightPreset *pPrimary;
     StageLightPreset *pSecondary;
@@ -4450,7 +4453,15 @@ void Race_ResolveStageTexturesAndPalettes(void)
     pNames[47] = g_str0x005194a8;
     for (i = 0; i < 48; i++)
         handles[i] = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
-                                                       pNames[i], NULL, NULL, 0);
+                                                       pNames[i], NULL, &presetSizes[i], 0);
+    // PORT: AMIGA: .hor records are little-endian. Decode the 48 presets into
+    // stack copies; the blend only reads them during this call.
+    for (i = 0; i < 48; i++) {
+        if (handles[i] != NULL &&
+                LightPresetDisk_Decode(&nativePresets[i], sizeof(nativePresets[i]),
+                                       handles[i], presetSizes[i]))
+            handles[i] = (BYTE *)&nativePresets[i];
+    }
     StageLights_BlendPresetPair(RallyData_GetPrimaryStageScoreScale(), RallyData_GetSecondaryStageScoreScale(), handles, &g_stageLightPresetPrimary,
                  &g_stageLightPresetSecondary);
     StageLights_SetPairFogDistances(g_stageLightPresetPrimary, g_stageLightPresetSecondary);

@@ -201,6 +201,15 @@ foreach(ai_disk_variant ai_disk ai_disk_be)
 endforeach()
 target_compile_definitions(ai_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# .hor light presets: seven little-endian ints per 0x4e-byte record.
+foreach(light_preset_variant light_preset_disk light_preset_disk_be)
+    add_executable(${light_preset_variant}_test light_preset_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/light_preset_disk.cpp)
+    target_include_directories(${light_preset_variant}_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    add_test(NAME ${light_preset_variant} COMMAND ${light_preset_variant}_test)
+endforeach()
+target_compile_definitions(light_preset_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # M3.1: the C3D stage header is little-endian. The forced-swap variant
 # exercises the decoder branch on a little-endian host; real BE/alignment
 # coverage is the amiga_c3d_header_test built for the 68060 target.
