@@ -42,6 +42,7 @@ target_compile_options(opencmr2_domain_a INTERFACE
 add_library(cmr2_game OBJECT
     ${GAME_SOURCES}
     diagnostics/observer.cpp
+    port/ai_disk.cpp
     port/car_info_disk.cpp
     port/credits_text.cpp
     port/controller_disk.cpp
@@ -239,6 +240,12 @@ target_include_directories(amiga_route_node_test PRIVATE
     ${GAME_DIR})
 target_link_libraries(amiga_route_node_test PRIVATE opencmr2_domain_a)
 opencmr2_amiga_stack(amiga_route_node_test)
+
+# .ai? CPU-driver tables: real 68060 decode of every converted region.
+add_executable(amiga_ai_disk_test ${PROJECT_SOURCE_DIR}/tests/amiga/ai_disk_test.cpp
+    port/ai_disk.cpp)
+target_include_directories(amiga_ai_disk_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_ai_disk_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)

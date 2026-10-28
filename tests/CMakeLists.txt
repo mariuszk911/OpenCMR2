@@ -191,6 +191,16 @@ foreach(route_node_variant route_node_disk route_node_disk_be)
 endforeach()
 target_compile_definitions(route_node_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# .ai? CPU-driver tables: the six car tables, route masks/counts, network
+# layer counts, weights, activation table, node keys and reference routes.
+foreach(ai_disk_variant ai_disk ai_disk_be)
+    add_executable(${ai_disk_variant}_test ai_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/ai_disk.cpp)
+    target_include_directories(${ai_disk_variant}_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    add_test(NAME ${ai_disk_variant} COMMAND ${ai_disk_variant}_test)
+endforeach()
+target_compile_definitions(ai_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # M3.1: the C3D stage header is little-endian. The forced-swap variant
 # exercises the decoder branch on a little-endian host; real BE/alignment
 # coverage is the amiga_c3d_header_test built for the 68060 target.

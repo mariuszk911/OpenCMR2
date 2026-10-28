@@ -5,6 +5,7 @@ short Car_GetOrderCount(void);
 #include "FloatToInt.h"
 #include "port/disk.h"
 #include "port/disk_layouts.h"
+#include "port/ai_disk.h"
 #include "port/replay_disk.h"
 #include "ReplayStream.h"
 #include "AINetwork.h"
@@ -13973,9 +13974,23 @@ BYTE *AI_LoadStageRouteTables(void)
     }
     if (pData != files[level])
         memcpy(pData, files[level], sizes[level]);
+    else if (files[level] != NULL) {
+        // PORT: AMIGA: never normalise the archive member in place; the stage
+        // buffer is unavailable, so give the AI tables their own copy.
+        BYTE *pNative = (BYTE *)CFileBuffer::AllocateLockedBuffer(sizes[level]);
+        if (pNative != NULL) {
+            memcpy(pNative, files[level], sizes[level]);
+            Disk_AttachToBuffer(files[level], pNative);
+            pData = pNative;
+        }
+    }
     pEnd = pData + sizes[level];
     if (pData == NULL)
         return pEnd;
+    // PORT: AMIGA: the AI tables are little-endian; normalise the private
+    // copy before the parser walks it.
+    if (pData != files[level])
+        AiDisk_Decode(pData, sizes[level], pData, sizes[level]);
     g_stageAiData = pData;
     p = pData;
     for (i = 0; i < 6; i++) {

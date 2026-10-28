@@ -60,6 +60,7 @@ add_library(opencmr2_platform STATIC
     platform/keys.cpp
     platform/msvcrt.cpp
     port/credits_text.cpp
+    port/ai_disk.cpp
     port/car_info_disk.cpp
     port/controller_disk.cpp
     port/disk.cpp
