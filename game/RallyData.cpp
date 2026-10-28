@@ -1737,24 +1737,25 @@ void RallyData_MarkAllDriverRecordsUnassigned(void)
     } while (i < 16);
 }
 
-// Fills the split-marker rows of the stage-split editor menu, either with the
-// current list of splits (up to three, or four markers in the wide layout) or
-// with the empty/default layout.
+// Fills the weather-select rows of the single-stage setup menu: "Random" plus
+// the distinct weather values of the selected rally (Bright, Dry, Cloudy, ...).
 // match 69%: the original keeps the split list in EDI and the row index in ESI
 // (we get them swapped), so every register in the marker loop differs.
 // FUNCTION: CMR2 0x004efe60
 void RallyData_FillStageSplitEditorRows(Menu *param_1, int param_2, char param_3)
 {
     Menu *pMenu;
-    short *pSplits;
+    int *pSplits;
     int count;
     int i;
     int half;
-    short value;
+    int value;
 
     RallyData_RebuildDistinctValueList();
     count = RallyData_GetDistinctValueCount();
-    pSplits = (short *)RallyData_GetDistinctValueList();
+    // PORT: AMIGA: the list is int[9]. Viewing it as short read the high half
+    // on big-endian 68k, so every weather entry became value 0 ("Bright").
+    pSplits = (int *)RallyData_GetDistinctValueList();
     RallyData_SetDriverPairingStateValues(0, 0);
     pMenu = FrontendMenu_GetAlternateRallyStageSelection();
     pMenu->items[0].id = 0x156;
@@ -1793,7 +1794,7 @@ void RallyData_FillStageSplitEditorRows(Menu *param_1, int param_2, char param_3
                     pMenu->items[i + 1].value = *pSplits;
                     pMenu = FrontendMenu_GetAlternateRallyStageSelection();
                     pMenu->items[i + 1].enabled = param_3;
-                    pSplits += 2;
+                    pSplits++;
                     count--;
                     i++;
                 } while (count != 0);
@@ -1809,18 +1810,18 @@ void RallyData_FillStageSplitEditorRows(Menu *param_1, int param_2, char param_3
             pMenu = FrontendMenu_GetAlternateRallyStageSelection();
             pMenu->items[1].enabled = param_3;
             half = count / 2;
-            value = pSplits[half * 2];
+            value = pSplits[half];
             pMenu = FrontendMenu_GetAlternateRallyStageSelection();
             pMenu->items[2].id = value + 0x157;
             pMenu = FrontendMenu_GetAlternateRallyStageSelection();
             pMenu->items[2].enabled = param_3;
             pMenu = FrontendMenu_GetAlternateRallyStageSelection();
-            pMenu->items[2].value = pSplits[half * 2];
-            value = pSplits[count * 2 - 2];
+            pMenu->items[2].value = pSplits[half];
+            value = pSplits[count - 1];
             pMenu = FrontendMenu_GetAlternateRallyStageSelection();
             pMenu->items[3].id = value + 0x157;
             pMenu = FrontendMenu_GetAlternateRallyStageSelection();
-            pMenu->items[3].value = pSplits[count * 2 - 2];
+            pMenu->items[3].value = pSplits[count - 1];
             pMenu = FrontendMenu_GetAlternateRallyStageSelection();
             pMenu->items[3].enabled = param_3;
         }

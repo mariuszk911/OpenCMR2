@@ -3,8 +3,8 @@
 
 An upstream sync can silently undo a small game/ edit even while every runtime
 test still passes on a little-endian host. These checks fail the host suite if
-the weather-map count or the packed menu colours are reverted to their x86-only
-forms.
+the weather-map count, the packed menu colours or the weather-select value list
+are reverted to their x86-only forms.
 """
 from pathlib import Path
 import re
@@ -47,6 +47,10 @@ def main():
             "game/RallyData.cpp: weather-map count is not assigned directly")
     require("*(int *)&g_mapSrcRect[" not in rally_data,
             "game/RallyData.cpp: g_mapSrcRect is still copied through an int pointer")
+    require("pSplits = (short *)RallyData_GetDistinctValueList" not in rally_data,
+            "game/RallyData.cpp: distinct value list is read through a short pointer")
+    require("pSplits = (int *)RallyData_GetDistinctValueList" in rally_data,
+            "game/RallyData.cpp: distinct value list is not read as int[]")
 
     for name in ("g_optionTextColours", "g_optionTextBrightColours",
                  "g_unk0x005297ac", "g_unk0x00527378", "g_highlightRowColour"):
