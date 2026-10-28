@@ -1,12 +1,14 @@
 /*
- * M1 Sys files/paths smoke for AmigaOS. Run the binary from its drawer;
- * the test derives its own path, so no volume name is hardcoded.
+ * M1 Sys files/paths smoke for AmigaOS. All writable state is under RAM:;
+ * the test builds its own user/data fixture tree and never opens PROGDIR:.
  *
- * The drawer must contain sysfile-user/ and sysfile-data/FrontEnd/Menu.TGA.
  * An emulator run is emulator evidence, not PiStorm evidence.
  */
 #include "platform/amiga/amiga_sys.h"
 #include "port/sys.h"
+
+#include <dos/dos.h>
+#include <proto/dos.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -32,13 +34,56 @@ static int Collect(const char *name, void *context)
     return 1;
 }
 
+static int EnsureDir(const char *path)
+{
+    BPTR created = CreateDir((STRPTR)path);
+    if (created != 0) {
+        UnLock(created);
+        return 1;
+    }
+    BPTR lock = Lock((STRPTR)path, SHARED_LOCK);
+    if (lock == 0)
+        return 0;
+    UnLock(lock);
+    return 1;
+}
+
+static int WriteFixture(const char *path, const char *data)
+{
+    FILE *file = fopen(path, "wb");
+    size_t length = strlen(data);
+    if (file == NULL)
+        return 0;
+    if (fwrite(data, 1, length, file) != length) {
+        fclose(file);
+        return 0;
+    }
+    fclose(file);
+    return 1;
+}
+
 int main(void)
 {
     char buffer[16];
 
-    // PROGDIR: is the test binary's own drawer; no volume name is needed.
-    AmigaSys_SetUserDir("PROGDIR:sysfile-user");
-    AmigaSys_SetDataDir("PROGDIR:sysfile-data");
+    // RAM: is the only safe writable scratch on the target.
+    AmigaSys_SetUserDir("RAM:");
+    if (!EnsureDir("RAM:cmr2sysfile"))
+        return Fail("fixture root");
+    if (!EnsureDir("RAM:cmr2sysfile/user"))
+        return Fail("fixture user");
+    if (!EnsureDir("RAM:cmr2sysfile/data"))
+        return Fail("fixture data");
+    if (!EnsureDir("RAM:cmr2sysfile/data/FrontEnd"))
+        return Fail("fixture frontend");
+    if (!EnsureDir("RAM:cmr2sysfile/data/Saves"))
+        return Fail("fixture saves");
+    if (!WriteFixture("RAM:cmr2sysfile/data/FrontEnd/Menu.TGA", "MENU42"))
+        return Fail("fixture menu");
+    if (!WriteFixture("RAM:cmr2sysfile/data/Saves/slot1.sav", "DATA"))
+        return Fail("fixture slot");
+    AmigaSys_SetUserDir("RAM:cmr2sysfile/user");
+    AmigaSys_SetDataDir("RAM:cmr2sysfile/data");
     Sys_Log("sys_file: begin");
 
     // A data file through a differently-spelled, DOS-style game path.
@@ -51,8 +96,9 @@ int main(void)
         return Fail("read data file");
     Sys_CloseFile(file);
 
-    // Native Amiga paths bypass the data-directory join and normalize '\'.
-    file = Sys_OpenFile("PROGDIR:sysfile-data/frontend\\menu.tga", SYS_FILE_READ);
+    // Native Amiga paths bypass the data-directory join; use the native
+    // separator here. The relative game path above exercises '\' handling.
+    file = Sys_OpenFile("RAM:cmr2sysfile/data/frontend/menu.tga", SYS_FILE_READ);
     if (file == NULL)
         return Fail("open native path");
     if (Sys_ReadFile(file, buffer, sizeof(buffer)) != 6 || memcmp(buffer, "MENU42", 6) != 0)
@@ -60,9 +106,14 @@ int main(void)
     Sys_CloseFile(file);
 
     listedCount = 0;
-    Sys_ListFiles("PROGDIR:sysfile-data/FrontEnd", "*", Collect, NULL);
-    if (listedCount != 1 || strcmp(listed[0], "Menu.TGA") != 0)
-        return Fail("list native path");
+    Sys_ListFiles("FrontEnd", "*", Collect, NULL);
+    if (listedCount != 1 || strcmp(listed[0], "Menu.TGA") != 0) {
+        printf("sys_file: list count %d\n", listedCount);
+        for (int i = 0; i < listedCount; ++i)
+            printf("sys_file: list[%d]=%s\n", i, listed[i]);
+        printf("sys_file: exists=%d\n", Sys_FileExists("FrontEnd/Menu.TGA"));
+        return Fail("list data path");
+    }
 
     // Writing creates the parent directory in the user drawer. Create the
     // names in reverse order so the listing has to sort them.

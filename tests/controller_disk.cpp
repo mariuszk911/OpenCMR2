@@ -2,6 +2,7 @@
 // ControllerData records (port/controller_disk.h).
 #include "Input.h"
 #include "port/controller_disk.h"
+#include "port/disk_layouts.h"
 #include "port/endian.h"
 
 #include <stddef.h>
@@ -71,8 +72,8 @@ static void FillRecord(unsigned char *file, int record)
     PutLE32(p + offsetof(ControllerData, field_0x4), 0x22000000u + (unsigned)record);
     PutLE32(p + offsetof(ControllerData, field_0x10c), 0x33110000u + (unsigned)record);
     PutLE32(p + offsetof(ControllerData, field_0x124), 0x44220000u + (unsigned)record);
-    PutLE16(p + offsetof(ControllerData, field_0x128), 0x1234u + (unsigned)record);
-    PutLE16(p + offsetof(ControllerData, field_0x13c), 0x5678u + (unsigned)record);
+    PutLE16(p + offsetof(ControllerData, field_0x128), 0x10u + (unsigned)record);
+    PutLE16(p + offsetof(ControllerData, field_0x13c), 0x20u + (unsigned)record);
     for (i = 0; i < 9; i++)
         p[offsetof(ControllerData, field_0x13e) + i] = (unsigned char)(0x40 + record * 9 + i);
     p[offsetof(ControllerData, name)] = 'K';
@@ -103,8 +104,8 @@ static int CheckRecords(const ControllerData *records)
         CHECK(records[i].field_0x4 == 0x22000000u + (unsigned)i);
         CHECK(records[i].field_0x10c == 0x33110000u + (unsigned)i);
         CHECK(records[i].field_0x124 == 0x44220000u + (unsigned)i);
-        CHECK(records[i].field_0x128 == (unsigned short)(0x1234u + (unsigned)i));
-        CHECK(records[i].field_0x13c == (unsigned short)(0x5678u + (unsigned)i));
+        CHECK(records[i].field_0x128 == (unsigned short)(0x10u + (unsigned)i));
+        CHECK(records[i].field_0x13c == (unsigned short)(0x20u + (unsigned)i));
         CHECK(records[i].field_0x13e[0] == (unsigned char)(0x40 + i * 9));
         CHECK(records[i].field_0x13e[8] == (unsigned char)(0x40 + i * 9 + 8));
         CHECK(records[i].name[0] == 'K');
@@ -157,6 +158,73 @@ int main(void)
 
     FillFile(file, CONTROLLER_DISK_RECORDS, 0);
     CHECK(ControllerDisk_Decode(records, mapping, file, sizeof(file)) == 0);
+
+    // Pack the native records back to the little-endian file form.
+    FillFile(file, 0, 1);
+    memset(records, 0, sizeof(records));
+    mapping[0] = mapping[1] = 0x5a5a;
+    CHECK(ControllerDisk_Decode(records, mapping, file, sizeof(file)) != 0);
+    if (CheckRecords(records))
+        return 1;
+    {
+        unsigned char packed[CONTROLLER_DISK_FILE_SIZE];
+        ControllerData packedRecords[CONTROLLER_DISK_RECORDS];
+        unsigned short packedMapping[CONTROLLER_DISK_MAPPINGS];
+
+        // Both slots mapped to 0 is the ambiguous case: this LE file must
+        // still be decoded as LE, while the BE conversion below must migrate.
+        mapping[0] = 0;
+        mapping[1] = 0;
+        CHECK(ControllerDisk_Pack(packed, sizeof(packed), records, mapping) != 0);
+        memset(packedRecords, 0, sizeof(packedRecords));
+        CHECK(ControllerDisk_DecodeAuto(packedRecords, packedMapping, packed, sizeof(packed)) != 0);
+        CHECK(packedMapping[0] == 0 && packedMapping[1] == 0);
+        if (CheckRecords(packedRecords))
+            return 1;
+
+#if !defined(OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+        // A file written by the old big-endian build must still load.
+        {
+            unsigned char legacy[CONTROLLER_DISK_FILE_SIZE];
+            ControllerData legacyRecords[CONTROLLER_DISK_RECORDS];
+            unsigned short legacyMapping[CONTROLLER_DISK_MAPPINGS];
+            int j;
+            int recordIndex;
+
+            memcpy(legacy, packed, sizeof(legacy));
+            for (recordIndex = 0; recordIndex < CONTROLLER_DISK_RECORDS; recordIndex++) {
+                for (j = 0; j < g_diskLayout_ControllerData.swapCount; j++) {
+                    const DiskSwap &swap = g_diskLayout_ControllerData.swaps[j];
+                    size_t offset = (size_t)recordIndex * g_diskLayout_ControllerData.diskSize + swap.disk;
+                    if (swap.size == 2) {
+                        unsigned char t = legacy[offset];
+                        legacy[offset] = legacy[offset + 1];
+                        legacy[offset + 1] = t;
+                    } else if (swap.size == 4) {
+                        unsigned char t0 = legacy[offset], t1 = legacy[offset + 1];
+                        legacy[offset] = legacy[offset + 3];
+                        legacy[offset + 1] = legacy[offset + 2];
+                        legacy[offset + 2] = t1;
+                        legacy[offset + 3] = t0;
+                    }
+                }
+            }
+            {
+                unsigned char t = legacy[0x11a0];
+                legacy[0x11a0] = legacy[0x11a1];
+                legacy[0x11a1] = t;
+                t = legacy[0x11a2];
+                legacy[0x11a2] = legacy[0x11a3];
+                legacy[0x11a3] = t;
+            }
+            memset(legacyRecords, 0, sizeof(legacyRecords));
+            CHECK(ControllerDisk_DecodeAuto(legacyRecords, legacyMapping, legacy, sizeof(legacy)) != 0);
+            CHECK(legacyMapping[0] == 0 && legacyMapping[1] == 0);
+            if (CheckRecords(legacyRecords))
+                return 1;
+        }
+#endif
+    }
 
     // Wrong sizes and NULL inputs are rejected.
     FillFile(file, 0, 1);

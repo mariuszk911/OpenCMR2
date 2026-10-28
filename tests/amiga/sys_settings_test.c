@@ -1,12 +1,14 @@
 /*
- * M1 Sys settings smoke for AmigaOS. Run the binary from its drawer; the
- * test derives its own path, so no volume name is hardcoded.
+ * M1 Sys settings smoke for AmigaOS. All writable state is under RAM:; the
+ * test builds its own opencmr2.ini and never opens PROGDIR:.
  *
- * The drawer must contain syssettings-user/opencmr2.ini. An emulator run is
- * emulator evidence, not PiStorm evidence.
+ * An emulator run is emulator evidence, not PiStorm evidence.
  */
 #include "platform/amiga/amiga_sys.h"
 #include "port/sys.h"
+
+#include <dos/dos.h>
+#include <proto/dos.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -18,10 +20,49 @@ static int Fail(const char *what)
     return 1;
 }
 
+static int EnsureDir(const char *path)
+{
+    BPTR created = CreateDir((STRPTR)path);
+    if (created != 0) {
+        UnLock(created);
+        return 1;
+    }
+    BPTR lock = Lock((STRPTR)path, SHARED_LOCK);
+    if (lock == 0)
+        return 0;
+    UnLock(lock);
+    return 1;
+}
+
 int main(void)
 {
-    // PROGDIR: is the test binary's own drawer; no volume name is needed.
-    AmigaSys_SetUserDir("PROGDIR:syssettings-user");
+    static const char fixture[] =
+        "[install]\n"
+        "language = French\n"
+        "\n"
+        "[paths]\n"
+        "data = game-data\n"
+        "\n"
+        "[video]\n"
+        "fullscreen = 0\n";
+
+    // RAM: is the only safe writable scratch on the target.
+    AmigaSys_SetUserDir("RAM:");
+    if (!EnsureDir("RAM:cmr2test-syssettings")) {
+        Sys_Log("sys_settings: FAIL fixture directory");
+        return 1;
+    }
+    {
+        FILE *file = fopen("RAM:cmr2test-syssettings/opencmr2.ini", "wb");
+        if (file == NULL || fwrite(fixture, 1, sizeof(fixture) - 1, file) != sizeof(fixture) - 1) {
+            if (file != NULL)
+                fclose(file);
+            Sys_Log("sys_settings: FAIL fixture ini");
+            return 1;
+        }
+        fclose(file);
+    }
+    AmigaSys_SetUserDir("RAM:cmr2test-syssettings");
 
     if (strcmp(Sys_GetInstallSetting("Language"), "French") != 0)
         return Fail("install.language");

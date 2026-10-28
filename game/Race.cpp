@@ -768,9 +768,16 @@ BYTE Race_LoadSelectedStage(void)
     sprintf(CFrontend::m_stringDest, g_str0x00519474, GameMenu_GetChampionshipTransitionState());
     pTre = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
                                                 CFrontend::m_stringDest, 0, 0, 0);
-    sprintf(CFrontend::m_stringDest, g_str0x0051946c, GameMenu_GetChampionshipTransitionState());
-    pXhi = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
-                                                CFrontend::m_stringDest, 0, 0, 0);
+    {
+        DWORD xhiSize = 0;
+
+        sprintf(CFrontend::m_stringDest, g_str0x0051946c, GameMenu_GetChampionshipTransitionState());
+        pXhi = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
+                                                    CFrontend::m_stringDest, 0, &xhiSize, 0);
+        // PORT: AMIGA: Scene_InitLighting needs the member extent to stop the
+        // .hpc vertex count from reading past a short .xhi member.
+        g_trackHeightsByteCount = pXhi != NULL ? xhiSize : 0;
+    }
     if (pTre != 0 && (char)CGameInfo::GetGraphicsOptionBit4() == 0)
         pTre = 0;
     Scene_InitLighting((int *)pTre, (int *)pXhi);

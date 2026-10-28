@@ -549,3 +549,11 @@ if(WIN32)
         endif()
     endforeach()
 endif()
+
+# Bounded C3D word conversion for the .xhi member extent.
+foreach(c3d_payload_bound_variant c3d_payload_bound c3d_payload_bound_be)
+    add_executable(${c3d_payload_bound_variant}_test c3d_payload_bound.cpp)
+    target_include_directories(${c3d_payload_bound_variant}_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    add_test(NAME ${c3d_payload_bound_variant} COMMAND ${c3d_payload_bound_variant}_test)
+endforeach()
+target_compile_definitions(c3d_payload_bound_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)

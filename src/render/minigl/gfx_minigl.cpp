@@ -165,6 +165,8 @@ static const float kMenuDotCircle[20][2] = {
 int s_width = 640;
 int s_height = 480;
 int s_locked;
+int s_tlScreenActive;
+
 int s_fullscreen;
 // Windowed mode: the application owns this window and MiniGL renders into it.
 void *s_gameWindow;
@@ -732,6 +734,7 @@ extern "C" void Gfx_Present(int vsync)
         return;
     if (s_diag.inStage)
         s_diag.frames++;
+    s_tlScreenActive = 0;
     if (s_locked) {
         mglUnlockDisplay();
         s_locked = 0;
@@ -828,8 +831,8 @@ void ApplyViewport(void)
 
 // TL vertices are in screen coordinates over the whole screen, like the host
 // executors' fixedtl shader, and are clipped (not scaled) by the game's
-// viewport through the scissor test. The caller holds the display lock and
-// calls EndScreenDraw afterwards.
+// viewport through the scissor test. The full-screen projection stays active
+// until a 3D draw or a viewport/render-target change ends the TL batch.
 void BeginScreenDraw(void)
 {
     int screenW, screenH;
@@ -842,12 +845,6 @@ void BeginScreenDraw(void)
     s_glCache.projectionValid = 0;
 }
 
-// Restores the game's viewport for the draws that use it.
-void EndScreenDraw(void)
-{
-    glViewport(s_targetViewport.x, s_targetViewport.y, s_targetViewport.width, s_targetViewport.height);
-    s_glCache.projectionValid = 0;
-}
 
 } // namespace
 
@@ -856,6 +853,7 @@ extern "C" void Gfx_SetViewport(const GfxViewport *viewport)
     if (viewport == NULL)
         return;
     s_viewport = *viewport;
+    s_tlScreenActive = 0;
     if (s_renderTarget == NULL && s_context != NULL && EnsureLocked())
         ApplyViewport();
 }
@@ -872,6 +870,7 @@ extern "C" void Gfx_SetVirtualScreen(int width, int height)
         width = height = 0;
     if (width == s_virtualWidth && height == s_virtualHeight)
         return;
+    s_tlScreenActive = 0;
     const bool wasMenus = s_virtualWidth > 0 && s_virtualHeight > 0;
     if (wasMenus && width == 0) {
         s_stageEntryPending = 1;
@@ -989,6 +988,7 @@ extern "C" void Gfx_SetRenderTarget(GfxTexture *target)
         }
     }
     s_renderTarget = target;
+    s_tlScreenActive = 0;
     // Back on the back buffer, restore the viewport the game set for it.
     if (target == NULL && s_context != NULL && EnsureLocked())
         ApplyViewport();
@@ -1507,8 +1507,8 @@ void Apply3DTransforms(GfxMatrix *outWorldView)
     MultiplyRowMatrices(world, view, outWorldView);
 
     // The projection changes per camera/pass, not per draw. It is also
-    // replaced by the 2D ortho projection, so BeginScreenDraw/EndScreenDraw
-    // clear the flag.
+    // replaced by the 2D ortho projection, so BeginScreenDraw and the
+    // TL-to-3D transition clear the flag.
     GLfloat glProj[16];
     BuildGlProjectionMatrix(proj, glProj);
     if (!s_glCache.projectionValid || memcmp(s_glCache.projection, glProj, sizeof(glProj)) != 0) {
@@ -2214,6 +2214,10 @@ void Submit3DDraw(int primitive, const GfxVertex *vertices, uint32_t vertexCount
     s_diag.drawCalls3D++;
     s_diag.triangles3D += CountTriangles(primitive, indices != NULL ? indexCount : vertexCount);
 
+    if (s_tlScreenActive) {
+        s_tlScreenActive = 0;
+        ApplyViewport();
+    }
     GfxMatrix worldView;
     Apply3DTransforms(&worldView);
     Apply3DRasterState();
@@ -2293,7 +2297,10 @@ void BeginTLDraw(void)
     ResetPost3DStages();
     SelectActiveUnit(0);
     SyncStage0ForTL();
-    BeginScreenDraw();
+    if (!s_tlScreenActive) {
+        BeginScreenDraw();
+        s_tlScreenActive = 1;
+    }
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 }
@@ -2383,11 +2390,9 @@ extern "C" void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, 
         glEnd();
         glEnable(GL_TEXTURE_2D);
         s_glCache.texEnabled[0] = 1;
-        EndScreenDraw();
         return;
     }
     SubmitTLBlocks(mode, vertices, NULL, vertexCount);
-    EndScreenDraw();
 }
 
 extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount,
@@ -2413,7 +2418,6 @@ extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *ver
 
     BeginTLDraw();
     SubmitTLBlocks(mode, vertices, indices, indexCount);
-    EndScreenDraw();
 }
 
 extern "C" void Gfx_GetPixelFormat(int format, GfxPixelFormat *out)

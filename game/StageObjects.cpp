@@ -1605,33 +1605,42 @@ void Replay_CopyAuxState(Block0x134 *pSrc, Block0x134 *pDst)
     *pDst = *pSrc;
 }
 
-// Copies a 0x134-int car state record, keeping the destination's first three
-// 15-int blocks.
+// Copies a 0x134-int car state record, keeping the destination's geometry
+// pointers. The generated pointer list is the only layout-safe description:
+// the geometry block is 0xb4 bytes on 32-bit and 0x168 on 64-bit.
+static void Replay_KeepPartSetPointers(Block0x134 *pDst, unsigned char *keep)
+{
+    int i;
+
+    for (i = 0; i < g_diskLayout_CarPartSet.pointerCount; i++) {
+        const DiskPointer &pointer = g_diskLayout_CarPartSet.pointers[i];
+        memcpy(keep + (size_t)i * sizeof(void *),
+               (unsigned char *)pDst + pointer.native, sizeof(void *));
+    }
+}
+
+static void Replay_RestorePartSetPointers(Block0x134 *pDst, const unsigned char *keep)
+{
+    int i;
+
+    for (i = 0; i < g_diskLayout_CarPartSet.pointerCount; i++) {
+        const DiskPointer &pointer = g_diskLayout_CarPartSet.pointers[i];
+        memcpy((unsigned char *)pDst + pointer.native,
+               keep + (size_t)i * sizeof(void *), sizeof(void *));
+    }
+}
+
 // match 77%: below the 90% bar; kept as FUNCTION on purpose so reccmp measures it (see CONVENCIONES)
 // FUNCTION: CMR2 0x0046c1a0
 void Replay_RestoreAuxState(Block0x134 *pSrc, Block0x134 *pDst)
 {
-    if (sizeof(CarPartSet) != g_diskLayout_CarPartSet.diskSize) {
-        // PORT: AMIGA: apply the scalar swaps while copying the disk lane.
-        Disk_Unpack(pDst, pSrc, &g_diskLayout_CarPartSet);
-        return;
-    }
+    unsigned char keep[sizeof(CarPartSet)];
 
-    int keepC[15];
-    int keepB[15];
-    int keepA[15];
-    int i;
-
-    memcpy(keepC, pDst->data + 30, sizeof(keepC));
-    memcpy(keepB, pDst->data + 15, sizeof(keepB));
-    memcpy(keepA, pDst->data, sizeof(keepA));
-    // PORT: AMIGA: the same-size path still needs the endian swaps.
+    // PORT: AMIGA: both paths must keep every live geometry pointer that
+    // Disk_Unpack zeroes; only the scalar damage state comes from the lane.
+    Replay_KeepPartSetPointers(pDst, keep);
     Disk_Unpack(pDst, pSrc, &g_diskLayout_CarPartSet);
-    for (i = 0; i < 15; i++) {
-        pDst->data[i] = keepA[i];
-        pDst->data[15 + i] = keepB[i];
-        pDst->data[30 + i] = keepC[i];
-    }
+    Replay_RestorePartSetPointers(pDst, keep);
 }
 
 // FUNCTION: CMR2 0x0046c220

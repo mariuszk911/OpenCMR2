@@ -43,6 +43,8 @@ extern short *g_trackTriangleIndices;
 extern short *g_trackGridRows;
 extern short *g_trackGridColumns;
 extern TrackCollisionCount *g_trackVertexCountRecord;
+/* PORT: AMIGA: .xhi member extent captured by Race_LoadSelectedStage. */
+extern DWORD g_trackHeightsByteCount;
 extern BYTE *g_trackCollisionBlock;
 extern int *g_trackTriangleListCount;
 extern int g_trackLevelNodeCounts[5];

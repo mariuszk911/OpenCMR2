@@ -47,10 +47,6 @@ GfxTLVertex g_spriteVerts3[1024 * 4];
 void Graphics_InvalidateTextureStageCache(void);
 
 
-// PORT: pixels of the back buffer per pixel of the screen the game draws in,
-// larger than 1 when the menus are scaled up (see MenuScreen_Begin).
-static float g_spriteScreenScale = 1.0f;
-
 // PORT: the fraction of a pixel the next queued sprite is moved by
 // (Sprite_SetNextSubpixelOffset).
 static int g_spriteNextSubpixel[2];
@@ -1208,7 +1204,6 @@ void MenuScreen_Begin(void)
         g_pGraphics->resX = x;
         g_pGraphics->resY = y;
         Gfx_SetVirtualScreen(x, y);
-        g_spriteScreenScale = X87S_DIV(X87S_FILD(float, realY), X87S_LOAD(y));
     }
     if (x != g_menuScreenLastX || y != g_menuScreenLastY) {
         // The first frame's are those the menus were built on.
@@ -1233,7 +1228,6 @@ void MenuScreen_End(void)
         g_pGraphics->resY = g_menuScreen.resY;
     }
     Gfx_SetVirtualScreen(0, 0);
-    g_spriteScreenScale = 1.0f;
     g_menuScreen.active = 0;
 }
 
@@ -1250,7 +1244,6 @@ void MenuScreen_Suspend(void)
     g_pGraphics->resX = g_menuScreen.resX;
     g_pGraphics->resY = g_menuScreen.resY;
     Gfx_SetVirtualScreen(0, 0);
-    g_spriteScreenScale = 1.0f;
 }
 
 void MenuScreen_Resume(void)
@@ -1261,7 +1254,6 @@ void MenuScreen_Resume(void)
     g_pGraphics->resX = g_menuScreen.screenX;
     g_pGraphics->resY = g_menuScreen.screenY;
     Gfx_SetVirtualScreen(g_menuScreen.screenX, g_menuScreen.screenY);
-    g_spriteScreenScale = X87S_DIV(X87S_FILD(float, g_menuScreen.resY), X87S_LOAD(g_menuScreen.screenY));
 }
 
 // The largest menu_scale the display takes: above it the menus' screen

@@ -43,7 +43,7 @@ void DecodeRecord(unsigned char *dst, const unsigned char *src)
     Decode16(dst + 0x02, src + 0x02);
     for (i = 0; i < 5; i++)
         DecodeVector(dst + 0x04 + (size_t)i * 0x0c, src + 0x04 + (size_t)i * 0x0c);
-    for (i = 0; i < 10; i++)
+    for (i = 0; i < 11; i++)
         Decode32(dst + 0x40 + (size_t)i * 4, src + 0x40 + (size_t)i * 4);
 }
 

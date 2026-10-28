@@ -66,6 +66,17 @@ char s_lastMissing[512];
 std::map<std::string, std::string> *s_settings;
 bool s_settingsLoaded;
 
+// Small cache for the per-frame option lookups (HUD aspect/scale, vsync).
+// Keys are short literals; the value pointers stay valid until the settings
+// are reparsed.
+struct SettingCacheEntry {
+    char name[48];
+    const char *value;
+};
+static SettingCacheEntry s_settingCache[4];
+static int s_settingCacheCount;
+static int s_settingCacheNext;
+
 const int kMaxListedFiles = 256;
 const int kListedNameSize = AMIGA_PATH_PART_MAX;
 const size_t kNativePathSize = 640;
@@ -381,7 +392,12 @@ int CreateParentDirs(const AmigaGamePath *parts)
             UnLock(lock);
             continue;
         }
-        if (!CreateDir((STRPTR)path)) {
+        BPTR created = CreateDir((STRPTR)path);
+        if (created != 0) {
+            UnLock(created);
+            continue;
+        }
+        {
             const LONG error = IoErr();
             lock = Lock((STRPTR)path, SHARED_LOCK);
             if (lock == 0) {
@@ -443,7 +459,23 @@ void CollectDir(const char *directory, const char *pattern,
                 char names[][kListedNameSize], int *count)
 {
     struct FileInfoBlock info OPENCMR2_PORT_ALIGN4;
-    BPTR lock = Lock((STRPTR)directory, SHARED_LOCK);
+    char lockPath[kNativePathSize];
+    size_t length = 0;
+    BPTR lock;
+
+    if (directory != NULL) {
+        while (directory[length] != '\0' && length + 1 < sizeof(lockPath)) {
+            lockPath[length] = directory[length];
+            ++length;
+        }
+    }
+    if (length > 0 && lockPath[length - 1] != '/' && lockPath[length - 1] != ':') {
+        if (length + 1 >= sizeof(lockPath))
+            return;
+        lockPath[length++] = '/';
+    }
+    lockPath[length] = '\0';
+    lock = Lock((STRPTR)lockPath, SHARED_LOCK);
 
     if (lock == 0)
         return;
@@ -534,6 +566,8 @@ void EnsureSettingsLoaded(void)
     if (s_settingsLoaded)
         return;
     s_settingsLoaded = true;
+    s_settingCacheCount = 0;
+    s_settingCacheNext = 0;
     if (s_settings == NULL)
         s_settings = new std::map<std::string, std::string>();
     std::string path;
@@ -545,12 +579,24 @@ void EnsureSettingsLoaded(void)
 
 const char *GetSettingText(const char *name)
 {
+    std::map<std::string, std::string>::const_iterator it;
+    int i;
+
     if (name == NULL)
         return NULL;
     EnsureSettingsLoaded();
-    const std::map<std::string, std::string>::const_iterator it =
-        s_settings->find(AmigaSettings::Lower(name));
-    return it != s_settings->end() ? it->second.c_str() : NULL;
+    for (i = 0; i < s_settingCacheCount; i++) {
+        if (strcmp(s_settingCache[i].name, name) == 0)
+            return s_settingCache[i].value;
+    }
+    it = s_settings->find(AmigaSettings::Lower(name));
+    if (strlen(name) >= sizeof(s_settingCache[0].name))
+        return it != s_settings->end() ? it->second.c_str() : NULL;
+    i = s_settingCacheCount < 4 ? s_settingCacheCount++ : s_settingCacheNext;
+    s_settingCacheNext = (i + 1) % 4;
+    strcpy(s_settingCache[i].name, name);
+    s_settingCache[i].value = it != s_settings->end() ? it->second.c_str() : NULL;
+    return s_settingCache[i].value;
 }
 
 bool SaveSetting(const std::string &section, const std::string &key, const std::string &value)
@@ -581,16 +627,22 @@ bool SaveSetting(const std::string &section, const std::string &key, const std::
             DeleteFile((STRPTR)temporary.c_str());
             return false;
         }
-        if (!DeleteFile((STRPTR)path.c_str())) {
-            Sys_Log("settings: cannot replace %s (IoErr %ld)", path.c_str(), (long)IoErr());
+        const std::string backup = path + ".bak";
+        DeleteFile((STRPTR)backup.c_str());
+        if (!Rename((STRPTR)path.c_str(), (STRPTR)backup.c_str())) {
+            Sys_Log("settings: cannot back up %s (IoErr %ld)", path.c_str(), (long)IoErr());
             DeleteFile((STRPTR)temporary.c_str());
             return false;
         }
         if (!Rename((STRPTR)temporary.c_str(), (STRPTR)path.c_str())) {
-            Sys_Log("settings: cannot rename %s (IoErr %ld)", temporary.c_str(), (long)IoErr());
+            const LONG replaceError = IoErr();
+            Sys_Log("settings: cannot rename %s (IoErr %ld)", temporary.c_str(), (long)replaceError);
+            if (!Rename((STRPTR)backup.c_str(), (STRPTR)path.c_str()))
+                Sys_Log("settings: cannot restore %s (IoErr %ld)", path.c_str(), (long)IoErr());
             DeleteFile((STRPTR)temporary.c_str());
             return false;
         }
+        DeleteFile((STRPTR)backup.c_str());
     }
     return true;
 }
@@ -676,6 +728,18 @@ extern "C" int AmigaSys_EnsureSettingsFile(void)
     if (lock != 0) {
         UnLock(lock);
         return 1;
+    }
+    // A save interrupted between the live rename and the temp rename leaves
+    // only the backup. Recover it before creating defaults.
+    const std::string backup = path + ".bak";
+    BPTR backupLock = Lock((STRPTR)backup.c_str(), SHARED_LOCK);
+    if (backupLock != 0) {
+        UnLock(backupLock);
+        if (Rename((STRPTR)backup.c_str(), (STRPTR)path.c_str())) {
+            s_settingsLoaded = false;
+            return 1;
+        }
+        Sys_Log("settings: cannot restore %s (IoErr %ld)", backup.c_str(), (long)IoErr());
     }
     static const char defaults[] =
         "; OpenCMR2 settings\n"
@@ -779,15 +843,20 @@ int CreateNativeParentDirs(char *path)
         BPTR lock = Lock((STRPTR)path, SHARED_LOCK);
         if (lock != 0) {
             UnLock(lock);
-        } else if (!CreateDir((STRPTR)path)) {
-            const LONG error = IoErr();
-            lock = Lock((STRPTR)path, SHARED_LOCK);
-            if (lock == 0) {
-                *p = '/';
-                Sys_Log("CreateDir %s failed (IoErr %ld)", path, (long)error);
-                return 0;
+        } else {
+            BPTR created = CreateDir((STRPTR)path);
+            if (created != 0) {
+                UnLock(created);
+            } else {
+                const LONG error = IoErr();
+                lock = Lock((STRPTR)path, SHARED_LOCK);
+                if (lock == 0) {
+                    *p = '/';
+                    Sys_Log("CreateDir %s failed (IoErr %ld)", path, (long)error);
+                    return 0;
+                }
+                UnLock(lock);
             }
-            UnLock(lock);
         }
         *p = '/';
     }
@@ -1153,6 +1222,8 @@ extern "C" int Sys_SetOption(const char *name, int value)
     EnsureSettingsLoaded();
     const bool saved = SaveSetting(key.substr(0, dot), key.substr(dot + 1), text);
     (*s_settings)[key] = text;
+    s_settingCacheCount = 0;
+    s_settingCacheNext = 0;
     return saved ? 1 : 0;
 }
 

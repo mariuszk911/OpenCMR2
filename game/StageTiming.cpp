@@ -1688,6 +1688,8 @@ short *g_trackGridRows;
 short *g_trackGridColumns;
 // GLOBAL: CMR2 0x00591b24
 TrackCollisionCount *g_trackVertexCountRecord;
+// PORT: AMIGA: .xhi member extent checked by Scene_InitLighting.
+DWORD g_trackHeightsByteCount;
 // GLOBAL: CMR2 0x00591b30
 BYTE *g_trackCollisionBlock;
 // GLOBAL: CMR2 0x00591b34
@@ -5764,15 +5766,32 @@ void StageTiming_LoadSelectedTeamArchive(void)
         } else {
             index = CGameInfo::GetConfiguredDifficulty();
         }
-        memcpy(dest, bufs[index], sizes[index]);
+        if (dest != NULL && bufs[index] != NULL && sizes[index] != 0)
+            memcpy(dest, bufs[index], sizes[index]);
         // PORT: AMIGA: the .tm? table keeps its signed-byte prefix and stores
-        // the split samples/weights as little-endian 32-bit words. Normalise
-        // the private stage-buffer copy, never an archive-member fallback.
-        if (dest != bufs[0] && dest != bufs[1] && dest != bufs[2])
-            SplitTableDisk_Decode(dest, sizes[index], dest, sizes[index]);
+        // the split samples/weights as little-endian 32-bit words. The AI
+        // tables are staged after dest, so decode a separate owned copy here
+        // instead of normalising an archive member in place.
+        BYTE *splitTable = (BYTE *)dest;
+        int tableOk = 0;
+        if (dest != NULL && dest != bufs[0] && dest != bufs[1] && dest != bufs[2]) {
+            tableOk = SplitTableDisk_Decode(dest, sizes[index], dest, sizes[index]);
+        } else if (bufs[index] != NULL && sizes[index] >= SPLIT_TABLE_BYTE_PREFIX) {
+            BYTE *pNative = (BYTE *)CFileBuffer::AllocateLockedBuffer(sizes[index]);
+            if (pNative != NULL) {
+                memcpy(pNative, bufs[index], sizes[index]);
+                if (SplitTableDisk_Decode(pNative, sizes[index], pNative, sizes[index])) {
+                    Disk_AttachToBuffer(bufs[index], pNative);
+                    splitTable = pNative;
+                    tableOk = 1;
+                } else {
+                    CFileBuffer::FreeGenericFileBuffer(pNative);
+                }
+            }
+        }
         g_unk0x00541f8c = (BYTE *)dest + sizes[index];
-        g_splitSpreadTable = (char *)dest;
-        if (dest != NULL)
+        g_splitSpreadTable = (char *)splitTable;
+        if (dest != NULL && tableOk)
             g_unk0x00542604 = 1;
     }
 }

@@ -1673,15 +1673,24 @@ void Scene_InitLighting(int *pData, int *pHeights)
     }
     Scene_LoadLighting(pData);
     // PORT: AMIGA: .xhi holds one height per track vertex; use the HPC vertex
-    // count and copy to native integers. The archive API has no member length,
-    // so a mismatched .xhi is not detected here.
+    // count and copy to native integers. The member extent was captured by
+    // Race_LoadSelectedStage; a short or mismatched .xhi must not be read.
     if (pHeights != NULL && g_trackVertexCountRecord != NULL &&
         g_trackVertexCountRecord->count != 0) {
         const size_t heightBytes = (size_t)g_trackVertexCountRecord->count * 4;
-        g_sceneLightHeights = (BYTE *)CFileBuffer::AllocateLockedBuffer(heightBytes);
-        if (g_sceneLightHeights != NULL) {
-            C3D_DecodeWords(g_sceneLightHeights, pHeights, heightBytes);
-            g_triangleVertexHeights = (int *)g_sceneLightHeights;
+
+        if (g_trackHeightsByteCount != 0) {
+            g_sceneLightHeights = (BYTE *)CFileBuffer::AllocateLockedBuffer(heightBytes);
+            if (g_sceneLightHeights != NULL &&
+                    C3D_DecodeWordsBounded(g_sceneLightHeights, pHeights, heightBytes,
+                                           (size_t)g_trackHeightsByteCount)) {
+                g_triangleVertexHeights = (int *)g_sceneLightHeights;
+            } else {
+                if (g_sceneLightHeights != NULL)
+                    CFileBuffer::FreeGenericFileBuffer(g_sceneLightHeights);
+                g_sceneLightHeights = NULL;
+                g_triangleVertexHeights = NULL;
+            }
         } else {
             g_triangleVertexHeights = NULL;
         }

@@ -78,7 +78,7 @@ static void BuildSynthetic(unsigned char *file)
         PutLE16(p + 0x02, 0x200 + i);
         for (k = 0; k < 5; k++)
             PutVector(p + 0x04 + k * 12, 0x1000 + i * 0x100 + k, 0x2000 + i * 0x100 + k, 0x3000 + i * 0x100 + k);
-        for (k = 0; k < 10; k++)
+        for (k = 0; k < 11; k++)
             PutLE32(p + 0x40 + k * 4, 0x4000 + i * 0x100 + k);
     }
 }
@@ -98,6 +98,7 @@ static int CheckSynthetic(const unsigned char *file)
             CHECK(GetHost32(p + 0x04 + k * 12 + 8) == 0x3000u + i * 0x100u + (unsigned)k);
         CHECK(GetHost32(p + 0x40) == 0x4000u + i * 0x100u);
         CHECK(GetHost32(p + 0x64) == 0x4009u + i * 0x100u);
+        CHECK(GetHost32(p + 0x68) == 0x400au + i * 0x100u);
     }
     return 0;
 }
@@ -143,6 +144,7 @@ int main(int argc, char **argv)
         CHECK(GetHost16(output + 4) == (unsigned short)-1792);
         CHECK(GetHost32(output + 4 + 0x04) == (unsigned)-36280);
         CHECK(GetHost32(output + 4 + 0x40) == 4587520u);
+        CHECK(GetHost32(output + 4 + 0x68) == 14417u);
     }
 
     printf("stage_camera: OK\n");

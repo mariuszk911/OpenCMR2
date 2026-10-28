@@ -53,4 +53,15 @@ static inline void C3D_DecodeWords(void *destination, const void *source, size_t
         C3D_StoreHost32(dst + i, ReadLE32(src + i));
 }
 
+/* Bounded variant for a member whose extent differs from the count in another
+ * file: returns 0 without writing when the requested range does not fit. */
+static inline int C3D_DecodeWordsBounded(void *destination, const void *source,
+                                         size_t bytes, size_t available)
+{
+    if (destination == NULL || source == NULL || (bytes & 3u) != 0 || bytes > available)
+        return 0;
+    C3D_DecodeWords(destination, source, bytes);
+    return 1;
+}
+
 #endif

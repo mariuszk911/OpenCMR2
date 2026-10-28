@@ -501,8 +501,10 @@ void CInput::LoadControllerInfo(void) {
             unsigned short mapping[CONTROLLER_DISK_MAPPINGS];
 
             // PORT: AMIGA: Controller.rcf is little-endian. Decode into native
-            // copies; an invalid mapping rejects the file and keeps defaults.
-            if (ControllerDisk_Decode(decoded, mapping, fileBuffer, 0x11a4)) {
+            // copies; a file written by the pre-fix big-endian build is
+            // migrated so the user's bindings survive the upgrade. The auto
+            // decoder also handles a legacy file with both slots mapped to 0.
+            if (ControllerDisk_DecodeAuto(decoded, mapping, fileBuffer, 0x11a4)) {
                 memcpy(&m_controllerInfo, decoded, sizeof(decoded));
 
                 // write the first two elements of the array
@@ -1272,8 +1274,14 @@ void CInput::SaveControllerInfo(void)
     unsigned int *buffer;
 
     buffer = (unsigned int *)CFileBuffer::AllocateLockedBuffer(0x11a4);
-    memcpy(buffer, m_controllerInfo, sizeof(m_controllerInfo));
-    buffer[0x468] = *(unsigned int *)m_unk0x005168f4;
+    if (buffer == NULL)
+        return;
+    // PORT: AMIGA: Controller.rcf is little-endian; the loader rejects a
+    // native big-endian save, so pack the records and mappings explicitly.
+    if (!ControllerDisk_Pack(buffer, 0x11a4, m_controllerInfo, m_unk0x005168f4)) {
+        CFileBuffer::FreeGenericFileBuffer(buffer);
+        return;
+    }
     sprintf(CFrontend::m_stringDest, m_strControllerInfoDir, CInstallInfo::GetGameHDPath());
     CInstallInfo::WriteFileToDisk(CFrontend::m_stringDest, 2, buffer, 0x11a4);
     CFileBuffer::FreeGenericFileBuffer(buffer);

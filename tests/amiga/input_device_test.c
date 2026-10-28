@@ -62,8 +62,8 @@ int main(void)
         return 1;
     }
     Line(out, "input_probe: start");
-    AmigaSys_SetUserDir("PROGDIR:input-probe-no-log");
-    AmigaSys_SetDataDir("PROGDIR:input-probe-no-data");
+    AmigaSys_SetUserDir("RAM:input-probe-no-log");
+    AmigaSys_SetDataDir("RAM:input-probe-no-data");
 
     window = (struct Window *)AmigaSys_CreateGameWindow(320, 200, "OpenCMR2 input probe");
     if (window == NULL) {

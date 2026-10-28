@@ -24,6 +24,23 @@ extern "C" {
 int ControllerDisk_Decode(void *controllerData, unsigned short *slotMapping,
                           const void *file, size_t size);
 
+/* Writes the six native records and the two slot mappings in the
+ * little-endian Controller.rcf form. Returns 1 on success. */
+int ControllerDisk_Pack(void *file, size_t fileSize,
+                        const void *controllerData, const unsigned short *slotMapping);
+
+/* Reads the pre-fix Amiga save, which wrote the same layout in host (big)
+ * endian order. Used only to migrate the user's existing bindings; the
+ * caller should save the little-endian form afterwards. */
+int ControllerDisk_DecodeLegacyBe(void *controllerData, unsigned short *slotMapping,
+                                  const void *file, size_t size);
+
+/* Chooses LE or the pre-fix BE form. The mapping words alone cannot
+ * distinguish a legacy file whose two slots are both 0 from a valid LE file,
+ * so the choice uses the controller mapping codes as a plausibility score. */
+int ControllerDisk_DecodeAuto(void *controllerData, unsigned short *slotMapping,
+                              const void *file, size_t size);
+
 #ifdef __cplusplus
 }
 #endif

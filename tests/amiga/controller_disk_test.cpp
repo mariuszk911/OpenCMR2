@@ -58,8 +58,8 @@ static void FillSynthetic(unsigned char *file)
         PutLE32(p + offsetof(ControllerData, field_0x0), 0x11000000u + (unsigned)i);
         PutLE32(p + offsetof(ControllerData, field_0x4), 0x22000000u + (unsigned)i);
         PutLE32(p + offsetof(ControllerData, field_0x10c), 0x33110000u + (unsigned)i);
-        PutLE16(p + offsetof(ControllerData, field_0x128), 0x1234u + (unsigned)i);
-        PutLE16(p + offsetof(ControllerData, field_0x13c), 0x5678u + (unsigned)i);
+        PutLE16(p + offsetof(ControllerData, field_0x128), 0x10u + (unsigned)i);
+        PutLE16(p + offsetof(ControllerData, field_0x13c), 0x20u + (unsigned)i);
         p[offsetof(ControllerData, name)] = 'K';
         p[offsetof(ControllerData, index)] = (unsigned char)i;
         PutLE32(p + offsetof(ControllerData, field_0x210) +
@@ -79,8 +79,8 @@ static int CheckRecords(const ControllerData *records)
         CHECK(records[i].field_0x0 == 0x11000000u + (unsigned)i);
         CHECK(records[i].field_0x4 == 0x22000000u + (unsigned)i);
         CHECK(records[i].field_0x10c == 0x33110000u + (unsigned)i);
-        CHECK(records[i].field_0x128 == (unsigned short)(0x1234u + (unsigned)i));
-        CHECK(records[i].field_0x13c == (unsigned short)(0x5678u + (unsigned)i));
+        CHECK(records[i].field_0x128 == (unsigned short)(0x10u + (unsigned)i));
+        CHECK(records[i].field_0x13c == (unsigned short)(0x20u + (unsigned)i));
         CHECK(records[i].name[0] == 'K');
         CHECK(records[i].index == (unsigned char)i);
         CHECK(records[i].field_0x210[3].present == 1);
@@ -112,18 +112,35 @@ int main(int argc, char **argv)
 
     memset(records, 0, sizeof(records));
     mapping[0] = mapping[1] = 0x5a5a;
-    CHECK(ControllerDisk_Decode(records, mapping, file, sizeof(file)) != 0);
+    CHECK(ControllerDisk_DecodeAuto(records, mapping, file, sizeof(file)) != 0);
     CHECK(mapping[0] == 0);
     CHECK(mapping[1] == 1);
     if (synthetic) {
         if (CheckRecords(records))
             return 1;
     } else {
-        // The captured file: the first two slots are the keyboard profiles.
-        CHECK(records[0].field_0x0 == 0x800000);
+        // The captured file was written by the pre-fix big-endian build;
+        // ControllerDisk_DecodeAuto must migrate it.
+        CHECK(records[0].field_0x0 == 0x8000);
         CHECK(records[0].name[0] == 'K');
-        CHECK(records[1].field_0x0 == 0x800000);
+        CHECK(records[1].field_0x0 == 0x8000);
         CHECK(records[1].name[0] == 'K');
+    }
+
+    // Pack the native records back to the little-endian file form.
+    {
+        unsigned char packed[CONTROLLER_DISK_FILE_SIZE];
+        ControllerData packedRecords[CONTROLLER_DISK_RECORDS];
+        unsigned short packedMapping[CONTROLLER_DISK_MAPPINGS];
+
+        CHECK(ControllerDisk_Pack(packed, sizeof(packed), records, mapping) != 0);
+        memset(packedRecords, 0, sizeof(packedRecords));
+        CHECK(ControllerDisk_Decode(packedRecords, packedMapping, packed, sizeof(packed)) != 0);
+        CHECK(packedMapping[0] == 0 && packedMapping[1] == 1);
+        if (synthetic) {
+            if (CheckRecords(packedRecords))
+                return 1;
+        }
     }
 
     // An out-of-range mapping must reject the file and leave the outputs.
