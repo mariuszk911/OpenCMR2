@@ -1522,6 +1522,47 @@ void Apply3DTransforms(GfxMatrix *outWorldView)
     glLoadMatrixf(&outWorldView->_11);
 }
 
+// Blend and alpha test are the same render states for 3D and the TL path, so
+// both apply them from the game's current values through one cached helper.
+void ApplyBlendAndAlphaTest(void)
+{
+    const int wantBlend = s_alphaBlend ? 1 : 0;
+    if (s_glCache.alphaBlend != wantBlend) {
+        if (wantBlend)
+            glEnable(GL_BLEND);
+        else
+            glDisable(GL_BLEND);
+        s_glCache.alphaBlend = wantBlend;
+    }
+    if (wantBlend) {
+        const GLenum src = MapBlendFactor(s_srcBlend);
+        const GLenum dst = MapBlendFactor(s_dstBlend);
+        if (s_glCache.srcBlend != src || s_glCache.dstBlend != dst) {
+            glBlendFunc(src, dst);
+            s_glCache.srcBlend = src;
+            s_glCache.dstBlend = dst;
+        }
+    }
+
+    const int wantAlphaTest = (s_alphaTest && s_caps.hasAlphaTest) ? 1 : 0;
+    if (s_glCache.alphaTest != wantAlphaTest) {
+        if (wantAlphaTest)
+            glEnable(GL_ALPHA_TEST);
+        else
+            glDisable(GL_ALPHA_TEST);
+        s_glCache.alphaTest = wantAlphaTest;
+    }
+    if (wantAlphaTest) {
+        const GLenum afunc = MapCompareFunc(s_alphaFunc);
+        const int aref = (int)(s_alphaRef & 0xffu);
+        if (s_glCache.alphaFunc != afunc || s_glCache.alphaRefByte != aref) {
+            glAlphaFunc(afunc, (GLclampf)(aref / 255.0f));
+            s_glCache.alphaFunc = afunc;
+            s_glCache.alphaRefByte = aref;
+        }
+    }
+}
+
 void Apply3DRasterState(void)
 {
     const int wantDepthTest = s_depthTest ? 1 : 0;
@@ -1569,41 +1610,7 @@ void Apply3DRasterState(void)
         }
     }
 
-    const int wantBlend = s_alphaBlend ? 1 : 0;
-    if (s_glCache.alphaBlend != wantBlend) {
-        if (wantBlend)
-            glEnable(GL_BLEND);
-        else
-            glDisable(GL_BLEND);
-        s_glCache.alphaBlend = wantBlend;
-    }
-    if (wantBlend) {
-        const GLenum src = MapBlendFactor(s_srcBlend);
-        const GLenum dst = MapBlendFactor(s_dstBlend);
-        if (s_glCache.srcBlend != src || s_glCache.dstBlend != dst) {
-            glBlendFunc(src, dst);
-            s_glCache.srcBlend = src;
-            s_glCache.dstBlend = dst;
-        }
-    }
-
-    const int wantAlphaTest = (s_alphaTest && s_caps.hasAlphaTest) ? 1 : 0;
-    if (s_glCache.alphaTest != wantAlphaTest) {
-        if (wantAlphaTest)
-            glEnable(GL_ALPHA_TEST);
-        else
-            glDisable(GL_ALPHA_TEST);
-        s_glCache.alphaTest = wantAlphaTest;
-    }
-    if (wantAlphaTest) {
-        const GLenum afunc = MapCompareFunc(s_alphaFunc);
-        const int aref = (int)(s_alphaRef & 0xffu);
-        if (s_glCache.alphaFunc != afunc || s_glCache.alphaRefByte != aref) {
-            glAlphaFunc(afunc, (GLclampf)(aref / 255.0f));
-            s_glCache.alphaFunc = afunc;
-            s_glCache.alphaRefByte = aref;
-        }
-    }
+    ApplyBlendAndAlphaTest();
 }
 
 // Locked M3.2 lighting policy:
@@ -2282,19 +2289,7 @@ void BeginTLDraw(void)
         glDisable(GL_CULL_FACE);
         s_glCache.cullFace = 0;
     }
-    if (s_glCache.alphaTest != 0) {
-        glDisable(GL_ALPHA_TEST);
-        s_glCache.alphaTest = 0;
-    }
-    if (s_glCache.alphaBlend != 1) {
-        glEnable(GL_BLEND);
-        s_glCache.alphaBlend = 1;
-    }
-    if (s_glCache.srcBlend != GL_SRC_ALPHA || s_glCache.dstBlend != GL_ONE_MINUS_SRC_ALPHA) {
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        s_glCache.srcBlend = GL_SRC_ALPHA;
-        s_glCache.dstBlend = GL_ONE_MINUS_SRC_ALPHA;
-    }
+    ApplyBlendAndAlphaTest();
     ResetPost3DStages();
     SelectActiveUnit(0);
     SyncStage0ForTL();
