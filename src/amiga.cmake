@@ -45,6 +45,7 @@ add_library(cmr2_game OBJECT
     port/ai_disk.cpp
     port/car_info_disk.cpp
     port/credits_text.cpp
+    port/cod_disk.cpp
     port/controller_disk.cpp
     port/disk.cpp
     port/finish_record_disk.cpp
@@ -267,6 +268,12 @@ add_executable(amiga_split_table_test ${PROJECT_SOURCE_DIR}/tests/amiga/split_ta
     port/split_table_disk.cpp)
 target_include_directories(amiga_split_table_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_split_table_test)
+
+# .cod co-driver calls: real 68060 decode of the 32-bit call records.
+add_executable(amiga_cod_disk_test ${PROJECT_SOURCE_DIR}/tests/amiga/cod_disk_test.cpp
+    port/cod_disk.cpp)
+target_include_directories(amiga_cod_disk_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_cod_disk_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)

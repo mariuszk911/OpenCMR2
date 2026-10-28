@@ -25,6 +25,7 @@
 #include "main.h"
 #include "Sound.h"
 #include "NetworkLeaderboards.h"
+#include "port/cod_disk.h"
 #include "port/disk.h"
 #include "port/light_preset_disk.h"
 #include "port/stage_camera_disk.h"
@@ -3855,10 +3856,25 @@ void Race_LoadCoDriverCallData(void)
 {
     CGame::RegisterCallback(Race_ReleaseCoDriverCallData, 0);
     Race_ResetPlayerCallState();
-    sprintf(CFrontend::m_stringDest, g_strCodFormat, GameMenu_GetChampionshipTransitionState());
-    g_loadedCoDriverCalls = (unsigned int *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(), CFrontend::m_stringDest, 0, 0, 0);
-    if (g_loadedCoDriverCalls != NULL)
-        g_coDriverCalls = g_loadedCoDriverCalls;
+    {
+        DWORD codSize = 0;
+        unsigned int *pNative = NULL;
+
+        sprintf(CFrontend::m_stringDest, g_strCodFormat, GameMenu_GetChampionshipTransitionState());
+        g_loadedCoDriverCalls = (unsigned int *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(), CFrontend::m_stringDest, 0, &codSize, 0);
+        // PORT: AMIGA: .cod is an array of little-endian 32-bit call records;
+        // decode into a copy owned by the stage archive.
+        if (g_loadedCoDriverCalls != NULL && codSize != 0)
+            pNative = (unsigned int *)CFileBuffer::AllocateLockedBuffer(codSize + 1);
+        if (pNative != NULL && CodDisk_Decode(pNative, codSize, g_loadedCoDriverCalls, codSize, NULL)) {
+            Disk_AttachToBuffer(g_loadedCoDriverCalls, pNative);
+            g_loadedCoDriverCalls = pNative;
+        } else if (pNative != NULL) {
+            CFileBuffer::FreeGenericFileBuffer(pNative);
+        }
+        if (g_loadedCoDriverCalls != NULL)
+            g_coDriverCalls = g_loadedCoDriverCalls;
+    }
 }
 
 // GLOBAL: CMR2 0x00537364

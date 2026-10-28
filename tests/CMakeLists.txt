@@ -228,6 +228,15 @@ foreach(split_table_variant split_table_disk split_table_disk_be)
 endforeach()
 target_compile_definitions(split_table_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# .cod co-driver calls: an array of little-endian 32-bit call records.
+foreach(cod_disk_variant cod_disk cod_disk_be)
+    add_executable(${cod_disk_variant}_test cod_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/cod_disk.cpp)
+    target_include_directories(${cod_disk_variant}_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    add_test(NAME ${cod_disk_variant} COMMAND ${cod_disk_variant}_test)
+endforeach()
+target_compile_definitions(cod_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # M3.1: the C3D stage header is little-endian. The forced-swap variant
 # exercises the decoder branch on a little-endian host; real BE/alignment
 # coverage is the amiga_c3d_header_test built for the 68060 target.
