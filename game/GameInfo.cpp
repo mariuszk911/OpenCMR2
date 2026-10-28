@@ -1,3 +1,4 @@
+#include "port/credits_text.h"
 #include "port/movie.h"
 #include "port/save_image_disk.h"
 #include "port/sys.h"
@@ -2746,9 +2747,10 @@ char g_strCreditsEnglish[16] = "credits_english";
 
 bool FrontendCredits_ReleaseText(void);
 
-// Loads the credits text of the current language and splits it into
-// entries of two quoted strings ("role", "name"); each quote-delimited
-// string is terminated in place. Optionally registers the release callback.
+// Loads the credits text of the current language. The previous tables are
+// released first; the quoted "role", "name" pairs are parsed in place by the
+// fork-owned, bounds-checked CreditsText_Parse. Optionally registers the
+// release callback.
 // FUNCTION: CMR2 0x004f4910
 void FrontendCredits_LoadText(char registerRelease)
 {
@@ -2757,10 +2759,8 @@ void FrontendCredits_LoadText(char registerRelease)
     char *japan[1];
     char *poland[1];
     char **names;
-    char line[256];
-    char *p;
     int size;
-    int i, n;
+    int i;
 
     europe[0] = g_strCreditsEnglish;
     europe[1] = g_strCreditsFrench;
@@ -2791,7 +2791,14 @@ void FrontendCredits_LoadText(char registerRelease)
 
     sprintf(CFrontend::m_stringDest, g_strCreditsPathFormat, CInstallInfo::GetCountrySpecificDir(),
             CGameInfo::GetGameRegionDirectory(), names[CGameInfo::GetGameLanguage()]);
+    // PORT: AMIGA: make the load idempotent; the original overwrote the tables
+    // and leaked them when it was called again without a release.
+    FrontendCredits_ReleaseText();
     g_creditsFileBuffer = CFileBuffer::GetGenericFileBuffer(CFrontend::m_stringDest, TRUE);
+    // PORT: AMIGA: a failed load leaves GetGenericFileSize() stale; the old
+    // scan then read through NULL.
+    if (g_creditsFileBuffer == NULL)
+        return;
 
     size = CGenericFileLoader::GetGenericFileSize();
     for (i = 0; i < size; i++) {
@@ -2800,26 +2807,13 @@ void FrontendCredits_LoadText(char registerRelease)
     }
     g_creditsLineCount = g_creditsLineCount / 4;
 
-    // Two strings per credits line, like p.
-    g_creditsLines = CFileBuffer::AllocateLockedBuffer(g_creditsLineCount * 2 * sizeof(p));
+    // Two strings per credits line (role, name).
+    g_creditsLines = CFileBuffer::AllocateLockedBuffer(g_creditsLineCount * 2 * sizeof(char *));
     g_pCreditsRoleTable = CFileBuffer::AllocateLockedBuffer(g_creditsLineCount * 4);
-    if (g_creditsLines != NULL) {
-        p = (char *)g_creditsFileBuffer;
-        for (i = 0; i < g_creditsLineCount; i++) {
-            p = strchr(p, '"') + 1;
-            ((char **)g_creditsLines)[i * 2] = p;
-            for (n = 0; *p != '"'; n++, p++)
-                line[n] = *p;
-            *p = '\0';
-            line[n] = '\0';
-
-            p = strchr(p + 1, '"') + 1;
-            ((char **)g_creditsLines)[i * 2 + 1] = p;
-            for (n = 0; *p != '"'; n++, p++)
-                line[n] = *p;
-            *p = '\0';
-            p++;
-        }
+    if (g_creditsLines != NULL && g_pCreditsRoleTable != NULL) {
+        g_creditsLineCount = (int)CreditsText_Parse((char *)g_creditsFileBuffer, (size_t)size,
+                                                   (char **)g_creditsLines,
+                                                   (size_t)g_creditsLineCount);
     } else {
         g_creditsLineCount = 0;
     }

@@ -377,6 +377,11 @@ add_executable(headlight_collision_test headlight_collision.cpp)
 target_link_libraries(headlight_collision_test PRIVATE opencmr2_platform)
 add_test(NAME headlight_collision COMMAND headlight_collision_test)
 
+add_executable(credits_text_test credits_text.cpp
+    ${PROJECT_SOURCE_DIR}/src/port/credits_text.cpp)
+target_include_directories(credits_text_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME credits_text COMMAND credits_text_test)
+
 add_library(high_address_fixture STATIC high_address.c)
 add_executable(net_frontend_test net_frontend.cpp)
 target_link_libraries(net_frontend_test PRIVATE opencmr2_platform high_address_fixture)

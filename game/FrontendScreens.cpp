@@ -767,6 +767,10 @@ void FrontendMenu_DrawCredits(Menu *pMenu)
 
     allOffScreen = true;
     ppText = (char **)FrontendCredits_GetNameTable();
+    // PORT: AMIGA: a released or failed credits load leaves no tables; the
+    // original would write the y table through NULL.
+    if (ppText == NULL || FrontendCredits_GetRoleTable() == NULL)
+        return;
     elapsed = (unsigned int)CFrontend::GetFrontendTimestamp();
     elapsed -= FrontendCredits_GetStartTime();
     elapsed /= 30;
@@ -776,11 +780,13 @@ void FrontendMenu_DrawCredits(Menu *pMenu)
             + FrontendCredits_GetScrollOffset() + (int)g_pGraphics->resY + Font_GetLineHeight(2);
         if (((int *)FrontendCredits_GetRoleTable())[i] < (int)g_pGraphics->resY + 100
             && ((int *)FrontendCredits_GetRoleTable())[i] > -100) {
+            // PORT: AMIGA: the table holds int y values; the short view read
+            // the high half on 68k, putting every line on screen.
             Font_DrawText(2, ppText[0], (int)g_pGraphics->resX / 2 - 10,
-                          ((unsigned short *)FrontendCredits_GetRoleTable())[i * 2],
+                          (short)((int *)FrontendCredits_GetRoleTable())[i],
                           (int *)g_colourWhite0x00524968, 0x14);
             Font_DrawText(2, ppText[1], (int)g_pGraphics->resX / 2 + 10,
-                          ((unsigned short *)FrontendCredits_GetRoleTable())[i * 2],
+                          (short)((int *)FrontendCredits_GetRoleTable())[i],
                           (int *)g_colourWhite0x00524968, 0x11);
         }
         if (((int *)FrontendCredits_GetRoleTable())[i] > -10)

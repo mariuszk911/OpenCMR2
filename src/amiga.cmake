@@ -42,6 +42,7 @@ target_compile_options(opencmr2_domain_a INTERFACE
 add_library(cmr2_game OBJECT
     ${GAME_SOURCES}
     diagnostics/observer.cpp
+    port/credits_text.cpp
     port/disk.cpp
     port/font_pcf.cpp
     port/replay_disk.cpp

@@ -59,6 +59,7 @@ add_library(opencmr2_platform STATIC
     platform/sys.cpp
     platform/keys.cpp
     platform/msvcrt.cpp
+    port/credits_text.cpp
     port/disk.cpp
     port/font_pcf.cpp
     port/intdiv.cpp

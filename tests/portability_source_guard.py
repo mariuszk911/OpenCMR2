@@ -3,8 +3,9 @@
 
 An upstream sync can silently undo a small game/ edit even while every runtime
 test still passes on a little-endian host. These checks fail the host suite if
-the weather-map count, the packed menu colours or the weather-select value list
-are reverted to their x86-only forms.
+the weather-map count, the packed menu colours, the weather-select value list,
+the credits parser call or the credits y table are reverted to their x86-only
+forms.
 """
 from pathlib import Path
 import re
@@ -35,6 +36,7 @@ def require_rgba(source, name, path):
 def main():
     game_info = read("game/GameInfo.cpp")
     rally_data = read("game/RallyData.cpp")
+    frontend_screens = read("game/FrontendScreens.cpp")
 
     for path, source in (("game/GameInfo.cpp", game_info),
                          ("game/RallyData.cpp", rally_data)):
@@ -51,6 +53,12 @@ def main():
             "game/RallyData.cpp: distinct value list is read through a short pointer")
     require("pSplits = (int *)RallyData_GetDistinctValueList" in rally_data,
             "game/RallyData.cpp: distinct value list is not read as int[]")
+    require("CreditsText_Parse(" in game_info,
+            "game/GameInfo.cpp: credits text is not parsed by the fork-owned helper")
+    require("((unsigned short *)FrontendCredits_GetRoleTable())" not in frontend_screens,
+            "game/FrontendScreens.cpp: credits y table is read through a short pointer")
+    require("(short)((int *)FrontendCredits_GetRoleTable())[i]" in frontend_screens,
+            "game/FrontendScreens.cpp: credits y is not read from the int table")
 
     for name in ("g_optionTextColours", "g_optionTextBrightColours",
                  "g_unk0x005297ac", "g_unk0x00527378", "g_highlightRowColour"):
