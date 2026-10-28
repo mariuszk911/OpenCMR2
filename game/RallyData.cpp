@@ -1,3 +1,5 @@
+#include "port/disk.h"
+#include "port/route_disk.h"
 #include "SavedGame.h"
 #include "port/colour.h"
 #include "port/save_slot.h"
@@ -8541,8 +8543,24 @@ void RallyData_LoadSelectedRouteNodes(void)
         g_routeNodeCount = 0;
         g_unk0x00538a88 = 0;
     } else {
-        g_routeNodes = (RallyRouteNode *)pFile;
-        g_unk0x00538a88 = count / sizeof(*g_routeNodes);
+        unsigned int nodeCount = count / sizeof(RallyRouteNode);
+        unsigned int decoded = 0;
+        RallyRouteNode *pNative = (RallyRouteNode *)CFileBuffer::AllocateLockedBuffer(
+            nodeCount * sizeof(RallyRouteNode) + 1);
+
+        // PORT: AMIGA: .cat nodes are little-endian; decode into a copy owned
+        // by the stage archive and keep the source node count as the fallback.
+        if (pNative != NULL && RouteNodeDisk_Decode(pNative, nodeCount * sizeof(RallyRouteNode),
+                                                    pFile, count, &decoded)) {
+            Disk_AttachToBuffer(pFile, pNative);
+            g_routeNodes = pNative;
+            g_unk0x00538a88 = decoded;
+        } else {
+            if (pNative != NULL)
+                CFileBuffer::FreeGenericFileBuffer(pNative);
+            g_routeNodes = (RallyRouteNode *)pFile;
+            g_unk0x00538a88 = nodeCount;
+        }
         g_routeNodeCount = g_unk0x00538a88;
         index = g_unk0x00538a88 - 1;
         if (index > 0) {

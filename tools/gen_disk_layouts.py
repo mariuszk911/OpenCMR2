@@ -32,11 +32,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "src/port/disk_layouts.h"
 HEADERS = ["SceneNode.h", "Mesh.h", "Sector.h", "MeshCollisionRecord.h", "Car.h", "CarParts.h", "ReplayStream.h",
-           "Input.h", "FinRecord.h"]
+           "Input.h", "FinRecord.h", "RallyRouteNode.h"]
 # Stage mesh file records, then the per-car records the state capture writes
 # in the original layout (tests/stage_probe.cpp), then the controller file.
 RECORDS = ["SceneNode", "Mesh", "StageObject", "Sector", "MeshCollisionRecord", "Car", "CarPartSet", "ReplayStream",
-           "ControllerData", "FinRecord"]
+           "ControllerData", "FinRecord", "RallyRouteNode"]
 TARGETS = {"disk": "i386-pc-linux-gnu", "native": "x86_64-pc-linux-gnu",
            "windows": "x86_64-pc-windows-msvc"}
 LINE = re.compile(r"^\s*(\d+)(?::\d+-\d+)? \|( *)(\S.*)$")

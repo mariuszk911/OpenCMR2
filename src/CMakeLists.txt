@@ -67,6 +67,7 @@ add_library(opencmr2_platform STATIC
     port/font_pcf.cpp
     port/intdiv.cpp
     port/replay_disk.cpp
+    port/route_disk.cpp
     port/stage_camera_disk.cpp
     port/start_table_disk.cpp
     port/save_image_disk.cpp

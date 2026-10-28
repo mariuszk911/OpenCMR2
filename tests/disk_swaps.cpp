@@ -141,5 +141,36 @@ int main()
         REQUIRE(native.surfaces[1] == 0x22);
     }
 
+    {
+        /* RallyRouteNode is pointer-free and has the same 0x2c layout on
+         * 32- and 64-bit targets: positions and camera limits swap, the
+         * opaque/flags/call-id bytes do not. */
+        unsigned char record[0x2c];
+        RallyRouteNode native{};
+
+        WriteLE32(record + 0x00, 0x01020304);
+        WriteLE32(record + 0x04, 0x11121314);
+        WriteLE32(record + 0x08, 0x21222324);
+        record[0x0c] = 0xaa;
+        record[0x18] = 0x03;
+        record[0x19] = 0xff;
+        WriteLE32(record + 0x1c, 0x31323334);
+        WriteLE32(record + 0x20, 0x41424344);
+        WriteLE32(record + 0x24, 0x51525354);
+        WriteLE32(record + 0x28, 0x61626364);
+
+        Disk_Unpack(&native, record, &g_diskLayout_RallyRouteNode);
+        REQUIRE(native.position.x == 0x01020304);
+        REQUIRE(native.position.y == 0x11121314);
+        REQUIRE(native.position.z == 0x21222324);
+        REQUIRE(native.field_0xc[0] == 0xaa);
+        REQUIRE(native.flags == 0x03);
+        REQUIRE(native.callId == (char)0xff);
+        REQUIRE(native.backwardNearLimit == 0x31323334);
+        REQUIRE(native.backwardFarLimit == 0x41424344);
+        REQUIRE(native.forwardNearLimit == 0x51525354);
+        REQUIRE(native.forwardFarLimit == 0x61626364);
+    }
+
     return 0;
 }

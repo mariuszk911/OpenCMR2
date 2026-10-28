@@ -49,6 +49,7 @@ add_library(cmr2_game OBJECT
     port/finish_record_disk.cpp
     port/font_pcf.cpp
     port/replay_disk.cpp
+    port/route_disk.cpp
     port/save_image_disk.cpp
     port/stage_camera_disk.cpp
     port/start_table_disk.cpp)
@@ -227,6 +228,17 @@ add_executable(amiga_start_table_test ${PROJECT_SOURCE_DIR}/tests/amiga/start_ta
     port/start_table_disk.cpp)
 target_include_directories(amiga_start_table_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_start_table_test)
+
+# .cat route nodes: real 68060 decode of positions, flags, call ids and limits.
+add_executable(amiga_route_node_test ${PROJECT_SOURCE_DIR}/tests/amiga/route_node_test.cpp
+    port/route_disk.cpp
+    port/disk.cpp)
+target_include_directories(amiga_route_node_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/port/compat
+    ${GAME_DIR})
+target_link_libraries(amiga_route_node_test PRIVATE opencmr2_domain_a)
+opencmr2_amiga_stack(amiga_route_node_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)

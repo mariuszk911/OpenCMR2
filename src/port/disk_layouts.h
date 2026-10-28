@@ -15,6 +15,7 @@
 #include "ReplayStream.h"
 #include "Input.h"
 #include "FinRecord.h"
+#include "RallyRouteNode.h"
 
 // SceneNode: 0x18c bytes in files, 0x1a0 on 64-bit targets.
 #if UINTPTR_MAX > 0xffffffffu
@@ -3141,5 +3142,39 @@ static_assert(sizeof(FinRecord) == 0x30, "run tools/gen_disk_layouts.py");
 #endif
 static const DiskLayout g_diskLayout_FinRecord = {0x30, sizeof(FinRecord), g_diskRuns_FinRecord, sizeof(g_diskRuns_FinRecord) / sizeof(DiskRun), g_diskPointers_FinRecord, sizeof(g_diskPointers_FinRecord) / sizeof(DiskPointer), g_diskSwaps_FinRecord, 10};
 #define DISK_FinRecord_pNext 0x28
+
+// RallyRouteNode: 0x2c bytes in files, 0x2c on 64-bit targets.
+#if UINTPTR_MAX > 0xffffffffu
+static const DiskRun g_diskRuns_RallyRouteNode[] = {
+    {0x0, 0x0, 0x2c},
+};
+static const DiskPointer g_diskPointers_RallyRouteNode[] = {
+};
+static const DiskSwap g_diskSwaps_RallyRouteNode[] = {
+    {0x0, 0x0, 4},
+    {0x4, 0x4, 4},
+    {0x8, 0x8, 4},
+    {0x1c, 0x1c, 4},
+    {0x20, 0x20, 4},
+    {0x24, 0x24, 4},
+    {0x28, 0x28, 4},
+};
+static_assert(sizeof(RallyRouteNode) == 0x2c, "run tools/gen_disk_layouts.py");
+#else
+static const DiskRun g_diskRuns_RallyRouteNode[] = {{0, 0, 0x2c}};
+static const DiskPointer g_diskPointers_RallyRouteNode[] = {
+};
+static const DiskSwap g_diskSwaps_RallyRouteNode[] = {
+    {0x0, 0x0, 4},
+    {0x4, 0x4, 4},
+    {0x8, 0x8, 4},
+    {0x1c, 0x1c, 4},
+    {0x20, 0x20, 4},
+    {0x24, 0x24, 4},
+    {0x28, 0x28, 4},
+};
+static_assert(sizeof(RallyRouteNode) == 0x2c, "run tools/gen_disk_layouts.py");
+#endif
+static const DiskLayout g_diskLayout_RallyRouteNode = {0x2c, sizeof(RallyRouteNode), g_diskRuns_RallyRouteNode, sizeof(g_diskRuns_RallyRouteNode) / sizeof(DiskRun), g_diskPointers_RallyRouteNode, sizeof(g_diskPointers_RallyRouteNode) / sizeof(DiskPointer), g_diskSwaps_RallyRouteNode, 7};
 
 #endif
