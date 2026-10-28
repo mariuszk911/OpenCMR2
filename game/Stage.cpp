@@ -67,6 +67,11 @@ void Stage_GetCarStartXZ(int car, int *pStarts, int *pOut)
         if ((BYTE)RallyData_GetSelectionFlag27()) {
             if (CGameInfo::GetGameModeOptionBit19()) {
                 i = g_playerStartLane[car];
+                // PORT: AMIGA: the .csp table lays out two start slots at
+                // pStarts[0] and pStarts[3]; keep a corrupted lane from
+                // reading the angle record or a later table point.
+                if (i < 0 || i > 1)
+                    i = 0;
                 pOut[0] = pStarts[i * 3];
                 pOut[2] = pStarts[i * 3 + 2];
                 return;

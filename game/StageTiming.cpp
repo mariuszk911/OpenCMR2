@@ -11,6 +11,7 @@
 #include "port/c3d_payload.h"
 #include "port/car_info_disk.h"
 #include "port/disk.h"
+#include "port/start_table_disk.h"
 #include "StageWeather.h"
 #include <stdio.h>
 #include <stddef.h>
@@ -1940,9 +1941,24 @@ BYTE *GameMenu_GetChampionshipTransitionState(void);
 // FUNCTION: CMR2 0x00456c10
 void StageTiming_LoadCspData(void)
 {
-    sprintf(CFrontend::m_stringDest, g_strCspFormat, GameMenu_GetChampionshipTransitionState());
-    g_unk0x00542608 = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
-                                                           CFrontend::m_stringDest, 0, 0, 0);
+    {
+        DWORD cspSize = 0;
+        BYTE *pNativeCsp = NULL;
+
+        sprintf(CFrontend::m_stringDest, g_strCspFormat, GameMenu_GetChampionshipTransitionState());
+        g_unk0x00542608 = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
+                                                               CFrontend::m_stringDest, 0, &cspSize, 0);
+        // PORT: AMIGA: the .csp start table is little-endian; decode a copy
+        // owned by the stage archive and point the start data into it.
+        if (g_unk0x00542608 != NULL && cspSize != 0)
+            pNativeCsp = (BYTE *)CFileBuffer::AllocateLockedBuffer(cspSize);
+        if (pNativeCsp != NULL && StartTableDisk_Decode(pNativeCsp, cspSize, g_unk0x00542608, cspSize, NULL)) {
+            Disk_AttachToBuffer(g_unk0x00542608, pNativeCsp);
+            g_unk0x00542608 = pNativeCsp;
+        } else if (pNativeCsp != NULL) {
+            CFileBuffer::FreeGenericFileBuffer(pNativeCsp);
+        }
+    }
     if (g_unk0x00542608 != NULL) {
         g_carStartData = g_unk0x00542608;
         g_carStartAngles = (FixAngles *)(g_unk0x00542608 + 0x18);

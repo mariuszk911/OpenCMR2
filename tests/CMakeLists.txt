@@ -164,6 +164,15 @@ foreach(fin_record_variant finish_record_disk finish_record_disk_be)
 endforeach()
 target_compile_definitions(finish_record_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# .csp start table: six ints, the FixAngles at 0x18 and the tail points.
+foreach(start_table_variant start_table_disk start_table_disk_be)
+    add_executable(${start_table_variant}_test start_table_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/start_table_disk.cpp)
+    target_include_directories(${start_table_variant}_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    add_test(NAME ${start_table_variant} COMMAND ${start_table_variant}_test)
+endforeach()
+target_compile_definitions(start_table_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # M3.1: the C3D stage header is little-endian. The forced-swap variant
 # exercises the decoder branch on a little-endian host; real BE/alignment
 # coverage is the amiga_c3d_header_test built for the 68060 target.

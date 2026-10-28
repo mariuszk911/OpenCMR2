@@ -50,7 +50,8 @@ add_library(cmr2_game OBJECT
     port/font_pcf.cpp
     port/replay_disk.cpp
     port/save_image_disk.cpp
-    port/stage_camera_disk.cpp)
+    port/stage_camera_disk.cpp
+    port/start_table_disk.cpp)
 # M0 does not link the game yet, so keep it out of the default `all` target.
 # M1 removes this once the platform services exist and the executable links it.
 set_target_properties(cmr2_game PROPERTIES EXCLUDE_FROM_ALL TRUE)
@@ -220,6 +221,12 @@ target_include_directories(amiga_fin_record_test PRIVATE
     ${GAME_DIR})
 target_link_libraries(amiga_fin_record_test PRIVATE opencmr2_domain_a)
 opencmr2_amiga_stack(amiga_fin_record_test)
+
+# .csp start table: real 68060 decode of the start points and heading angles.
+add_executable(amiga_start_table_test ${PROJECT_SOURCE_DIR}/tests/amiga/start_table_disk_test.cpp
+    port/start_table_disk.cpp)
+target_include_directories(amiga_start_table_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_start_table_test)
 
 add_executable(amiga_event_test ${PROJECT_SOURCE_DIR}/tests/amiga/event_test.c
     platform/amiga/amiga_sys.cpp)
