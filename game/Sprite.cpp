@@ -435,9 +435,16 @@ int Sprite_FillRect(BYTE *unused, short *pRect, BYTE *pColour, int layer)
             c[0] = a[0];
             a[1] = (int)FTOI(__int64, X87S_MUL((double)y0, CGraphics::m_65536));
             x1 = 0x8000 - (int)FTOI(__int64, X87S_MUL((double)(w - 1 + x0), g_minus65536));
+            // PORT: AMIGA: Direct3D still fills a one-pixel rect after the
+            // half-pixel offset; GL sees a 0.5px edge and drops it. Widen the
+            // far edge to a full pixel so the option separators survive.
+            if (w == 1)
+                x1 += 0x8000;
             b[0] = x1;
             b[1] = a[1];
             y1 = 0x8000 - (int)FTOI(__int64, X87S_MUL((double)(h - 1 + y0), g_minus65536));
+            if (h == 1)
+                y1 += 0x8000;
             c[1] = y1;
             Tri2D_Queue(a, b, c, pColour, layer);
             a[0] = x1;
