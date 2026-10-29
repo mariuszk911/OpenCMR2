@@ -5,7 +5,8 @@ An upstream sync can silently undo a small game/ edit even while every runtime
 test still passes on a little-endian host. These checks fail the host suite if
 the weather-map count, the packed menu colours, the weather-select value list,
 the credits parser call or the credits y table are reverted to their x86-only
-forms.
+forms. It also keeps the option-preview converted-vertex key and colour byte
+value-based, bounded by meshCount, and gated on every mesh key being unique.
 """
 from pathlib import Path
 import re
@@ -59,6 +60,25 @@ def main():
             "game/FrontendScreens.cpp: credits y table is read through a short pointer")
     require("(short)((int *)FrontendCredits_GetRoleTable())[i]" in frontend_screens,
             "game/FrontendScreens.cpp: credits y is not read from the int table")
+
+    # The option-preview key and colour byte used the object representation,
+    # which is the MSB/alpha byte on 68k. The host cannot exercise that defect.
+    require("*(BYTE *)&param3->geometry.nodes[i]->flags" not in game_info,
+            "game/GameInfo.cpp: preview node key is read through a BYTE pointer")
+    require("(BYTE)(param3->geometry.nodes[i]->flags & 0xff)" in game_info,
+            "game/GameInfo.cpp: preview node key is not the low value byte")
+    require("nb[2] = *pNormal" not in game_info,
+            "game/GameInfo.cpp: preview colour blue is read through the first object byte")
+    require("nb[2] = (BYTE)n;" in game_info,
+            "game/GameInfo.cpp: preview colour blue is not the low value byte")
+    require("for (; j <= param3->meshCount; j++)" not in game_info,
+            "game/GameInfo.cpp: preview key search reads one past the converted arrays")
+    require("for (; j < param3->meshCount; j++)" in game_info,
+            "game/GameInfo.cpp: preview key search is not bounded by meshCount")
+    require("param3->verticesAssigned = allAssigned;" in game_info,
+            "game/GameInfo.cpp: preview vertex assignment is set without checking every mesh")
+    require("match = -2;" in game_info,
+            "game/GameInfo.cpp: preview duplicate node keys are not rejected")
 
     for name in ("g_optionTextColours", "g_optionTextBrightColours",
                  "g_unk0x005297ac", "g_unk0x00527378", "g_highlightRowColour"):

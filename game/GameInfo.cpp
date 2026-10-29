@@ -7509,7 +7509,9 @@ void OptionPreview_AllocateConvertedWheelVertices(int param1, INT_PTR param2, Op
         {
             (*ppBlock)[i] = (DeformVertex *)CFileBuffer::AllocateLockedBuffer((unsigned int)*pCounts << 5);
             totalSize += (unsigned int)*pCounts * 0x20;
-            (*ppFlags)[i] = *(BYTE *)&param3->geometry.nodes[i]->flags;
+            // PORT: AMIGA: node type is the low byte of the value. The first object
+            // byte is the MSB on 68k, so the original form never matched a body mesh.
+            (*ppFlags)[i] = (BYTE)(param3->geometry.nodes[i]->flags & 0xff);
             destOff = 0;
             srcOff = 0;
             for (k = 0; k < (int)(unsigned int)*pCounts; k++) {
@@ -7537,7 +7539,9 @@ void OptionPreview_AllocateConvertedWheelVertices(int param1, INT_PTR param2, Op
                 pNormal = (BYTE *)&((DeformFloatVertex *)((BYTE *)param3->geometry.meshes[i]->pVertexData + srcOff))->colour;
                 n = *(unsigned int *)pNormal;
                 nb[0] = (BYTE)(n >> 16);
-                nb[2] = *pNormal;
+                // PORT: AMIGA: the vertex colour word is already native; the first
+                // object byte is alpha on 68k, not blue.
+                nb[2] = (BYTE)n;
                 nb[1] = (BYTE)(n >> 8);
                 v = (nb[0] & 0xff) - 0x80;
                 if (v < -0x7f)
@@ -8029,22 +8033,30 @@ void OptionPreview_AssignConvertedVertexBuffers(int param1, INT_PTR param2, Opti
     int j;
     int match;
     int target;
+    int allAssigned = 1;
 
     OptionPreview_AllocateConvertedWheelVertices(param1, param2, param3);
     for (i = 0; i < param3->meshCount; i++) {
         j = 0;
         match = -1;
         target = param3->geometry.nodes[i]->flags & 0xff;
-        for (; j <= param3->meshCount; j++) {
+        for (; j < param3->meshCount; j++) {
             if (g_previewOriginalNodeTypes[param1][j] == target) {
-                match = j;
-                j = param3->meshCount;
+                if (match == -1) {
+                    match = j;
+                } else {
+                    /* Duplicate node types make the converted-source mapping ambiguous. */
+                    match = -2;
+                    j = param3->meshCount;
+                }
             }
         }
         if (match >= 0)
             param3->geometry.vertices[i] = g_previewOriginalVertices[param1][match];
+        else
+            allAssigned = 0;
     }
-    param3->verticesAssigned = 1;
+    param3->verticesAssigned = allAssigned;
 }
 
 // Returns one entry of the pointer table used by the mode selection screens.
