@@ -1586,13 +1586,13 @@ void Apply3DRasterState(void)
         }
     }
 
-    // Direct3D's window origin is top-left and OpenGL's bottom-left, so the
-    // same NDC triangle winds the other way on screen: a Direct3D clockwise
-    // front face arrives counter-clockwise in OpenGL. This matches the host
-    // executor's FrontFace(GL_CCW) and its cull mapping below.
-    if (s_glCache.frontFace != GL_CCW) {
-        glFrontFace(GL_CCW);
-        s_glCache.frontFace = GL_CCW;
+    // The MiniGL viewport maps the game's top-left rows onto GL's bottom-left
+    // origin, which reverses the winding: a Direct3D clockwise front face
+    // arrives clockwise in OpenGL here. The host GL path keeps the D3D rows
+    // and flips only at presentation, which is why it can use GL_CCW.
+    if (s_glCache.frontFace != GL_CW) {
+        glFrontFace(GL_CW);
+        s_glCache.frontFace = GL_CW;
     }
     const int wantCull = (s_cullMode == GFX_CULL_CW || s_cullMode == GFX_CULL_CCW) ? 1 : 0;
     if (s_glCache.cullFace != wantCull) {
