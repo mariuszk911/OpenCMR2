@@ -137,6 +137,12 @@ target_include_directories(amiga_smoke PRIVATE
 target_link_directories(amiga_smoke PRIVATE ${MINIGL_LIBRARY_DIR})
 target_link_libraries(amiga_smoke PRIVATE minigl)
 
+# MiniGL zero-area 2D rectangle reproducer for the option-screen separators.
+add_executable(amiga_minigl_tl_rects_test ${PROJECT_SOURCE_DIR}/tests/amiga/minigl_tl_rects_test.c)
+target_include_directories(amiga_minigl_tl_rects_test PRIVATE ${MINIGL_INCLUDE_DIR})
+target_link_directories(amiga_minigl_tl_rects_test PRIVATE ${MINIGL_LIBRARY_DIR})
+target_link_libraries(amiga_minigl_tl_rects_test PRIVATE minigl)
+
 # M1 Sys time/logging smoke: Domain B, no MiniGL. Not staged.
 add_executable(amiga_sys_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_time_test.c
     platform/amiga/amiga_sys.cpp)
