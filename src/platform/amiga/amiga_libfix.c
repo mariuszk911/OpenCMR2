@@ -113,6 +113,15 @@ double fabs(double x)
 double fmax(double x, double y) { return x > y ? x : (x != x ? y : (y != y ? x : y)); }
 double fmin(double x, double y) { return x < y ? x : (x != x ? y : (y != y ? x : y)); }
 
+/* FTOI(__int64, ...) in the CMR2_QIFIST units is llrint. libnix's version is a
+ * soft-float stub and does not return in the hard-float calling convention, so
+ * it produced 0 for every conversion. Round half away from zero, which is exact
+ * for the integer-valued fixed-point inputs the game converts. */
+long long llrint(double x) { return (long long)(x < 0.0 ? x - 0.5 : x + 0.5); }
+long lrint(double x) { return (long)(x < 0.0 ? x - 0.5 : x + 0.5); }
+long long llrintf(float x) { return llrint((double)x); }
+long lrintf(float x) { return lrint((double)x); }
+
 /* frexp/ldexp are called by the X87 single-precision rounding in
  * game/X87Single.h for every fixed-point operation, so they must be O(1) in
  * the normal range rather than scale bit by bit. */
