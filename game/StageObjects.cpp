@@ -6416,8 +6416,11 @@ void StageObject_AverageWheelGroundLighting(unsigned int param_1, int param_2)
     unsigned short flags;
     FixVector lighting[3];
     int h;
-    BYTE light[4];
-    DWORD ambient[1];
+    // PORT: AMIGA: Scene_GetLightColour/Scene_GetAmbientColour write a DWORD.
+    // Keep the storage aligned and read the colour bytes through a BYTE view;
+    // the original byte arrays were also read through unaligned int pointers.
+    DWORD light;
+    DWORD ambient;
     // Original RGB triplet at ebp-0x38/-0x34/-0x30 is passed as one buffer.
     int rgb[3];
     int avg;
@@ -6439,10 +6442,10 @@ void StageObject_AverageWheelGroundLighting(unsigned int param_1, int param_2)
             if (h != -0x3e70000) {
                 sum = sum + h;
                 count = count + 1;
-                Scene_GetLightColour((DWORD *)light, h);
-                ((BYTE *)g_unk0x00543f28)[(i + pCar->index * 4) * 4] = light[0];
-                ((BYTE *)g_unk0x00543f28)[(i + pCar->index * 4) * 4 + 1] = light[1];
-                ((BYTE *)g_unk0x00543f28)[(i + pCar->index * 4) * 4 + 2] = light[2];
+                Scene_GetLightColour(&light, h);
+                ((BYTE *)g_unk0x00543f28)[(i + pCar->index * 4) * 4] = ((BYTE *)&light)[0];
+                ((BYTE *)g_unk0x00543f28)[(i + pCar->index * 4) * 4 + 1] = ((BYTE *)&light)[1];
+                ((BYTE *)g_unk0x00543f28)[(i + pCar->index * 4) * 4 + 2] = ((BYTE *)&light)[2];
             }
         }
         i = i + 1;
@@ -6455,14 +6458,17 @@ void StageObject_AverageWheelGroundLighting(unsigned int param_1, int param_2)
             avg = 0x10000;
         else if (avg < 0)
             avg = 0;
-        Scene_GetLightColour((DWORD *)light, avg);
-        rgb[0] = (*(int *)(light + 0) & 0xff) << 16;
-        rgb[1] = (*(int *)(light + 1) & 0xff) << 16;
-        rgb[2] = (*(int *)(light + 2) & 0xff) << 16;
-        Scene_GetAmbientColour(ambient);
-        rgb[0] = rgb[0] - (*(int *)((BYTE *)ambient + 0) & 0xff) * 0x10000;
-        rgb[1] = rgb[1] - (*(int *)((BYTE *)ambient + 1) & 0xff) * 0x10000;
-        rgb[2] = rgb[2] - (*(int *)((BYTE *)ambient + 2) & 0xff) * 0x10000;
+        Scene_GetLightColour(&light, avg);
+        // PORT: AMIGA: the original masked an int read from the byte array;
+        // that assumes little-endian and reads past the array. Read the RGBA
+        // bytes directly so the car light is identical on both endiannesses.
+        rgb[0] = (int)((BYTE *)&light)[0] << 16;
+        rgb[1] = (int)((BYTE *)&light)[1] << 16;
+        rgb[2] = (int)((BYTE *)&light)[2] << 16;
+        Scene_GetAmbientColour(&ambient);
+        rgb[0] = rgb[0] - (int)((BYTE *)&ambient)[0] * 0x10000;
+        rgb[1] = rgb[1] - (int)((BYTE *)&ambient)[1] * 0x10000;
+        rgb[2] = rgb[2] - (int)((BYTE *)&ambient)[2] * 0x10000;
         if ((View_GetActiveCameraFlags(param_2) & 0xff) == param_1)
             TrackLighting_SetAmbientRGB(rgb);
         pCar->field_0xa70 = avg;

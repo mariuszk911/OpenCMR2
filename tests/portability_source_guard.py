@@ -38,6 +38,7 @@ def main():
     game_info = read("game/GameInfo.cpp")
     rally_data = read("game/RallyData.cpp")
     frontend_screens = read("game/FrontendScreens.cpp")
+    stage_objects = read("game/StageObjects.cpp")
 
     for path, source in (("game/GameInfo.cpp", game_info),
                          ("game/RallyData.cpp", rally_data)):
@@ -79,6 +80,17 @@ def main():
             "game/GameInfo.cpp: preview vertex assignment is set without checking every mesh")
     require("match = -2;" in game_info,
             "game/GameInfo.cpp: preview duplicate node keys are not rejected")
+
+    # The car's per-frame light colour used to be read through int pointers from
+    # 4-byte RGBA arrays, which is big-endian-unsafe and reads past the array.
+    require("(*(int *)(light + 0) & 0xff)" not in stage_objects,
+            "game/StageObjects.cpp: car light red is still read through an int pointer")
+    require("(*(int *)((BYTE *)ambient + 0) & 0xff)" not in stage_objects,
+            "game/StageObjects.cpp: car ambient red is still read through an int pointer")
+    require("(int)((BYTE *)&light)[0] << 16" in stage_objects,
+            "game/StageObjects.cpp: car light red is not read from the byte view")
+    require("(int)((BYTE *)&ambient)[0] * 0x10000" in stage_objects,
+            "game/StageObjects.cpp: car ambient red is not read from the byte view")
 
     for name in ("g_optionTextColours", "g_optionTextBrightColours",
                  "g_unk0x005297ac", "g_unk0x00527378", "g_highlightRowColour"):
