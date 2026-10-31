@@ -2135,8 +2135,15 @@ void Graphics_DrawMeshLOD(Mesh *pMesh, int useParts, int clampTexture, int markT
 // Draws every mesh node of a node list whose view mask contains the given bit,
 // recursing into the children of the nodes that match.
 // FUNCTION: CMR2 0x0049ca50
+static int s_viewMaskDepth;
+
 void Game_DrawViewMaskNodes(SceneNode *pNode, int bit)
 {
+    // PORT: AMIGA: a malformed/cyclic scene tree must not recurse until the
+    // 68k stack faults; the normal scene depth is far below this.
+    if (pNode == NULL || s_viewMaskDepth >= 64)
+        return;
+    s_viewMaskDepth++;
     for (; pNode != NULL; pNode = pNode->pNext) {
         if (pNode->type == SCENE_NODE_MESH) {
             Mesh *pMesh = (Mesh *)pNode->pObject;
@@ -2151,6 +2158,7 @@ void Game_DrawViewMaskNodes(SceneNode *pNode, int bit)
             }
         }
     }
+    s_viewMaskDepth--;
 }
 
 // Draws a single node: if the node is a mesh whose view mask contains the
@@ -2159,6 +2167,9 @@ void Game_DrawViewMaskNodes(SceneNode *pNode, int bit)
 // FUNCTION: CMR2 0x0049cad0
 void Game_DrawViewMaskNode(SceneNode *pNode, int bit)
 {
+    if (pNode == NULL || s_viewMaskDepth >= 64)
+        return;
+    s_viewMaskDepth++;
     if (pNode->type == SCENE_NODE_MESH) {
         Mesh *pMesh = (Mesh *)pNode->pObject;
         if ((pNode->viewMask & (1 << bit)) != 0) {
@@ -2170,20 +2181,25 @@ void Game_DrawViewMaskNode(SceneNode *pNode, int bit)
     }
     if ((pNode->viewMask & (1 << bit)) != 0 && pNode->pFirstChild != NULL)
         Game_DrawViewMaskNodes(pNode->pFirstChild, bit);
+    s_viewMaskDepth--;
 }
 
 // FUNCTION: CMR2 0x0049cb50
 void CGame::QueuePrimaryDrawObject(void *param1)
 {
-    m_deferredDrawObjects[m_deferredDrawCount] = param1;
-    m_deferredDrawCount++;
+    // PORT: AMIGA: the queue is a fixed 4096-entry array; an overfull stage
+    // object set must not write past it (and later past `sorted[4096]`).
+    if (param1 != NULL && m_deferredDrawCount >= 0 && m_deferredDrawCount < 4096)
+        m_deferredDrawObjects[m_deferredDrawCount++] = param1;
 }
 
 // FUNCTION: CMR2 0x0049cb70
 void CGame::QueueSecondaryDrawObject(void *param1)
 {
-    m_transparentDrawNodes[m_transparentDrawCount] = param1;
-    m_transparentDrawCount++;
+    // PORT: AMIGA: fixed 4096-entry array; drop excess nodes instead of
+    // smashing the globals that follow it.
+    if (param1 != NULL && m_transparentDrawCount >= 0 && m_transparentDrawCount < 4096)
+        m_transparentDrawNodes[m_transparentDrawCount++] = param1;
 }
 
 // qsort comparator of the deferred draw list (0x49cc50): sorts by the
@@ -2273,7 +2289,15 @@ void Game_DrawDeferredObjects(void)
             qsort(sorted, CGame::m_deferredDrawCount, sizeof(sorted[0]), Game_CompareDeferredDistance);
         for (i = 0; i < (unsigned int)CGame::m_deferredDrawCount; i++) {
             pObject = sorted[i].pObject;
-            Frontend_SetObjectField118(CGraphics::m_pTextureManager->textureBuffer[pObject->pMesh->pTriangles->textures[0]], 0);
+            if (pObject == NULL || pObject->pMesh == NULL || pObject->pMesh->pTriangles == NULL)
+                continue;
+            {
+                int textureIndex = pObject->pMesh->pTriangles->textures[0];
+                struct Texture *pTexture = NULL;
+                if (textureIndex >= 0 && textureIndex < 2048)
+                    pTexture = CGraphics::m_pTextureManager->textureBuffer[textureIndex];
+                Frontend_SetObjectField118(pTexture, 0);
+            }
             Gfx_SetTransform(GFX_TRANSFORM_WORLD, (GfxMatrix *)pObject->matrix);
             pObject->pMesh->flags |= 8;
             Graphics_DrawMeshLOD(pObject->pMesh, 1, 0, 0);
@@ -2293,19 +2317,36 @@ int __cdecl Game_CompareTransparentDrawEntries(const void *a, const void *b)
     int depthA;
     int depthB;
 
-    if ((pA->flags & 0xff) == 0x14)
-        return 1;
-    if ((pB->flags & 0xff) == 0x14)
-        return 1;
-    depthA = pA->cameraDistance;
-    depthB = pB->cameraDistance;
-    if (FIX_ABS(depthA - depthB) < 0x10000) {
-        if ((pA->flags & 0xff) == 5 && (pB->flags & 0xff) == 0)
-            return 1;
-        if ((pA->flags & 0xff) == 0 && (pB->flags & 0xff) == 5)
-            return -1;
+    // PORT: AMIGA: qsort must tolerate a dropped/NULL entry.
+    if (pA == NULL)
+        return pB != NULL ? 1 : 0;
+    if (pB == NULL)
+        return -1;
+    {
+        int typeA = pA->flags & 0xff;
+        int typeB = pB->flags & 0xff;
+        if (typeA == 0x14 || typeB == 0x14) {
+            if (typeA == typeB)
+                return 0;
+            return typeA == 0x14 ? 1 : -1;
+        }
+        depthA = pA->cameraDistance;
+        depthB = pB->cameraDistance;
+        if (depthA == depthB) {
+            if (typeA == 5 && typeB == 0)
+                return 1;
+            if (typeA == 0 && typeB == 5)
+                return -1;
+            return 0;
+        }
+        if (FIX_ABS(depthA - depthB) < 0x10000) {
+            if (typeA == 5 && typeB == 0)
+                return 1;
+            if (typeA == 0 && typeB == 5)
+                return -1;
+        }
+        return depthA < depthB ? 1 : -1;
     }
-    return depthA < depthB ? 1 : -1;
 }
 
 extern unsigned short g_visibleSectorIndices[];
@@ -2327,9 +2368,12 @@ void Game_DrawStaticStageObjects(void)
     FixVector delta;
 
     for (i = 0; i < (unsigned int)g_sectorCullEnabled; i++) {
-        pObject = (StageObjectDraw *)g_sectors[g_visibleSectorIndices[i]]->pObjects;
+        unsigned short sector = g_visibleSectorIndices[i];
+        if (sector >= 14096u || sector >= (unsigned)g_sectorCount || g_sectors[sector] == NULL)
+            continue;
+        pObject = (StageObjectDraw *)g_sectors[sector]->pObjects;
         while (pObject != NULL) {
-            if (pObject->field_0x14 != 0) {
+            if (pObject->field_0x14 != 0 && pObject->pMesh != NULL) {
                 if ((pObject->pMesh->flags & 2) != 0) {
                     *(GfxMatrix *)pObject->matrix = g_unk0x00597cc0;
                     if (pObject->scaleX != 0x10000 || pObject->scaleY != 0x10000 ||
@@ -2387,14 +2431,23 @@ extern Mesh **g_sceneShadowMeshes;
 void Game_DrawSortedNodes(int bit)
 {
     unsigned int i;
+    int count = CGame::m_transparentDrawCount;
 
-    if ((unsigned int)CGame::m_transparentDrawCount >= 1) {
-        if (g_depthSortDrawLists != 0)
-            qsort(CGame::m_transparentDrawNodes, CGame::m_transparentDrawCount, sizeof(CGame::m_transparentDrawNodes[0]), Game_CompareTransparentDrawEntries);
-        for (i = 0; i < (unsigned int)CGame::m_transparentDrawCount; i++)
-            Game_DrawViewMaskNode((SceneNode *)CGame::m_transparentDrawNodes[i], bit);
+    if (count <= 0 || count > 4096) {
+        if (count != 0)
         CGame::m_transparentDrawCount = 0;
+        return;
     }
+    if (g_depthSortDrawLists != 0) {
+        qsort(CGame::m_transparentDrawNodes, (size_t)count, sizeof(CGame::m_transparentDrawNodes[0]), Game_CompareTransparentDrawEntries);
+    }
+    for (i = 0; i < (unsigned int)count; i++) {
+        SceneNode *pNode = (SceneNode *)CGame::m_transparentDrawNodes[i];
+        if (pNode == NULL)
+            continue;
+        Game_DrawViewMaskNode(pNode, bit);
+    }
+    CGame::m_transparentDrawCount = 0;
 }
 
 // Draws every mesh node of the scene in world space with Z test and write
@@ -2433,7 +2486,10 @@ void Game_DrawUnsortedNodes(int bit)
     CGraphics::SetZEnable(0);
     CGraphics::SetZWriteEnable(0);
     for (i = 0; i < (unsigned int)g_sectorCullEnabled; i++) {
-        pNode = g_sectors[g_visibleSectorIndices[i]]->pFirstNode;
+        unsigned short sector = g_visibleSectorIndices[i];
+        if (sector >= 14096u || sector >= (unsigned)g_sectorCount || g_sectors[sector] == NULL)
+            continue;
+        pNode = g_sectors[sector]->pFirstNode;
         while (pNode != NULL) {
             if (pNode->visible == 0)
                 Game_DrawViewMaskNode(pNode, bit);
@@ -2478,7 +2534,14 @@ void Game_DrawCulledSectorMeshes(void)
     g_sectorFramePrevious = CMain::GetFrameDelta();
     Gfx_SetTransform(GFX_TRANSFORM_WORLD, &g_identityWorldMatrix);
     for (i = 0; i < (unsigned int)g_sectorCullEnabled; i++) {
-        pMesh = (Mesh *)g_sectors[g_visibleSectorIndices[i]]->pMesh;
+        unsigned short sector = g_visibleSectorIndices[i];
+        if (sector >= 14096u || sector >= (unsigned)g_sectorCount) {
+            continue;
+        }
+        if (g_sectors[sector] == NULL) {
+            continue;
+        }
+        pMesh = (Mesh *)g_sectors[sector]->pMesh;
         if (pMesh != NULL) {
             if ((pMesh->flags & 0x1000) != 0)
                 Graphics_DrawMeshLOD(pMesh, 0, 1, 0);
@@ -2510,7 +2573,10 @@ void Game_DrawCulledSectorShadows(void)
     if (g_sceneShadowMeshes != NULL) {
         CGraphics::SetZWriteEnable(0);
         for (i = 0; i < (unsigned int)g_sectorCullEnabled; i++) {
-            pMesh = g_sceneShadowMeshes[g_visibleSectorIndices[i]];
+            unsigned short sector = g_visibleSectorIndices[i];
+            if (sector >= 14096u || sector >= (unsigned)g_sectorCount)
+                continue;
+            pMesh = g_sceneShadowMeshes[sector];
             if (pMesh != NULL)
                 Graphics_DrawMeshLOD(pMesh, 1, 0, 1);
         }
@@ -2532,6 +2598,16 @@ void Game_QueueVisibleSectorNodes(int param1)
     if ((unsigned int)g_sectorCullEnabled > 0) {
         pIndex = (unsigned short *)g_visibleSectorIndices;
         do {
+            if (*pIndex >= 14096u || *pIndex >= (unsigned)g_sectorCount) {
+                i++;
+                pIndex++;
+                continue;
+            }
+            if (g_sectors[*pIndex] == NULL) {
+                i++;
+                pIndex++;
+                continue;
+            }
             pNode = g_sectors[*pIndex]->pFirstNode;
             while (pNode != NULL) {
                 if (pNode->visible != 0) {
@@ -2683,7 +2759,7 @@ int Game_DrawSceneViewport(SceneNode *pRoot, SceneNode *pCamera, void *pRect, in
             CGraphics::SetProjection(0, 0, farPlane, 0);
             // PORT: the scenery fades into the backdrop (Game_BeginDistanceFade).
             Game_BeginDistanceFade();
-            Graphics_EnableFog();
+                Graphics_EnableFog();
             Graphics_SetLightingMode(0);
             Game_DrawCulledSectorMeshes();
             Graphics_SetLightingMode(5);

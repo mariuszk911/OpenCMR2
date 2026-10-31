@@ -4442,7 +4442,10 @@ int RallyData_GetRouteStateValue(void)
 // FUNCTION: CMR2 0x00421440
 RallyRouteNode *RallyData_GetAvailableRouteNodeRecord(int index)
 {
-    if (g_routeNodeCount == 0)
+    // PORT: AMIGA: callers walk node +/- 1; an index outside the decoded
+    // route must return NULL rather than a pointer past the array.
+    if (g_routeNodeCount == 0 || g_routeNodes == NULL ||
+            index < 0 || index >= g_routeNodeCount)
         return NULL;
     return g_routeNodes + index;
 }
@@ -5305,7 +5308,7 @@ int RallyData_IsElementFlagSet(SectorObjectEntry **pEntry, int bit)
     BYTE mask;
 
     index = (size_t)((UINT_PTR)*pEntry - (UINT_PTR)g_movingSectorEntries) / sizeof(SectorObjectEntry);
-    if (index < (int)g_unk0x0058ca6c && index >= 0) {
+    if (g_sectorEntryCarFlags != NULL && index < (int)g_unk0x0058ca6c && index >= 0) {
         mask = 1 << bit;
         return (g_sectorEntryCarFlags[index] & mask) != 0;
     }
@@ -5319,7 +5322,7 @@ void RallyData_SetElementFlagBit(SectorObjectEntry **pp, int bit, int set)
     ptrdiff_t index = (size_t)((UINT_PTR)*pp - (UINT_PTR)g_movingSectorEntries) / sizeof(SectorObjectEntry);
     BYTE mask;
 
-    if (index < (int)g_unk0x0058ca6c && index >= 0) {
+    if (g_sectorEntryCarFlags != NULL && index < (int)g_unk0x0058ca6c && index >= 0) {
         mask = 1 << bit;
         if (set == 0) {
             g_sectorEntryCarFlags[index] &= ~mask;
@@ -5338,7 +5341,8 @@ void RallyData_MarkElementReachedByCar(SectorObjectEntry *pElement, int car)
 {
     if (RallyData_IsElementFlagSet(&pElement, car) == 0) {
         RallyData_SetElementFlagBit(&pElement, car, 1);
-        if (Car_Get(car)->isGhost == 0 && (BYTE)RallyDataState() == 1) {
+        if (Car_Get(car)->isGhost == 0 && (BYTE)RallyDataState() == 1 &&
+                pElement != NULL && pElement->pObject != NULL) {
             pElement->pObject->position.y += 0x3e80000;
             pElement->pObject->visible = 0xff;
         }
@@ -7339,7 +7343,8 @@ void RallyData_RebuildSectorStaticObjectTables(void)
         do {
             pObject = *ppObjects;
             ppObjects++;
-            totalObjects += pObject->pMesh->sizeUnits;
+            if (pObject != NULL && pObject->pMesh != NULL)
+                totalObjects += pObject->pMesh->sizeUnits;
             n--;
         } while (n != 0);
     }
@@ -7485,7 +7490,9 @@ void RallyData_RebuildSectorStaticObjectTables(void)
                 for (j = 0; j < sectorOffset; j++) {
                     if (pObject == g_stageObjects[g_unk0x0058ca68 + j])
                         break;
-                    sumCost += g_stageObjects[g_unk0x0058ca68 + j]->pMesh->sizeUnits;
+                    if (g_stageObjects[g_unk0x0058ca68 + j] != NULL &&
+                            g_stageObjects[g_unk0x0058ca68 + j]->pMesh != NULL)
+                        sumCost += g_stageObjects[g_unk0x0058ca68 + j]->pMesh->sizeUnits;
                 }
                 pRecord = pMesh->pCollisionRecords;
                 if (pRecord == NULL)
@@ -7493,28 +7500,48 @@ void RallyData_RebuildSectorStaticObjectTables(void)
                 scratchOffset = sumCost * sizeof(SectorObjectBounds);
                 recordOffset = countRecords * sizeof(ObjectPointBounds);
                 do {
+                    pEntry = NULL;
                     if ((pObject->flags & 0x2001000) == 0) {
                         listIndexA = g_sectorListIndexA[sector];
-                        if (listIndexA != -1) {
+                        if (listIndexA >= 0 && listIndexA < countA &&
+                                g_sectorListEntriesA != NULL)
                             pEntry = g_sectorListEntriesA[listIndexA] + offsetA;
-                            offsetA++;
-                        }
                     } else {
                         listIndexB = g_sectorListIndexB[sector];
-                        if (listIndexB != -1) {
+                        if (listIndexB >= 0 && listIndexB < countB &&
+                                g_sectorListEntriesB != NULL)
                             pEntry = g_sectorListEntriesB[listIndexB] + offsetB;
-                            offsetB++;
-                        }
                     }
+                    if (pEntry == NULL) {
+                        // PORT: AMIGA: object was not assigned to either list;
+                        // do not write through an uninitialised entry pointer.
+                        pRecord = pRecord->pNext;
+                        continue;
+                    }
+                    if ((pObject->flags & 0x2001000) == 0)
+                        offsetA++;
+                    else
+                        offsetB++;
                     pEntry->pObject = pObject;
+                    if (g_sectorObjectBounds == NULL ||
+                            scratchOffset + (int)sizeof(SectorObjectBounds) > totalObjects * (int)sizeof(SectorObjectBounds)) {
+                        Sys_Log("stage: object bounds table exhausted");
+                        break;
+                    }
                     pScratch = (SectorObjectBounds *)((BYTE *)g_sectorObjectBounds + scratchOffset);
                     scratchOffset += sizeof(SectorObjectBounds);
                     pEntry->pBounds = pScratch;
                     hx = pRecord->width;
-                    pRecordScratch = (ObjectPointBounds *)((BYTE *)g_objectPointBounds + recordOffset);
                     hy = pRecord->length;
                     hz = pRecord->height;
                     if (pRecord->type == 0) {
+                        // PORT: AMIGA: the point-bounds table is allocated only
+                        // when a type-0 record exists; do not add to NULL.
+                        if (g_objectPointBounds == NULL) {
+                            Sys_Log("stage: object point bounds missing");
+                            break;
+                        }
+                        pRecordScratch = (ObjectPointBounds *)((BYTE *)g_objectPointBounds + recordOffset);
                         recordOffset += sizeof(ObjectPointBounds);
                         pEntry->pBounds->pProjection = pRecordScratch;
                         countRecords++;
@@ -8545,11 +8572,21 @@ void RallyData_LoadSelectedRouteNodes(void)
     } else {
         unsigned int nodeCount = count / sizeof(RallyRouteNode);
         unsigned int decoded = 0;
-        RallyRouteNode *pNative = (RallyRouteNode *)CFileBuffer::AllocateLockedBuffer(
-            nodeCount * sizeof(RallyRouteNode) + 1);
+        RallyRouteNode *pNative;
 
-        // PORT: AMIGA: .cat nodes are little-endian; decode into a copy owned
-        // by the stage archive and keep the source node count as the fallback.
+        // PORT: AMIGA: an empty .cat used to fall through to node -1. A decode
+        // failure must also fail closed: the raw member is little-endian and
+        // potentially unaligned, so it cannot be used as native records.
+        if (nodeCount == 0) {
+            Sys_Log("route: empty .cat");
+            g_routeNodes = NULL;
+            g_routeNodeCount = 0;
+            g_unk0x00538a88 = 0;
+            g_unk0x00538c94 = 0;
+            goto routeRecordsReset;
+        }
+        pNative = (RallyRouteNode *)CFileBuffer::AllocateLockedBuffer(
+            nodeCount * sizeof(RallyRouteNode) + 1);
         if (pNative != NULL && RouteNodeDisk_Decode(pNative, nodeCount * sizeof(RallyRouteNode),
                                                     pFile, count, &decoded)) {
             Disk_AttachToBuffer(pFile, pNative);
@@ -8558,8 +8595,12 @@ void RallyData_LoadSelectedRouteNodes(void)
         } else {
             if (pNative != NULL)
                 CFileBuffer::FreeGenericFileBuffer(pNative);
-            g_routeNodes = (RallyRouteNode *)pFile;
-            g_unk0x00538a88 = nodeCount;
+            Sys_Log("route: .cat decode failed");
+            g_routeNodes = NULL;
+            g_routeNodeCount = 0;
+            g_unk0x00538a88 = 0;
+            g_unk0x00538c94 = 0;
+            goto routeRecordsReset;
         }
         g_routeNodeCount = g_unk0x00538a88;
         index = g_unk0x00538a88 - 1;
@@ -8574,23 +8615,28 @@ void RallyData_LoadSelectedRouteNodes(void)
                 pEntry -= sizeof(*g_routeNodes);
             } while (index > 0);
         }
-        RallyData_GetRouteNodeGroundPosition(0, start);
-        RallyData_GetRouteNodeGroundPosition(g_routeNodeCount - 1, end);
-        dy = end[2] - start[2];
-        dx = end[0] - start[0];
-        if (dx < 0)
-            dx = -dx;
-        value = g_routeNodeCount;
-        if (dx < 0x320000) {
-            if (dy < 0)
-                dy = -dy;
-            if (dy < 0x320000) {
-                g_unk0x00538a94 = 1;
-                value = (RallyData_GetSelectionBits16To19() & 0xff) * g_routeNodeCount;
+        if (g_routeNodeCount <= 0) {
+            g_unk0x00538c94 = 0;
+        } else {
+            RallyData_GetRouteNodeGroundPosition(0, start);
+            RallyData_GetRouteNodeGroundPosition(g_routeNodeCount - 1, end);
+            dy = end[2] - start[2];
+            dx = end[0] - start[0];
+            if (dx < 0)
+                dx = -dx;
+            value = g_routeNodeCount;
+            if (dx < 0x320000) {
+                if (dy < 0)
+                    dy = -dy;
+                if (dy < 0x320000) {
+                    g_unk0x00538a94 = 1;
+                    value = (RallyData_GetSelectionBits16To19() & 0xff) * g_routeNodeCount;
+                }
             }
+            g_unk0x00538c94 = value << 16;
         }
-        g_unk0x00538c94 = value << 16;
     }
+routeRecordsReset:
     for (index = 0; index < 8; index++) {
         g_raceRecords[index].routeNodeIndex = 0;
         g_raceRecords[index].resetRouteNodeIndex = 0;

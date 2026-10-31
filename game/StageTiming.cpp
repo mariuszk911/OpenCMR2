@@ -1,5 +1,6 @@
 #include "AIReferenceRoute.h"
 #include "port/intdiv.h"
+#include "port/sys.h"
 #include "FloatToInt.h"
 #include "TyreWear.h"
 #include "StageObjectCount.h"
@@ -1719,7 +1720,7 @@ BYTE StageTiming_NoOpLightRelease(void)
 // Walks the serialised stage block, recording a pointer to every sub-table.
 // match 71%: below the 90% bar; kept as FUNCTION on purpose so reccmp measures it (see CONVENCIONES)
 // FUNCTION: CMR2 0x00490d50
-void StageTiming_IndexSerializedStageTables(BYTE *pData)
+void StageTiming_IndexSerializedStageTables(BYTE *pData, DWORD size)
 {
     // PORT: AMIGA: the serialized collision block is little-endian and can be
     // unaligned. Build one aligned native block, attach it to the archive
@@ -1734,6 +1735,12 @@ void StageTiming_IndexSerializedStageTables(BYTE *pData)
     g_trackTriangleListCount = NULL;
     const BYTE *pFile = pData;
     int levelCounts[5];
+
+    // PORT: AMIGA: the serialized block is a BFL member with no trustable
+    // self-describing length; every count is validated against `size` before
+    // it is used to advance the cursor.
+    if (size < 0x14)
+        return;
     unsigned int vertexCount;
     unsigned int triangleCount;
     unsigned int listCount;
@@ -1752,22 +1759,30 @@ void StageTiming_IndexSerializedStageTables(BYTE *pData)
         nodeCount += (unsigned int)levelCounts[i];
     }
     pFile += 0x14;
+    if ((uint64_t)(pFile - pData) + nodeCount * sizeof(TrackQuadNode) + sizeof(TrackCollisionCount) > size)
+        return;
     pFile += nodeCount * sizeof(TrackQuadNode);
     vertexCount = ReadLE16(pFile);
     pFile += sizeof(TrackCollisionCount);
+    if ((uint64_t)(pFile - pData) + (uint64_t)vertexCount * sizeof(FixVector) + sizeof(TrackCollisionCount) > size)
+        return;
     pFile += vertexCount * sizeof(FixVector);
     triangleCount = ReadLE16(pFile);
     pFile += sizeof(TrackCollisionCount);
+    if ((uint64_t)(pFile - pData) + (uint64_t)triangleCount * sizeof(TrackTriangle) + sizeof(int) > size)
+        return;
     pFile += triangleCount * sizeof(TrackTriangle);
     listCount = ReadLE32(pFile);
     pFile += sizeof(int);
+    if ((uint64_t)(pFile - pData) + (uint64_t)listCount * sizeof(short) + 2 * sizeof(short) > size)
+        return;
     pFile += listCount * sizeof(short);
 
     totalBytes = 0x14 + nodeCount * sizeof(TrackQuadNode) +
                  sizeof(TrackCollisionCount) + vertexCount * sizeof(FixVector) +
                  sizeof(TrackCollisionCount) + triangleCount * sizeof(TrackTriangle) +
                  sizeof(int) + listCount * sizeof(short) + 2 * sizeof(short);
-    if (totalBytes > (uint64_t)(size_t)-1)
+    if (totalBytes > (uint64_t)size || totalBytes > (uint64_t)(size_t)-1)
         return;
     native = (BYTE *)CFileBuffer::AllocateLockedBuffer((size_t)totalBytes);
     if (native == NULL)
@@ -1955,17 +1970,31 @@ void StageTiming_LoadCspData(void)
         // owned by the stage archive and point the start data into it.
         if (g_unk0x00542608 != NULL && cspSize != 0)
             pNativeCsp = (BYTE *)CFileBuffer::AllocateLockedBuffer(cspSize);
-        if (pNativeCsp != NULL && StartTableDisk_Decode(pNativeCsp, cspSize, g_unk0x00542608, cspSize, NULL)) {
+        if (cspSize < 0x18) {
+            // PORT: AMIGA: g_carStartAngles points 0x18 bytes into this table.
+            Sys_Log("start table: .csp too short (%lu bytes)", (unsigned long)cspSize);
+            if (pNativeCsp != NULL)
+                CFileBuffer::FreeGenericFileBuffer(pNativeCsp);
+            g_unk0x00542608 = NULL;
+        } else if (pNativeCsp != NULL && StartTableDisk_Decode(pNativeCsp, cspSize, g_unk0x00542608, cspSize, NULL)) {
             Disk_AttachToBuffer(g_unk0x00542608, pNativeCsp);
             g_unk0x00542608 = pNativeCsp;
-        } else if (pNativeCsp != NULL) {
-            CFileBuffer::FreeGenericFileBuffer(pNativeCsp);
+        } else {
+            if (pNativeCsp != NULL)
+                CFileBuffer::FreeGenericFileBuffer(pNativeCsp);
+            // PORT: AMIGA: do not expose the raw little-endian/un-aligned
+            // member as native start data.
+            Sys_Log("start table: .csp decode failed");
+            g_unk0x00542608 = NULL;
         }
     }
     if (g_unk0x00542608 != NULL) {
         g_carStartData = g_unk0x00542608;
         g_carStartAngles = (FixAngles *)(g_unk0x00542608 + 0x18);
         CGame::RegisterCallback(StageTiming_NoOpResourceRelease, 0);
+    } else {
+        g_carStartData = NULL;
+        g_carStartAngles = NULL;
     }
 }
 
@@ -2629,6 +2658,11 @@ void *g_carAuxiliaryBuffers[16];
 SceneNode *g_carAlternateBodyScenes[16];
 // GLOBAL: CMR2 0x00542904
 void *g_carWheelModelBuffers[16];
+// PORT: AMIGA: member extent captured when the C3D buffer is loaded; the C3D
+// relocator uses it to reject counts that walk past the buffer.
+static DWORD g_carModelC3dSizes[16];
+static DWORD g_carWheelC3dSizes[16];
+static DWORD g_carAlternateBodyC3dSizes[16];
 // GLOBAL: CMR2 0x00542944
 void *g_carAlternateBodyBuffers[16];
 // GLOBAL: CMR2 0x00542984
@@ -3112,6 +3146,9 @@ int StageTiming_FreeSceneAndFinishResources(void)
         pRecord++;
     } while ((INT_PTR)pNodeList < (INT_PTR)(g_carAlternateBodyScenes + 16));
     for (i = 0; i < 16; i++) {
+        g_carModelC3dSizes[i] = 0;
+        g_carWheelC3dSizes[i] = 0;
+        g_carAlternateBodyC3dSizes[i] = 0;
         if (g_carModelBuffers[i] != NULL) {
             CFileBuffer::FreeGenericFileBuffer(g_carModelBuffers[i]);
             g_carModelBuffers[i] = NULL;
@@ -4370,6 +4407,14 @@ void Stage_GetCarStartXZ(int car, int *pStarts, int *pOut);
 // FUNCTION: CMR2 0x00456c70
 int *StageTiming_GetCarStartPosition(int car)
 {
+    // PORT: AMIGA: a missing/short .csp leaves this pointer NULL; return a
+    // neutral start instead of dereferencing file data that is not there.
+    if (g_carStartData == NULL) {
+        g_carStartPosition.x = 0;
+        g_carStartPosition.y = 0;
+        g_carStartPosition.z = 0;
+        return &g_carStartPosition.x;
+    }
     Stage_GetCarStartXZ(car, (int *)g_carStartData, &g_carStartPosition.x);
     return &g_carStartPosition.x;
 }
@@ -4481,10 +4526,17 @@ void StageTiming_RebuildDamagedPartMeshes(Car *pCar)
 void CarDamage_CaptureStageSnapshot(int car)
 {
     Car *pCar = Car_Get(car);
-    CarPartSet *pSource = g_carPartSets + pCar->index;
-    CarDamageRecord *pRecord = g_carDamageRecords + pCar->index;
+    CarPartSet *pSource;
+    CarDamageRecord *pRecord;
     int i;
     int value;
+
+    // PORT: AMIGA: car index comes from the spawned Car record; reject an
+    // unspawned/invalid car before indexing the fixed part/damage tables.
+    if (pCar == NULL || pCar->index < 0 || pCar->index >= 16)
+        return;
+    pSource = g_carPartSets + pCar->index;
+    pRecord = g_carDamageRecords + pCar->index;
 
     if (pRecord->stageSnapshotCaptured == 0) {
         pRecord->stageSnapshotCaptured = 1;
@@ -5870,7 +5922,14 @@ void StageTiming_BuildCheckpointSplitPositions(void)
     if (g_stageCheckpointCount == 0)
         return;
     for (i = 0; i < g_stageCheckpointCount; i++) {
-        if ((RallyData_GetAvailableRouteNodeRecord(i)->flags & 1) != 0) {
+        RallyRouteNode *pNode = RallyData_GetAvailableRouteNodeRecord(i);
+        if (pNode == NULL)
+            continue;
+        if ((pNode->flags & 1) != 0) {
+            // PORT: AMIGA: the game has 12 split slots; an anomalous route
+            // must not write past g_splitPositions[12].
+            if (count >= 12)
+                break;
             g_splitPositions[count] = (int)FTOI(__int64, X87S_MUL((double)i, CGraphics::m_65536));
             count++;
         }
@@ -6901,9 +6960,16 @@ void CarPart_IntegrateDetachedMotion(void);
 // Places the two view nodes of a car at the shared angle/position buffers and
 // rebuilds that car's body state, network-snapshotting it when required.
 // FUNCTION: CMR2 0x00457e50
-void StageTiming_PlaceCarViewNodesAndBody(SceneNode *pNodeA, SceneNode *pNodeB, int carIndex, int param_4,
+int StageTiming_PlaceCarViewNodesAndBody(SceneNode *pNodeA, SceneNode *pNodeB, int carIndex, int param_4,
                   FixAngles *pAngles, FixVector *pPosition, int param_7)
 {
+    // PORT: AMIGA: Car_Spawn dereferences both the body node and the car's
+    // body pointer. A car model with a missing type-5 node must fail here
+    // rather than fault on the 68060.
+    if (pNodeA == NULL || pNodeB == NULL || pAngles == NULL || pPosition == NULL) {
+        Sys_Log("car %d: missing scene/body/start data, not spawning", carIndex);
+        return 0;
+    }
     SceneNode_SetRotation(pNodeA, pAngles);
     SceneNode_SetRotation(pNodeB, pAngles);
     SceneNode_SetPosition(pNodeA, pPosition);
@@ -6912,6 +6978,7 @@ void StageTiming_PlaceCarViewNodesAndBody(SceneNode *pNodeA, SceneNode *pNodeB, 
     Car_ResetBodyBasis(Car_Get(carIndex));
     if (CGameInfo::GetGameModeOptionBit19() != 0)
         StageTiming_SnapshotCarNetworkPose(Car_Get(carIndex));
+    return 1;
 }
 
 // Initialises one of a car's four wheel/hub records: points the shared record
@@ -8059,6 +8126,12 @@ int StageTiming_LoadStageCarsAndEffects(void)
     SceneNode *pNode;
 
     count = StageTiming_GetTotalCarCount();
+    // PORT: AMIGA: a zero car count makes Car_Get(count - 1) read before the
+    // table; fail the stage instead.
+    if (count <= 0) {
+        Sys_Log("stage: invalid car count %d", count);
+        return 0;
+    }
     memset(g_carInfoBuffers, 0, sizeof(g_carInfoBuffers));
     Car_AllocateTable(count);
     StageTiming_AllocateCarReplayRecordTables(count);
@@ -8117,11 +8190,16 @@ int StageTiming_LoadStageCarsAndEffects(void)
     if ((char)RallyData_GetSelectionFlag28() && (char)CGameInfo::GetSoundOptionBit30())
         CarEffects_MakeGhost(Car_Get(count - 1));
     for (i = 0; i < count; i++) {
-        StageTiming_SetNodeVertexGrey(Car_Get(i)->pSceneRoot, 0);
-        StageTiming_SetNodeVertexGrey(Car_Get(i)->pBodyNode, 0);
-        StageTiming_SetNodeTreeVertexGrey(Car_Get(i)->pSceneRoot->pFirstChild, 0);
-        StageTiming_SetNodeTreeVertexGrey(Car_Get(i)->pBodyNode->pFirstChild, 0);
-        pNode = SceneNode_FindByType(Car_Get(i)->pBodyNode, 0xe);
+        Car *pCar = Car_Get(i);
+        if (pCar->pSceneRoot == NULL || pCar->pBodyNode == NULL) {
+            Sys_Log("car %d: scene/body node missing after load", i);
+            return 0;
+        }
+        StageTiming_SetNodeVertexGrey(pCar->pSceneRoot, 0);
+        StageTiming_SetNodeVertexGrey(pCar->pBodyNode, 0);
+        StageTiming_SetNodeTreeVertexGrey(pCar->pSceneRoot->pFirstChild, 0);
+        StageTiming_SetNodeTreeVertexGrey(pCar->pBodyNode->pFirstChild, 0);
+        pNode = SceneNode_FindByType(pCar->pBodyNode, 0xe);
         if (pNode != NULL)
             StageTiming_SetNodeVertexGrey(pNode, 0xff);
     }
@@ -8167,7 +8245,7 @@ void RallyData_SetDriverCategoryOption(BYTE index, BYTE value);
 char *Car_GetDirectoryPath(int car);
 bool Graphics_AllCarsFullDetail(void);
 void Graphics_SetTextureStageState(int param1);
-struct SceneNode *Sector_BuildC3DModelScene(void *data, struct SceneNode *parent, struct GenericFile *archive);
+struct SceneNode *Sector_BuildC3DModelScene(void *data, struct SceneNode *parent, struct GenericFile *archive, DWORD size);
 int *StageTiming_GetCarStartPosition(int car);
 FixAngles *StageTiming_GetStartTableField244(int unused);
 int Car_UsesNarrowWheels(Car *pCar, int param2);
@@ -8426,6 +8504,11 @@ classes:
     if (pRecord->detailCode == 'A')
         strncpy(CFrontend::m_stringDest + strlen(CFrontend::m_stringDest) - 6, g_strDamageModelC3d, 8);
     pData = CFileBuffer::GetGenericFileBuffer(CFrontend::m_stringDest, FALSE);
+    {
+        DWORD c3dSize = pData != NULL ? (DWORD)CGenericFileLoader::GetGenericFileSize() : 0;
+        if (pData != NULL)
+            g_carModelC3dSizes[car] = c3dSize;
+    }
     strcpy(path, CFrontend::m_stringDest);
     g_carModelBuffers[car] = pData;
     sprintf(CFrontend::m_stringDest, g_strCinFormat, Car_GetDirectoryPath(model));
@@ -8435,9 +8518,17 @@ classes:
 
         // PORT: AMIGA: .cin sections are little-endian and subsystems cache
         // pointers into them. Decode in the file buffer, so the sections and
-        // the buffer that owns them keep exactly one lifetime.
-        if (pCin != NULL && cinSize != 0)
-            CarInfoDisk_Decode(pCin, cinSize, pCin, cinSize);
+        // the buffer that owns them keep exactly one lifetime. A missing or
+        // rejected section table would leave raw LE data active, so fail the
+        // car instead.
+        if (pCin == NULL || cinSize == 0 ||
+                !CarInfoDisk_Decode(pCin, cinSize, pCin, cinSize)) {
+            Sys_Log("car %d: .cin missing or invalid", car);
+            if (pCin != NULL)
+                CFileBuffer::FreeGenericFileBuffer(pCin);
+            g_carInfoBuffers[car] = NULL;
+            return 0;
+        }
         g_carInfoBuffers[car] = (CarInfoDirectory *)pCin;
     }
     if ((char)RallyData_GetFlag24())
@@ -8449,8 +8540,32 @@ classes:
     CGenericFileLoader::LoadIntoFileRecord(pArchive, CFrontend::m_stringDest);
     if (pData == NULL)
         return 0;
-    pScene = Sector_BuildC3DModelScene(pData, RallyData_GetChallengeRenderState(), pArchive);
+    // PORT: AMIGA: fail cleanly if the car's texture archive is missing; the
+    // scene builder below still needs its archive for texture records.
+    if (pArchive->buffer == NULL) {
+        Sys_Log("car %d: model archive missing", car);
+        return 0;
+    }
+    pScene = Sector_BuildC3DModelScene(pData, RallyData_GetChallengeRenderState(), pArchive,
+                                       g_carModelC3dSizes[car]);
     pBody = SceneNode_FindByType(pScene, 5);
+    // PORT: AMIGA: Car_Spawn dereferences the body node; a malformed or
+    // unsupported C3D must not reach it with a NULL scene/body.
+    if (pScene == NULL || pBody == NULL) {
+        Sys_Log("car %d: C3D has no scene/body node", car);
+        return 0;
+    }
+    {
+        int wheel;
+        // PORT: AMIGA: Car_Spawn dereferences pWheelNodes[0..3] and their
+        // local matrices; a car model without those nodes must fail here.
+        for (wheel = 1; wheel <= 4; wheel++) {
+            if (SceneNode_FindByType(pScene, wheel) == NULL) {
+                Sys_Log("car %d: C3D has no wheel node %d", car, wheel);
+                return 0;
+            }
+        }
+    }
     pRecord->rootNode = pScene;
     pRecord->bodyNode = pBody;
     pRecord->modelClass = (BYTE)team;
@@ -8458,29 +8573,57 @@ classes:
     if (((char)RallyData_GetFlag25() && CGameInfo::GetGameModeOptionBit19() == 0 && twoPlayers == 0 && car == 1) ||
         (char)RallyData_IsChampionshipFinalStage() || CGameInfo::GetConfiguredGameMode() == 4)
         teamByte = 0;
-    StageTiming_PlaceCarViewNodesAndBody(pScene, pBody, car, teamByte, StageTiming_GetStartTableField244(car), (FixVector *)StageTiming_GetCarStartPosition(car), 0);
+    if (StageTiming_PlaceCarViewNodesAndBody(pScene, pBody, car, teamByte,
+            StageTiming_GetStartTableField244(car),
+            (FixVector *)StageTiming_GetCarStartPosition(car), 0) == 0)
+        return 0;
     pWheelData = NULL;
     if (pRecord->detailCode == 'A') {
-        if (Car_UsesNarrowWheels(Car_Get(car), 1)) {
+        if (Car_UsesNarrowWheels(Car_Get(car), 1) && strlen(path) >= 5) {
             strncpy(path + strlen(path) - 5, g_strSnowWheelsC3d, 5);
             pWheelData = CFileBuffer::GetGenericFileBuffer(path, FALSE);
+            if (pWheelData != NULL)
+                g_carWheelC3dSizes[car] = (DWORD)CGenericFileLoader::GetGenericFileSize();
         }
-        if (Car_ShowsCleanWheels(Car_Get(car))) {
+        if (Car_ShowsCleanWheels(Car_Get(car)) && strlen(path) >= 5) {
             strncpy(path + strlen(path) - 5, g_strLightWheelsC3d, 5);
             pWheelData = CFileBuffer::GetGenericFileBuffer(path, FALSE);
+            if (pWheelData != NULL)
+                g_carWheelC3dSizes[car] = (DWORD)CGenericFileLoader::GetGenericFileSize();
         }
         if (pWheelData != NULL) {
+            SceneNode *pWheelNodes[4];
+            SceneNode *pAlternateWheels[4];
+            int wheelOk = 1;
+            int wheel;
+
+            // PORT: AMIGA: every wheel lookup used to be dereferenced without
+            // a check; a model that lacks one wheel node faulted here.
+            for (wheel = 0; wheel < 4; wheel++) {
+                pWheelNodes[wheel] = SceneNode_FindByType(pScene, wheel + 1);
+                if (pWheelNodes[wheel] == NULL)
+                    wheelOk = 0;
+            }
             pRecord->alternateWheelScene = Sector_BuildC3DModelScene(pWheelData, RallyData_GetChallengeRenderState(),
-                                                   &g_carModelArchives[car * 2]);
-            pRecord->originalWheelObjects[0] = SceneNode_FindByType(pScene, 1)->pObject;
-            pRecord->originalWheelObjects[1] = SceneNode_FindByType(pScene, 2)->pObject;
-            pRecord->originalWheelObjects[2] = SceneNode_FindByType(pScene, 3)->pObject;
-            pRecord->originalWheelObjects[3] = SceneNode_FindByType(pScene, 4)->pObject;
-            SceneNode_FindByType(pScene, 1)->pObject = SceneNode_FindByType(pRecord->alternateWheelScene, 1)->pObject;
-            SceneNode_FindByType(pScene, 2)->pObject = SceneNode_FindByType(pRecord->alternateWheelScene, 2)->pObject;
-            SceneNode_FindByType(pScene, 3)->pObject = SceneNode_FindByType(pRecord->alternateWheelScene, 3)->pObject;
-            SceneNode_FindByType(pScene, 4)->pObject = SceneNode_FindByType(pRecord->alternateWheelScene, 4)->pObject;
-            goto wheelsDone;
+                                                   &g_carModelArchives[car * 2],
+                                                   g_carWheelC3dSizes[car]);
+            if (pRecord->alternateWheelScene == NULL)
+                wheelOk = 0;
+            if (wheelOk) {
+                for (wheel = 0; wheel < 4; wheel++) {
+                    pAlternateWheels[wheel] = SceneNode_FindByType(pRecord->alternateWheelScene, wheel + 1);
+                    if (pAlternateWheels[wheel] == NULL)
+                        wheelOk = 0;
+                }
+            }
+            if (wheelOk) {
+                for (wheel = 0; wheel < 4; wheel++) {
+                    pRecord->originalWheelObjects[wheel] = pWheelNodes[wheel]->pObject;
+                    pWheelNodes[wheel]->pObject = pAlternateWheels[wheel]->pObject;
+                }
+                goto wheelsDone;
+            }
+            Sys_Log("car %d: wheel model or wheel node missing", car);
         }
     }
     pRecord->alternateWheelScene = 0;
@@ -8534,13 +8677,15 @@ wheelsDone:
     pData = CFileBuffer::GetGenericFileBuffer(CFrontend::m_stringDest, FALSE);
     if (pData == NULL)
         return 0;
+    g_carAlternateBodyC3dSizes[car] = (DWORD)CGenericFileLoader::GetGenericFileSize();
     g_carAlternateBodyBuffers[car] = pData;
     CFrontend::m_stringDest[strlen(CFrontend::m_stringDest) - strlen(g_strCarC3dExt)] = 0;
     sprintf(CFrontend::m_stringDest, g_strBflFormat, CFrontend::m_stringDest);
     pArchive = &g_carModelArchives[car * 2 + 1];
     CGenericFileLoader::LoadIntoFileRecord(pArchive, CFrontend::m_stringDest);
     pCar = Car_Get(car);
-    pNodes = Sector_BuildC3DModelScene(pData, RallyData_GetChallengeRenderState(), pArchive);
+    pNodes = Sector_BuildC3DModelScene(pData, RallyData_GetChallengeRenderState(), pArchive,
+                                       g_carAlternateBodyC3dSizes[car]);
     g_carAlternateBodyScenes[car] = pNodes;
     pCar->pAlternateBodyNode = SceneNode_FindByType(pNodes, 5);
     pCar->pExtraNodes[0] = SceneNode_FindByType(pNodes, 1);
@@ -9543,7 +9688,7 @@ void StageTiming_RestoreDeviceStageResources(void)
     verts[2].sx = 0.0f;
     verts[2].sy = 10.0f;
 
-    for (i = 0; i < CGraphics::m_textureCount; i++) {
+    for (i = 0; i < CGraphics::TextureCount(); i++) {
         Texture *pTexture = CGraphics::m_pTextureManager->textureBuffer[i];
         if (pTexture != NULL && pTexture->pSurface != NULL) {
             CGraphics::ApplyTextureStageChange(0, pTexture);

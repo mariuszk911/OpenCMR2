@@ -1,4 +1,5 @@
 #include <math.h>
+#include "port/sys.h"
 #include "FloatToInt.h"
 #include <stddef.h>
 #include "Graphics.h"
@@ -3612,7 +3613,7 @@ void Car_IntegrateWheelRotation(int *pList, short count);
 
 void Car_ClearRecords(int first, int count);
 void Car_InvalidateTransformsRange(int first, int count);
-void StageTiming_PlaceCarViewNodesAndBody(SceneNode *pNodeA, SceneNode *pNodeB, int carIndex, int param_4,
+int StageTiming_PlaceCarViewNodesAndBody(SceneNode *pNodeA, SceneNode *pNodeB, int carIndex, int param_4,
                   FixAngles *pAngles, FixVector *pPosition, int param_7);
 void StageTiming_ClearCarReplayRecordRange(int first, int count);
 void CarDamage_SetupOrderedCarParts(int lock, int keep, short *pOrder, short count);
@@ -3694,9 +3695,12 @@ void Car_ReloadModels(int first, int count, int param_3)
         g_carBuffer[i].isGhost = g_unk0x0053bd44[i];
         g_carBuffer[i].field_0xb58 = g_unk0x0053ab88[i];
     }
-    for (i = first; i < end; i++)
-        StageTiming_PlaceCarViewNodesAndBody(g_savedCarSceneRoots[i], g_savedCarBodyNodes[i], i,
-                     g_unk0x0053a398[i], StageTiming_GetStartTableField244(i), (FixVector *)StageTiming_GetCarStartPosition(i), 1);
+    for (i = first; i < end; i++) {
+        if (StageTiming_PlaceCarViewNodesAndBody(g_savedCarSceneRoots[i], g_savedCarBodyNodes[i], i,
+                     g_unk0x0053a398[i], StageTiming_GetStartTableField244(i),
+                     (FixVector *)StageTiming_GetCarStartPosition(i), 1) == 0)
+            Sys_Log("car reload: placement failed for car %d", i);
+    }
     StageTiming_ClearCarReplayRecordRange(first, count);
     CarDamage_SetupOrderedCarParts(1, param_3, g_unk0x0053a300, count);
     CarTyres_CommitPlayerWear(1, param_3, (BYTE)RallyDataState());

@@ -220,6 +220,10 @@ BYTE CGraphics::EvictManagedTextureResources(void) {
     unsigned int index, textureID;
     int face;
 
+    // PORT: AMIGA: the menu frame submitted just before a race transition may
+    // still be reading these V3D textures. Destroying them while the GPU is
+    // busy hard-locks the PiStorm, so drain the queue first.
+    Gfx_Finish();
     m_unk0x0065fa2c = 0;
 
     index = 0;
@@ -275,6 +279,19 @@ void CGraphics::ReleaseCachedTextureSurfaces(void)
         }
     }
     g_unk0x0065fa30 = 0;
+}
+
+// PORT: AMIGA: stage meshes are freed with their C3D archive, but the shared
+// vertex buffers keep their fill counters. Attract mode reloads a stage every
+// cycle, so without this reset the allocator eventually runs past the 100
+// buffers. Call it when a stage is about to load and no live stage mesh can
+// still reference the old contents.
+void CGraphics::ResetSharedVertexBufferFill(void)
+{
+    int i;
+
+    for (i = 0; i < 100; i++)
+        m_pTextureManager->vertexBufferFill[i] = 0;
 }
 
 // FUNCTION: CMR2 0x004b1de0
@@ -3787,7 +3804,7 @@ char g_str0x00521118[4] = "B2";
 // skipped when the record type is 6.
 // match 62%: below the 90% bar; kept as FUNCTION on purpose so reccmp measures it (see CONVENCIONES)
 // FUNCTION: CMR2 0x004b9910
-void Graphics_LoadTextureRecordList(BYTE *param1, char *param2, unsigned int param3, int param4, GenericFile *archive)
+void Graphics_LoadTextureRecordList(BYTE *param1, char *param2, unsigned int param3, int param4, GenericFile *archive, BYTE *limit)
 {
     unsigned int remaining;
     char *pName;
@@ -3798,21 +3815,57 @@ void Graphics_LoadTextureRecordList(BYTE *param1, char *param2, unsigned int par
     if (param3 != 0) {
         remaining = param3;
         do {
+            // PORT: AMIGA: the record table lives between the C3D records and
+            // the texture-name block; never read past that block.
+            if (limit != NULL &&
+                    (param1 >= limit || (size_t)(limit - param1) < 0x10)) {
+                Sys_Log("graphics: texture record table overruns the C3D");
+                return;
+            }
             // PORT: AMIGA: the record count and name indices are little-endian
-            // and the record can be unaligned inside the C3D payload.
+            // and the record can be unaligned inside the C3D payload. The
+            // fixed header is 0x10 bytes and each entry is one 8-byte slot;
+            // the name index is the slot's low 16 bits.
             const unsigned int count = ReadLE16(param1 + 0xc);
+            if (count > 0x1000 ||
+                    (limit != NULL && (size_t)(limit - param1) < 0x10u + (size_t)count * 8u)) {
+                Sys_Log("graphics: invalid texture record count %lu",
+                        (unsigned long)count);
+                return;
+            }
             for (i = 0; i < count; i++) {
                 const unsigned int nameIndex = ReadLE16(param1 + 0x14 + i * 8);
+                const char *pBaseName;
+                // PORT: AMIGA: a corrupt/unsupported record must not turn into
+                // a wild pointer through the names block and StrUpperPolish.
+                if (nameIndex >= param3) {
+                    Sys_Log("graphics: texture name index %lu >= %lu",
+                            (unsigned long)nameIndex, (unsigned long)param3);
+                    continue;
+                }
                 pName = param2 + nameIndex * 0x104;
+                // PORT: AMIGA: the 0x104-byte slot has no guaranteed terminator;
+                // reject it before StrUpperPolish or sprintf walk off the block.
+                if (memchr(pName, '\0', 0x104) == NULL) {
+                    Sys_Log("graphics: unterminated texture name %lu",
+                            (unsigned long)nameIndex);
+                    continue;
+                }
                 CGenericFileLoader::StrUpperPolish((BYTE *)pName);
                 strcpy(CFrontend::m_stringDest, CInstallInfo::GetTexturesDirectory());
-                // PORT: preserve the variadic ABI (macOS ARM64).
-                sprintf(fileName, g_fontTgaFormat, CFrontend::m_stringDest,
-                        strchr(pName, '\\') + 1);
+                pBaseName = strchr(pName, '\\');
+                if (pBaseName == NULL)
+                    pBaseName = pName;
+                else
+                    pBaseName++;
+                // PORT: preserve the variadic ABI (macOS ARM64); the textures
+                // directory plus a full-length name overflows fileName[260].
+                snprintf(fileName, sizeof(fileName), g_fontTgaFormat, CFrontend::m_stringDest, pBaseName);
                 if (param4 == 6) {
                     if (Graphics_FindAndEnsureResidentTexture(fileName) != 0)
                         continue;
-                    if (strncmp(fileName + strlen(fileName) - 6, CGraphics::m_strSuffixBU, 2) != 0 &&
+                    if (strlen(fileName) >= 6 &&
+                        strncmp(fileName + strlen(fileName) - 6, CGraphics::m_strSuffixBU, 2) != 0 &&
                         strncmp(fileName + strlen(fileName) - 6, g_str0x00521118, 2) != 0 &&
                         strncmp(fileName + strlen(fileName) - 6, g_str0x00521114, 2) != 0)
                         flags = Graphics_HasLocalSuffix(fileName) != 0 ? 0x40 : 0x100;
@@ -7041,10 +7094,19 @@ void Graphics_DrawMeshPartsByTexture(Mesh *pMesh)
     MeshPart *pPart;
 
     i = 0;
-    if (pMesh->partCount > 0) {
+    if (pMesh != NULL && pMesh->partCount > 0 && pMesh->partCount <= 50 &&
+            pMesh->pParts[0] != NULL) {
         ppPart = pMesh->pParts;
         do {
             pPart = *ppPart;
+            if (pPart == NULL || pPart->pData == NULL || pPart->indexCount <= 0 ||
+                    pPart->texture < 0 || pPart->texture >= 2048 ||
+                    pMesh->vertexBufferIndex < 0 || pMesh->vertexBufferIndex >= 100 ||
+                    CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex] == NULL) {
+                i++;
+                ppPart++;
+                continue;
+            }
             CGraphics::ApplyTextureStageChange(0, CGraphics::m_pTextureManager->textureBuffer[pPart->texture]);
             Gfx_DrawIndexedPrimitiveVB(GFX_TRIANGLELIST, CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex], pMesh->vertexOffset + pPart->minIndex, pMesh->field_0x10 - pPart->minIndex, pPart->pData, pPart->indexCount);
             CGame::m_unk0x0059ce18 += pPart->indexCount / 3;
@@ -7063,10 +7125,19 @@ void Graphics_MarkTexturesAndDrawMeshParts(Mesh *pMesh)
     MeshPart *pPart;
 
     i = 0;
-    if (pMesh->partCount > 0) {
+    if (pMesh != NULL && pMesh->partCount > 0 && pMesh->partCount <= 50 &&
+            pMesh->pParts[0] != NULL) {
         ppPart = pMesh->pParts;
         do {
             pPart = *ppPart;
+            if (pPart == NULL || pPart->pData == NULL || pPart->indexCount <= 0 ||
+                    pPart->texture < 0 || pPart->texture >= 2048 ||
+                    pMesh->vertexBufferIndex < 0 || pMesh->vertexBufferIndex >= 100 ||
+                    CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex] == NULL) {
+                i++;
+                ppPart++;
+                continue;
+            }
             Frontend_SetObjectField118(CGraphics::m_pTextureManager->textureBuffer[pPart->texture], 10);
             CGraphics::ApplyTextureStageChange(0, CGraphics::m_pTextureManager->textureBuffer[pPart->texture]);
             Gfx_DrawIndexedPrimitiveVB(GFX_TRIANGLELIST, CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex], pMesh->vertexOffset + pPart->minIndex, pMesh->field_0x10 - pPart->minIndex, pPart->pData, pPart->indexCount);
@@ -7085,14 +7156,35 @@ unsigned short g_unk0x0059be74[2000];
 // FUNCTION: CMR2 0x0049c680
 void Graphics_DrawMeshTextureBatches(Mesh *pMesh)
 {
-    MeshTriangle *pTri = pMesh->pTriangles;
-    int total = pMesh->triangleCount;
+    MeshTriangle *pTri;
+    int total;
     int count = 0;
     int currentTexture = -1;
     int n;
 
+    // PORT: AMIGA: guard the mesh before its triangle/vertex tables are read.
+    if (pMesh == NULL || pMesh->vertexBufferIndex < 0 || pMesh->vertexBufferIndex >= 100)
+        return;
+    pTri = pMesh->pTriangles;
+    total = pMesh->triangleCount;
+    if (pTri == NULL || total <= 0)
+        return;
     for (n = total; n > 0; n--) {
-        int texture = pTri->textures[pTri->field_0x2c];
+        int texture;
+        if (pTri->field_0x2c < 0 || pTri->field_0x2c >= 10)
+            texture = pTri->textures[0];
+        else
+            texture = pTri->textures[pTri->field_0x2c];
+        // PORT: AMIGA: textures[] is file-controlled and uses -1 for "none";
+        // never index the 2048-entry texture table with it.
+        if (texture < 0 || texture >= 2048) {
+            pTri++;
+            continue;
+        }
+        if (count >= 1998) {
+            Gfx_DrawIndexedPrimitiveVB(GFX_TRIANGLELIST, CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex], pMesh->vertexOffset, pMesh->field_0x10, g_unk0x0059be74, count);
+            count = 0;
+        }
         if (texture != currentTexture) {
             if (count > 0) {
                 Gfx_DrawIndexedPrimitiveVB(GFX_TRIANGLELIST, CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex], pMesh->vertexOffset, pMesh->field_0x10, g_unk0x0059be74, count);
@@ -7108,9 +7200,10 @@ void Graphics_DrawMeshTextureBatches(Mesh *pMesh)
         pTri++;
     }
     if (count != 0) {
-        MeshTriangle *pLast = &pMesh->pTriangles[total - 1];
-        int texture = pLast->textures[pLast->field_0x2c];
-        CGraphics::ApplyTextureStageChange(0, CGraphics::m_pTextureManager->textureBuffer[texture]);
+        // PORT: AMIGA: currentTexture is the last accepted triangle's index;
+        // re-deriving it from the final triangle can hit a rejected entry.
+        if (currentTexture >= 0 && currentTexture < 2048)
+            CGraphics::ApplyTextureStageChange(0, CGraphics::m_pTextureManager->textureBuffer[currentTexture]);
         Gfx_DrawIndexedPrimitiveVB(GFX_TRIANGLELIST, CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex], pMesh->vertexOffset, pMesh->field_0x10, g_unk0x0059be74, count);
     }
 }

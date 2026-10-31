@@ -396,6 +396,8 @@ enum GfxTextureFlags {
 /* mipLevels counts the top level (1 = no mipmaps). */
 GfxTexture *Gfx_CreateTexture(int width, int height, int format, int mipLevels, uint32_t flags);
 void Gfx_DestroyTexture(GfxTexture *texture);
+/* Waits for queued GPU work before the caller frees textures or vertex buffers. */
+void Gfx_Finish(void);
 int Gfx_GetTextureMipCount(GfxTexture *texture);
 
 typedef struct GfxLockedRect {

@@ -105,10 +105,11 @@ void *CGenericFileLoader::FindFileInArchive(GenericFile *pFile, char *name, DWOR
 }
 
 // FUNCTION: CMR2 0x004a9da0
-void CGenericFileLoader::GetFileNameFromPath(char *path, char *out)
+void CGenericFileLoader::GetFileNameFromPath(char *path, char *out, size_t outSize)
 {
     char *pName;
     char *pSlash;
+    size_t length;
 
     pName = strrchr(path, '/');
     if (pName == NULL) {
@@ -119,7 +120,13 @@ void CGenericFileLoader::GetFileNameFromPath(char *path, char *out)
             pSlash++;
         pName = pSlash;
     }
-    strcpy(out, pName);
+    length = strlen(pName);
+    if (outSize == 0)
+        return;
+    if (length >= outSize)
+        length = outSize - 1;
+    memcpy(out, pName, length);
+    out[length] = '\0';
 }
 
 // match 75%: below the 90% bar; kept as FUNCTION on purpose so reccmp measures it (see CONVENCIONES)
@@ -190,7 +197,7 @@ void *CGenericFileLoader::FindFile(GenericFile *pFile, char *pPath, BYTE *pFound
     if (pFound != NULL)
         *pFound = 0;
     if (pFile != NULL && pFile->didFileLoad != 0 && bSkipArchive == 0) {
-        GetFileNameFromPath(pPath, name);
+        GetFileNameFromPath(pPath, name, sizeof(name));
         pResult = FindFileInArchive(pFile, name, pId);
         if (pResult != NULL) {
             if (pFound != NULL)

@@ -841,6 +841,11 @@ flushed:
     delete texture;
 }
 
+extern "C" void Gfx_Finish(void)
+{
+    Flush();
+}
+
 extern "C" void Gfx_SetTextureReplacement(GfxTexture *texture, GfxTexture *replacement)
 {
     texture = Root(texture);

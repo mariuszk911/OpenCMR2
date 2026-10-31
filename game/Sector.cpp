@@ -62,7 +62,7 @@ extern int g_unk0x0067f228;
 extern StageObject *g_stageObjects[6000];
 
 void Graphics_AccumulateCounterOrInitialize(int *p, int value);
-void Graphics_LoadTextureRecordList(BYTE *param1, char *param2, unsigned int param3, int param4, GenericFile *archive);
+void Graphics_LoadTextureRecordList(BYTE *param1, char *param2, unsigned int param3, int param4, GenericFile *archive, BYTE *limit);
 void Mesh_UploadVertices(Mesh *pMesh);
 void Mesh_BuildParts(Mesh *pMesh);
 
@@ -70,16 +70,19 @@ void Mesh_BuildParts(Mesh *pMesh);
 // GLOBAL: CMR2 0x0052110c
 char g_strC3dMagic[] = "PP_F";
 
-void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *archive);
+void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *archive, DWORD size);
 
 // Builds the scene of a C3D model file, if the data really is one.
 // FUNCTION: CMR2 0x004b9380
-SceneNode *Sector_BuildC3DModelScene(void *data, SceneNode *parent, GenericFile *archive)
+SceneNode *Sector_BuildC3DModelScene(void *data, SceneNode *parent, GenericFile *archive, DWORD size)
 {
     SceneNode *result = NULL;
 
+    // PORT: AMIGA: callers may pass a missing member; strncmp(NULL) faults.
+    if (data == NULL)
+        return NULL;
     if (strncmp((char *)data, g_strC3dMagic, 4) == 0)
-        result = (SceneNode *)Sector_RelocateStageMeshFile((BYTE *)data, parent, archive);
+        result = (SceneNode *)Sector_RelocateStageMeshFile((BYTE *)data, parent, archive, size);
     return result;
 }
 
@@ -141,7 +144,7 @@ static_assert(offsetof(MeshTriangle, vertexIndex) == 0x40, "C3D triangle layout 
 // flags) are also copied to native storage because they contain little-endian
 // scalars. Registration order and the -1 = none rule are the original's.
 // FUNCTION: CMR2 0x004b93c0
-void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *archive)
+void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *archive, DWORD size)
 {
     // PORT: AMIGA: the C3D header is little-endian and can be unaligned inside
     // the BFL member. Decode it before using any count or offset; reading the
@@ -149,6 +152,10 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
     C3DHeaderValues header;
     if (!C3DHeader_Decode(pData, &header)) {
         Sys_Log("stage: invalid C3D header");
+        return NULL;
+    }
+    if (size != 0 && size < sizeof(MeshFileHeader)) {
+        Sys_Log("stage: C3D member shorter than the header");
         return NULL;
     }
     unsigned int nodeCount = header.nodeCount;
@@ -163,6 +170,17 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
         Sys_Log("stage: C3D array size overflows");
         return NULL;
     }
+    // PORT: AMIGA: the registration tables are fixed-size; a corrupt count
+    // must not walk past g_sceneNodes/g_meshes/g_stageObjects/g_meshesBySize
+    // or the 14096-entry sector table.
+    if (nodeCount > 4096u - (unsigned int)g_sceneNodeCount ||
+            meshCount > 4096u - (unsigned int)g_meshCount ||
+            objectCount > 6000u - (unsigned int)g_unk0x0067f228 ||
+            recordCount > 8192u - (unsigned int)g_meshTotalSize ||
+            sectorCount > 14096u) {
+        Sys_Log("stage: C3D table count exceeds capacity");
+        return NULL;
+    }
     BYTE *pNodeFile = pData + sizeof(MeshFileHeader);
     BYTE *pMeshFile = pNodeFile + nodeCount * g_diskLayout_SceneNode.diskSize;
     BYTE *pObjectFile = pMeshFile + (meshCount + objectCount) * g_diskLayout_Mesh.diskSize;
@@ -174,6 +192,18 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
     BYTE *pRecordFile = pVertexFlagsFile + header.vertexFlagCount * 0x14;
     BYTE *pEnd = pRecordFile + recordCount * g_diskLayout_MeshCollisionRecord.diskSize;
     char *textureRecords = (char *)pData + header.textureNamesOffset;
+    if (size != 0) {
+        // PORT: AMIGA: reject a member whose counts walk past the BFL/file
+        // extent before any pointer is dereferenced.
+        if ((uint64_t)(pEnd - pData) > (uint64_t)size ||
+                header.textureNamesOffset >= size ||
+                (uint64_t)header.textureNamesOffset +
+                    (uint64_t)header.textureCount * 0x104 > (uint64_t)size ||
+                pEnd > (BYTE *)textureRecords) {
+            Sys_Log("stage: C3D counts exceed member size");
+            return NULL;
+        }
+    }
     const uint64_t triangleBytes = ((uint64_t)triangleCount * sizeof(MeshTriangle) + 7) & ~(uint64_t)7;
     const uint64_t vertexBytes = ((uint64_t)header.vertexCount * 0x30 + 7) & ~(uint64_t)7;
     const uint64_t lightBytes = ((uint64_t)header.vertexCount * 4 + 7) & ~(uint64_t)7;
@@ -235,13 +265,13 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
         C3D_DecodeTriangle(&pTriangles[i], pFile);
         for (k = 0; k < 10; k++) {
             if (pTriangles[i].textures[k] != -1)
-                pTriangles[i].textures[k] += (int)CGraphics::m_textureCount;
+                pTriangles[i].textures[k] += (int)CGraphics::TextureCount();
         }
     }
     C3D_DecodeWords(pVertexData, pVertexDataFile, (size_t)header.vertexCount * 0x30);
     C3D_DecodeWords(pLightLevels, pLightLevelsFile, (size_t)header.vertexCount * 4);
     C3D_DecodeWords(pVertexFlags, pVertexFlagsFile, (size_t)header.vertexFlagCount * 0x14);
-    Graphics_LoadTextureRecordList(pEnd, textureRecords, header.textureCount, (int)header.textureFile, archive);
+    Graphics_LoadTextureRecordList(pEnd, textureRecords, header.textureCount, (int)header.textureFile, archive, (BYTE *)textureRecords);
 
     savedNodeCount = g_sceneNodeCount;
     for (i = 0; i < nodeCount; i++) {
@@ -287,6 +317,23 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
             pMesh->pVertexData = (DWORD *)DISK_DATA(pFile, DISK_Mesh_pVertexData, pVertexData);
             pMesh->pLightLevels = (int *)DISK_DATA(pFile, DISK_Mesh_pLightLevels, pLightLevels);
             pMesh->pField20 = DISK_DATA(pFile, DISK_Mesh_pField20, pVertexFlags);
+            // PORT: AMIGA: the lighting path and the GPU consume these as
+            // 32-bit arrays; a non-4-aligned file offset would fault on
+            // 040/060 even though the native payload base is aligned.
+            {
+                uintptr_t triBytes = (uintptr_t)pMesh->pTriangles - (uintptr_t)pTriangles;
+                uintptr_t vertexBytes = (uintptr_t)pMesh->pVertexData - (uintptr_t)pVertexData;
+                uintptr_t lightBytes = (uintptr_t)pMesh->pLightLevels - (uintptr_t)pLightLevels;
+                if (pMesh->pTriangles == NULL || pMesh->pVertexData == NULL ||
+                        pMesh->pLightLevels == NULL ||
+                        (triBytes % 4) != 0 || (vertexBytes % 4) != 0 || (lightBytes % 4) != 0 ||
+                        triBytes / 0x4c + (uintptr_t)pMesh->triangleCount > (uintptr_t)triangleCount ||
+                        vertexBytes / 0x30 + (uintptr_t)pMesh->field_0x10 > (uintptr_t)header.vertexCount ||
+                        lightBytes / 4 + (uintptr_t)pMesh->field_0x10 > (uintptr_t)header.vertexCount) {
+                    Sys_Log("stage: mesh %u has invalid/misaligned vertex data", i);
+                    return NULL;
+                }
+            }
             Mesh_UploadVertices(pMesh);
             Mesh_BuildParts(pMesh);
             pMesh->flags &= 0xfffbffff;
@@ -929,6 +976,24 @@ void Sector_RebuildStageGrid(void)
     Sector **ppSector;
 
     CGraphics::m_unk0x0072d56c = 1;
+    // PORT: AMIGA: a truncated or empty C3D leaves fewer than two sectors.
+    // The original reads g_sectors[1] unconditionally; reject the stage here
+    // instead of faulting while a stage is entering.
+    if (g_sectorCount < 2) {
+        Sys_Log("stage: %lu sectors, cannot build the sector grid",
+                (unsigned long)g_sectorCount);
+        g_sectorSize = 0x10000;
+        g_sectorHalfSize = 0x8000;
+        g_sectorScale = 1;
+        g_sectorOriginX = 0;
+        g_sectorOriginZ = 0;
+        g_unk0x006ed5e8 = 0;
+        g_unk0x006ed5ec = 0;
+        g_sectorsPerRow = 1;
+        g_sectorRows = g_sectorCount;
+        g_unk0x0067f228 = 0;
+        return;
+    }
     g_sectorSize = abs(g_sectors[1]->x - g_sectors[0]->x);
     g_sectorHalfSize = FixMul(g_sectorSize, 0x8000);
     g_sectorScale = FixDiv(0x10000, g_sectorSize);
@@ -969,7 +1034,15 @@ void Sector_RebuildStageGrid(void)
     }
     g_sectorRows = (unsigned int)g_sectorCount / (unsigned int)g_sectorsPerRow;
     for (i = 0; i < (unsigned int)g_unk0x0067f228; i++) {
-        short index = (short)Sector_FromPosition((FixVector *)g_stageObjects[i]);
+        int index = Sector_FromPosition((FixVector *)g_stageObjects[i]);
+        // PORT: AMIGA: offset object data or a bad sector grid can index
+        // outside the loaded sector array; skip the object instead of
+        // corrupting memory through g_sectors[index].
+        if (index < 0 || index >= g_sectorCount) {
+            Sys_Log("stage: object %ld maps to invalid sector %ld",
+                    (long)i, (long)index);
+            continue;
+        }
         g_stageObjects[i]->pNext = g_sectors[index]->pObjects;
         g_sectors[index]->pObjects = g_stageObjects[i];
         g_sectors[index]->field_0x18++;
@@ -977,7 +1050,15 @@ void Sector_RebuildStageGrid(void)
     Sector_RebuildNodeLists();
     if (g_finData != NULL) {
         for (i = 0; i < (unsigned int)g_finCount; i++) {
-            Sector *pSector = g_sectors[g_finData[i].sector];
+            int sectorIndex = g_finData[i].sector;
+            Sector *pSector;
+            if (sectorIndex < 0 || sectorIndex >= g_sectorCount ||
+                    g_sectors[sectorIndex] == NULL) {
+                Sys_Log("stage: fin record %lu has invalid sector %d",
+                        (unsigned long)i, sectorIndex);
+                continue;
+            }
+            pSector = g_sectors[sectorIndex];
             g_finData[i].pNext = pSector->pFinRecords;
             pSector->pFinRecords = &g_finData[i];
             pSector->finCount++;
@@ -998,6 +1079,19 @@ void Sector_RebuildNodeLists(void)
     SceneNode *pLast;
     FixVector pos = { 0, 0, 0 };
     int index;
+
+    // PORT: AMIGA: Sector_FromPosition clamps to 0, so a stage that failed to
+    // load any sector would still dereference g_sectors[0]. Reject that case
+    // before the node walk.
+    if (g_sectorCount <= 0 || g_sectors[0] == NULL) {
+        Sys_Log("stage: cannot rebuild node lists without sectors");
+        return;
+    }
+    if (CGraphics::m_pTextureManager == NULL ||
+        CGraphics::m_pTextureManager->pRootNode == NULL) {
+        Sys_Log("stage: cannot rebuild node lists without a scene root");
+        return;
+    }
     for (i = 0; i < (unsigned int)g_sceneNodeCount; i++) {
         if (g_sceneNodes[i] != NULL)
             g_sceneNodes[i]->pNextInSector = NULL;
@@ -1017,6 +1111,11 @@ void Sector_RebuildNodeLists(void)
             pos.z = pNode->current.position.z;
             pNode->sector = (short)Sector_FromPosition(&pos);
             index = pNode->sector;
+            if (index < 0 || index >= g_sectorCount || g_sectors[index] == NULL) {
+                Sys_Log("stage: node %lu mapped to invalid sector %d",
+                        (unsigned long)i, index);
+                continue;
+            }
             if (g_sectors[index]->pFirstNode == NULL) {
                 g_sectors[index]->pFirstNode = pNode;
             } else {

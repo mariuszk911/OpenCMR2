@@ -81,12 +81,22 @@ void *CFileBuffer::GetGenericFileBuffer(char *fileName, BOOL isLocalFile)
             return NULL;
 
         lpBuffer = AllocateLockedBuffer(pFileHeaderOut.archiveSize);
+        // PORT: AMIGA: a short archive read must not return a partly filled
+        // buffer; C3D/texture offsets would walk the zero tail.
+        if (lpBuffer == NULL) {
+            gzclose(unk0x004bdee0);
+            return NULL;
+        }
         // PORT: AMIGA: record the owning buffer so port/disk.cpp can release
         // attached native copies without malloc_usable_size.
-        if (lpBuffer != NULL)
-            Disk_RegisterBuffer(lpBuffer, pFileHeaderOut.archiveSize);
+        Disk_RegisterBuffer(lpBuffer, pFileHeaderOut.archiveSize);
         CGenericFileLoader::m_fileSize = pFileHeaderOut.archiveSize;
-        gzread(unk0x004bdee0, lpBuffer, pFileHeaderOut.archiveSize);
+        if ((DWORD)gzread(unk0x004bdee0, lpBuffer, pFileHeaderOut.archiveSize) != pFileHeaderOut.archiveSize) {
+            gzclose(unk0x004bdee0);
+            Disk_ReleaseBuffer(lpBuffer);
+            free(lpBuffer);
+            return NULL;
+        }
         bIsBFL = true;
     }
 
@@ -107,10 +117,16 @@ void *CFileBuffer::GetGenericFileBuffer(char *fileName, BOOL isLocalFile)
         }
 
         lpBuffer = AllocateLockedBuffer(fileSize);
+        if (lpBuffer == NULL) {
+            Sys_CloseFile(file);
+            return NULL;
+        }
         fileSizeRead = Sys_ReadFile(file, lpBuffer, fileSize);
         Sys_CloseFile(file);
-        if (fileSizeRead != fileSize)
+        if (fileSizeRead != fileSize) {
+            free(lpBuffer);
             return NULL;
+        }
         // PORT: AMIGA: register only a buffer that is actually returned; a
         // short read leaves no stale entry in port/disk.cpp's registry.
         if (lpBuffer != NULL)
@@ -153,7 +169,10 @@ char g_ppsPath[260];
 // FUNCTION: CMR2 0x004eb2e0
 char *Profile_BuildSavePath(char *pName)
 {
-    unsigned int packed = *(unsigned int *)(pName + 4);
+    unsigned int packed;
+    // PORT: AMIGA: profile names are byte-aligned records; use memcpy so the
+    // date word does not fault on a 040/060 unaligned access.
+    memcpy(&packed, pName + 4, sizeof(packed));
 
     // the original passes one value more than the format uses
     sprintf(g_ppsPath, g_strPpsPathFormat, CInstallInfo::GetGameHDPath(), pName,

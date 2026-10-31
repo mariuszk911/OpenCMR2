@@ -12,6 +12,7 @@
 #include "MeshVertex.h"
 #include "ShadowPart.h"
 #include "port/c3d_payload.h"
+#include "port/sys.h"
 #include "port/endian.h"
 #include "LightZone.h"
 #include "TrackCollisionData.h"
@@ -1029,7 +1030,10 @@ void Scene_RelightSector(int sector)
     int k;
 
     force = 0;
-    if (g_sceneSectorLights == NULL)
+    // PORT: AMIGA: callers pass a visible-sector index; a corrupt/empty grid
+    // must not index the sector and lighting arrays out of range.
+    if (g_sceneSectorLights == NULL || g_sceneSectorLights2 == NULL ||
+            sector < 0 || sector >= g_sectorCount || g_sectors[sector] == NULL)
         return;
     if (g_sceneAmbientColour[0] != ((BYTE *)g_sceneSectorLights)[sector * 4] ||
         g_sceneAmbientColour[1] != ((BYTE *)g_sceneSectorLights)[sector * 4 + 1] ||
@@ -1042,7 +1046,8 @@ void Scene_RelightSector(int sector)
         pSector = g_sectors[sector];
         if (pSector != NULL) {
             pMesh = (Mesh *)pSector->pMesh;
-            if (pMesh != NULL) {
+            if (pMesh != NULL && pMesh->field_0x10 > 0 &&
+                    pMesh->pLightLevels != NULL && pMesh->pVertexData != NULL) {
                 pLevel = pMesh->pLightLevels;
                 pVertex = (BYTE *)pMesh->pVertexData;
                 for (i = 0; i < pMesh->field_0x10; i++) {
@@ -1054,10 +1059,13 @@ void Scene_RelightSector(int sector)
             }
             for (pObject = pSector->pObjects; pObject != NULL; pObject = pObject->pNext) {
                 pMesh = pObject->pMesh;
+                if (pMesh == NULL)
+                    continue;
                 if ((pMesh->flags & 0x80) == 0) {
                     Scene_GetLightColourD3D(&colour, pObject->lightLevel);
                     Mesh_SetColourAndRefresh(pMesh, colour);
-                } else {
+                } else if (pMesh->field_0x10 > 0 && pMesh->pLightLevels != NULL &&
+                           pMesh->pVertexData != NULL) {
                     pLevel = pMesh->pLightLevels;
                     pVertex = (BYTE *)pMesh->pVertexData;
                     for (i = 0; i < pMesh->field_0x10; i++) {
@@ -1080,9 +1088,16 @@ void Scene_RelightSector(int sector)
           Scene_AttenuateSectorLight(sector, 1) != 0) ||
          force) &&
         (pShadow = g_sceneShadowMeshes[sector]) != NULL) {
+        if (pShadow->field_0x10 > 0 &&
+                (pShadow->pLightLevels == NULL || pShadow->pVertexData == NULL))
+            return;
         pLevel = pShadow->pLightLevels;
         if (g_unk0x005210c0 != 0) {
-            pZone = &g_sceneLightZones[g_sceneSectorZone[sector]];
+            int zoneIndex = g_sceneSectorZone[sector];
+            if (g_sceneLightData == NULL || zoneIndex < 0 || zoneIndex >= *g_sceneLightData ||
+                    g_sceneLightZones == NULL || g_sceneLightZones[zoneIndex].pItems == NULL)
+                return;
+            pZone = &g_sceneLightZones[zoneIndex];
             pVertex = (BYTE *)pShadow->pVertexData;
             pZoneVertex = &pZone->pItems->vertexCount;
             for (k = 0; k < pZone->itemCount; k++) {
@@ -1136,6 +1151,8 @@ void Scene_AnimateAmbientRedChannel(void)
                 ((BYTE *)g_sceneSectorLights)[sector * 4] = (BYTE)(g_sceneAmbientColour[0] + 10);
             else
                 ((BYTE *)g_sceneSectorLights)[sector * 4] = (BYTE)(g_sceneAmbientColour[0] - 10);
+            if (g_sectors[sector] == NULL)
+                continue;
             for (pNode = g_sectors[sector]->pFirstNode; pNode != NULL;
                  pNode = pNode->pNextInSector)
                 Scene_ApplyGroundLightToMeshTree(pNode, 0xffff0000);
@@ -1301,7 +1318,7 @@ static_assert(offsetof(LightZoneMesh, vertexCount) == 0x04, "light mesh layout d
 // items to the scene objects there, and a shadow mesh is built for each.
 // match 34%: below the 90% bar; kept as FUNCTION on purpose so reccmp measures it (see CONVENCIONES)
 // FUNCTION: CMR2 0x004b4aa0
-void Scene_LoadLighting(int *pData)
+void Scene_LoadLighting(int *pData, DWORD size)
 {
     LightZoneMesh *pHeader;
     LightZoneItem *pItem;
@@ -1322,9 +1339,13 @@ void Scene_LoadLighting(int *pData)
     // PORT: AMIGA: the lighting payload is little-endian and may be unaligned.
     // Decode scalars and build aligned native arrays; the record pointers and
     // the vertex/triangle/level arrays are native for the shadow meshes.
+    if (size < 50)
+        return;
     const BYTE *tre = (const BYTE *)pData;
     const unsigned int zoneCount = ReadLE16(tre + 48);
     const BYTE *pZoneDisk = tre + 50;
+    if ((uint64_t)zoneCount * 0x14u > (uint64_t)(size - 50))
+        return;
     g_sceneLightDir.x = (int)ReadLE32(tre + 0);
     g_sceneLightDir.y = (int)ReadLE32(tre + 4);
     g_sceneLightDir.z = (int)ReadLE32(tre + 8);
@@ -1370,6 +1391,9 @@ void Scene_LoadLighting(int *pData)
             itemCount += ReadLE16(pZoneDisk + zone * 0x14 + 2);
         if (itemCount > (uint64_t)(size_t)-1 / sizeof(LightZoneItem))
             return;
+        if ((uint64_t)50 + (uint64_t)zoneCount * 0x14u +
+                itemCount * 0x30u > (uint64_t)size)
+            return;
         g_sceneLightNative = (BYTE *)CFileBuffer::AllocateLockedBuffer(
             zoneCount * (sizeof(LightZone) + sizeof(LightZoneMesh)) + (size_t)itemCount * sizeof(LightZoneItem) + 1);
         if (g_sceneLightNative == NULL)
@@ -1403,6 +1427,8 @@ void Scene_LoadLighting(int *pData)
             }
         }
         pMeshDisk = pItemDisk;
+        if ((uint64_t)(pMeshDisk - tre) + (uint64_t)zoneCount * 0x14u > (uint64_t)size)
+            return;
         for (zone = 0; zone < (int)zoneCount; zone++) {
             const BYTE *meshFile = pMeshDisk + zone * 0x14;
             pMeshes[zone].triangleCount = (int)ReadLE32(meshFile + 0);
@@ -1415,6 +1441,12 @@ void Scene_LoadLighting(int *pData)
             payloadBytes += (uint64_t)pMeshes[zone].vertexCount * 0x30;
             payloadBytes += (uint64_t)pMeshes[zone].triangleCount * 0x4c;
             payloadBytes += (uint64_t)pMeshes[zone].vertexCount * 4;
+        }
+        if ((uint64_t)(pMeshDisk - tre) + (uint64_t)zoneCount * 0x14u +
+                payloadBytes > (uint64_t)size) {
+            CFileBuffer::FreeGenericFileBuffer(g_sceneLightNative);
+            g_sceneLightNative = NULL;
+            return;
         }
         if (payloadBytes > (uint64_t)(size_t)-1) {
             CFileBuffer::FreeGenericFileBuffer(g_sceneLightNative);
@@ -1516,7 +1548,15 @@ void Scene_LoadLighting(int *pData)
         pHeader = g_sceneLightZones[zone].pMesh;
         for (i = 0; i < pHeader->triangleCount; i++) {
             MeshTriangle *pTri = &pHeader->pTriangles[i];
-            LightZoneItem *pOwner = &g_sceneLightZones[zone].pItems[pTri->textures[0]];
+            LightZoneItem *pOwner;
+            // PORT: AMIGA: the texture field is an item index until this loop;
+            // a corrupt/decode-mismatched value must not index the item array.
+            if (pTri->textures[0] < 0 ||
+                    pTri->textures[0] >= g_sceneLightZones[zone].itemCount)
+                continue;
+            pOwner = &g_sceneLightZones[zone].pItems[pTri->textures[0]];
+            if (pOwner->pOwner == NULL || pOwner->pOwner->pMesh == NULL)
+                continue;
             pTri->textures[0] = pOwner->pOwner->pMesh->pTriangles[0].textures[0];
         }
     }
@@ -1635,7 +1675,9 @@ int Scene_FreeLighting(void)
 // Sets up the lighting of a stage: the light and shadow tables, per-sector
 // state, and the stage's lighting data (shadow meshes).
 // FUNCTION: CMR2 0x004b5620
-void Scene_InitLighting(int *pData, int *pHeights)
+int Scene_FreeLighting(void);
+
+void Scene_InitLighting(int *pData, int *pHeights, DWORD pDataSize)
 {
     int i;
     unsigned int k;
@@ -1664,6 +1706,14 @@ void Scene_InitLighting(int *pData, int *pHeights)
     g_sceneShadowTable = (DWORD *)CFileBuffer::AllocateLockedBuffer(200);
     g_sceneShadowTableD3D = (DWORD *)CFileBuffer::AllocateLockedBuffer(200);
     g_sceneSectorFlags = (int *)CFileBuffer::AllocateLockedBuffer(g_sectorCount * 4);
+    if (g_sceneSectorLights == NULL || g_sceneSectorLights2 == NULL ||
+            g_sceneLightTable == NULL || g_sceneLightTableD3D == NULL ||
+            g_sceneShadowTable == NULL || g_sceneShadowTableD3D == NULL ||
+            g_sceneSectorFlags == NULL) {
+        Sys_Log("lighting: allocation failed");
+        Scene_FreeLighting();
+        return;
+    }
     k = 0;
     if ((unsigned int)g_sectorCount > 0) {
         do {
@@ -1671,7 +1721,7 @@ void Scene_InitLighting(int *pData, int *pHeights)
             g_sceneSectorFlags[k - 1] = 0;
         } while (k < (unsigned int)g_sectorCount);
     }
-    Scene_LoadLighting(pData);
+    Scene_LoadLighting(pData, pDataSize);
     // PORT: AMIGA: .xhi holds one height per track vertex; use the HPC vertex
     // count and copy to native integers. The member extent was captured by
     // Race_LoadSelectedStage; a short or mismatched .xhi must not be read.

@@ -1,6 +1,8 @@
 #ifndef _GENERIC_FILE_LOADER_H
 #define _GENERIC_FILE_LOADER_H
 
+#include <stddef.h>
+
 
 struct GenericFile
 {
@@ -24,7 +26,7 @@ public:
     static GenericFile* GetGenericFile(void);
     static void *FindFileInArchive(GenericFile *pFile, char *name, DWORD *pId);
     static void *FindFile(GenericFile *pFile, char *pPath, BYTE *pFound, DWORD *pId, BYTE bSkipArchive);
-    static void GetFileNameFromPath(char *path, char *out);
+    static void GetFileNameFromPath(char *path, char *out, size_t outSize);
     static BYTE *StrUpperPolish(BYTE *str);
     static char *StrLowerPolish(char *str);
 };

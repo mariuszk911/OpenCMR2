@@ -121,6 +121,8 @@ add_executable(opencmr2
 opencmr2_amiga_stack(opencmr2)
 target_compile_definitions(opencmr2 PRIVATE OPENCMR2_AMIGA_STACK=${OPENCMR2_AMIGA_STACK})
 target_link_libraries(opencmr2 PRIVATE opencmr2_domain_a opencmr2_platform)
+# bridge_client.c is compiled into opencmr2_platform; no prebuilt library
+# (the SDK .a is not in a format the GCC hunk linker accepts).
 target_link_directories(opencmr2 PRIVATE ${MINIGL_LIBRARY_DIR})
 target_link_libraries(opencmr2 PRIVATE minigl m)
 

@@ -6,6 +6,7 @@
 #include "FileBuffer.h"
 #include "Graphics.h"
 #include "Frontend.h"
+#include "port/sys.h"
 #include <stdio.h>
 
 Mesh *g_meshes[4096];
@@ -147,7 +148,11 @@ void Mesh_BuildParts(Mesh *pMesh)
     int hi;
     unsigned short *pIndex;
 
+    if (pMesh == NULL)
+        return;
     if (pMesh->partCount > 0)
+        return;
+    if (pMesh->pTriangles == NULL || pMesh->triangleCount <= 0)
         return;
     count = 0;
     last = -99;
@@ -156,6 +161,13 @@ void Mesh_BuildParts(Mesh *pMesh)
             last = pMesh->pTriangles[i].textures[0];
             count++;
         }
+    }
+    // PORT: AMIGA: pParts has 50 slots; a corrupt/unsupported triangle set
+    // must not write the parts into the following Mesh fields.
+    if (count > 50) {
+        Sys_Log("mesh: part count %d exceeds 50", count);
+        pMesh->partCount = 0;
+        return;
     }
     pMesh->partCount = count;
     if (count > 0) {
@@ -183,6 +195,11 @@ void Mesh_BuildParts(Mesh *pMesh)
         ppPart = pMesh->pParts;
         for (i = count; i != 0; i--) {
             (*ppPart)->pData = (unsigned short *)CFileBuffer::AllocateLockedBuffer((*ppPart)->indexCount << 1);
+            if ((*ppPart)->pData == NULL) {
+                Sys_Log("mesh: part index allocation failed");
+                pMesh->partCount = 0;
+                return;
+            }
             ppPart++;
         }
     }
@@ -234,9 +251,25 @@ void Mesh_UploadVertices(Mesh *pMesh)
     int i;
     void *pVertices;
 
+    // PORT: AMIGA: a mesh larger than one shared buffer can never be placed by
+    // this allocator. Leave it on a known buffer instead of reading past the
+    // 100-entry fill table, which is what the original fall-through does.
+    if (pMesh->field_0x10 < 0 || pMesh->field_0x10 >= 2000) {
+        Sys_Log("mesh: refusing %ld vertices (buffer holds 2000)",
+                (long)pMesh->field_0x10);
+        pMesh->vertexBufferIndex = 0;
+        pMesh->vertexOffset = 0;
+        return;
+    }
     for (i = 0; i < 100; i++) {
+        if (CGraphics::m_pTextureManager->pVertexBuffers[i] == NULL)
+            break;
         if ((unsigned int)(CGraphics::m_pTextureManager->vertexBufferFill[i] + pMesh->field_0x10) < 2000) {
             pVertices = Gfx_LockVertexBuffer(CGraphics::m_pTextureManager->pVertexBuffers[i]);
+            if (pVertices == NULL) {
+                Sys_Log("mesh: vertex buffer %d could not be locked", i);
+                break;
+            }
             memcpy((BYTE *)pVertices + CGraphics::m_pTextureManager->vertexBufferFill[i] * 0x30, pMesh->pVertexData,
                    pMesh->field_0x10 * 0x30);
             Gfx_UnlockVertexBuffer(CGraphics::m_pTextureManager->pVertexBuffers[i]);
@@ -246,37 +279,63 @@ void Mesh_UploadVertices(Mesh *pMesh)
             return;
         }
     }
-    sprintf(CFrontend::m_stringDest, g_strVertexBufferFull,
-            CGraphics::m_pTextureManager->vertexBufferFill[i] + pMesh->field_0x10, 2000);
+    // PORT: AMIGA: never index vertexBufferFill[100]; the original sprintf
+    // did exactly that when every shared buffer was full.
+    Sys_Log("mesh: no shared vertex buffer has room for %ld vertices",
+            (long)pMesh->field_0x10);
+    pMesh->vertexBufferIndex = 0;
+    pMesh->vertexOffset = 0;
 }
 
 // Copies the (changed) vertices of a mesh back into its slot of the vertex buffer.
 // FUNCTION: CMR2 0x004b2020
 void Mesh_RefreshVertices(Mesh *pMesh)
 {
+    GfxVertexBuffer *pBuffer;
     void *pVertices;
 
-    pVertices = Gfx_LockVertexBuffer(CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex]);
+    // PORT: AMIGA: the lighting pass calls this for every sector/object mesh;
+    // a mesh that could not be uploaded has no valid buffer and must not be
+    // copied through a NULL lock.
+    if (pMesh == NULL || pMesh->pVertexData == NULL || pMesh->field_0x10 <= 0 ||
+            pMesh->vertexBufferIndex < 0 || pMesh->vertexBufferIndex >= 100)
+        return;
+    pBuffer = CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex];
+    if (pBuffer == NULL)
+        return;
+    pVertices = Gfx_LockVertexBuffer(pBuffer);
+    if (pVertices == NULL)
+        return;
     memcpy((BYTE *)pVertices + pMesh->vertexOffset * 0x30, pMesh->pVertexData, pMesh->field_0x10 * 0x30);
-    Gfx_UnlockVertexBuffer(CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex]);
+    Gfx_UnlockVertexBuffer(pBuffer);
 }
 
 // Sets the diffuse colour of every vertex of a mesh and refreshes its vertex buffer copy.
 // FUNCTION: CMR2 0x004b2090
 void Mesh_SetColourAndRefresh(Mesh *pMesh, DWORD colour)
 {
+    GfxVertexBuffer *pBuffer;
     DWORD *p;
     int count;
     int i;
     void *pVertices;
 
+    if (pMesh == NULL || pMesh->pVertexData == NULL || pMesh->field_0x10 <= 0)
+        return;
     count = pMesh->field_0x10;
     p = pMesh->pVertexData;
     for (i = 0; i < count; i++)
         p[i * 12 + 6] = colour;
-    pVertices = Gfx_LockVertexBuffer(CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex]);
+    if (pMesh->vertexBufferIndex < 0 || pMesh->vertexBufferIndex >= 100)
+        return;
+    pBuffer = CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex];
+    if (pBuffer == NULL)
+        return;
+    pVertices = Gfx_LockVertexBuffer(pBuffer);
+    if (pVertices == NULL)
+        return;
     memcpy((BYTE *)pVertices + pMesh->vertexOffset * 0x30, pMesh->pVertexData, count * 0x30);
-    Gfx_UnlockVertexBuffer(CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex]);
+    Gfx_UnlockVertexBuffer(pBuffer);
 }
 
 // Meshes cloned from others (see Mesh_CloneInto).

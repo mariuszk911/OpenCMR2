@@ -227,6 +227,12 @@ extern "C" int CarInfoDisk_Decode(void *destination, size_t destinationSize,
         section[i] = ReadLE16(src + (size_t)i * 2);
     if (section[0] < kDirectorySize)
         return 0;
+    for (i = 0; i < 6; i++) {
+        // PORT: AMIGA: consumers cast section pointers to int-bearing structs;
+        // 68040/060 faults on a 2-byte-aligned 32-bit load.
+        if ((section[i] & 3u) != 0)
+            return 0;
+    }
     for (i = 0; i < 5; i++) {
         if (section[i] > section[i + 1])
             return 0;

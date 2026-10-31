@@ -185,7 +185,7 @@ int g_unk0x0051922c = -1;
 char g_strTempC3D[] = "TEMP.C3D";
 
 SceneNode *RallyData_GetChallengeRenderState(void);
-struct SceneNode *Sector_BuildC3DModelScene(void *data, struct SceneNode *parent, struct GenericFile *archive);
+struct SceneNode *Sector_BuildC3DModelScene(void *data, struct SceneNode *parent, struct GenericFile *archive, DWORD size);
 BYTE *Replay_LoadValidatedBuffer(char *path);
 char *Race_GetStagePathBuffer3874C(void);
 GenericFile *Race_GetLoadedStageFile(void);
@@ -357,11 +357,13 @@ void Race_LoadStageModel(void)
 {
     void *pBuffer;
     GenericFile *pFile;
+    DWORD c3dSize = 0;
 
-    pBuffer = CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(), g_strTempC3D, NULL, NULL, 0);
+    pBuffer = CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(), g_strTempC3D, NULL, &c3dSize, 0);
     if (pBuffer != NULL) {
         pFile = Race_GetLoadedStageFile();
-        Sector_BuildC3DModelScene(pBuffer, RallyData_GetChallengeRenderState(), pFile);
+        if (Sector_BuildC3DModelScene(pBuffer, RallyData_GetChallengeRenderState(), pFile, c3dSize) == NULL)
+            Sys_Log("stage: TEMP.C3D did not produce a scene");
     }
 }
 
@@ -658,7 +660,7 @@ void RallyData_LoadChallengeScreenTextures(void);
 BYTE *GameMenu_GetChampionshipTransitionState(void);
 int Graphics_ReserveCubeMapsAndLoadEnvironment(char *name, int count, GenericFile *pFile, DWORD size);
 void StageTiming_InitRaceDriverRecords(char);
-void Scene_InitLighting(int *pData, int *pHeights);
+void Scene_InitLighting(int *pData, int *pHeights, DWORD pDataSize);
 #include "StageWeather.h"
 void StageObject_SetLighting(const StageLightPreset *pPrimary, const StageLightPreset *pSecondary);
 void RallyData_DrawLoadingProgress(int progress, char drawScene, BYTE alpha);
@@ -671,6 +673,7 @@ void TrackCollision_LoadFinishRecords(void);
 void StageObject_LoadModelVariantsAndSaveCounts(void);
 void StageTiming_LoadCspData(void);
 void RallyData_LoadSelectedRouteNodes(void);
+unsigned int RallyData_GetRouteStateValue(void);
 void Race_LoadCoDriverCallData(void);
 StageFile *StageTiming_GetStageFile3(void);
 
@@ -706,7 +709,9 @@ BYTE Race_LoadSelectedStage(void)
     BYTE *pTsc;
     BYTE *pTre;
     BYTE *pXhi;
-
+    // PORT: AMIGA: the previous stage's meshes have been released by the
+    // race callback unwind; reuse every shared vertex buffer from offset 0.
+    CGraphics::ResetSharedVertexBufferFill();
     if (g_raceFileCallbackSet == 0) {
         CGame::RegisterCallback(Race_ReleaseStageFile, 0);
         g_raceFileCallbackSet = 1;
@@ -714,6 +719,13 @@ BYTE Race_LoadSelectedStage(void)
     CGenericFileLoader::LoadIntoFileRecord((GenericFile *)&g_raceFile, g_unk0x00538548);
     RallyData_LoadChallengeScreenTextures();
     sprintf(CFrontend::m_stringDest, CRegKey::m_regKeyPathFormatValue, Race_GetStagePathBuffer38340());
+    // PORT: AMIGA: the suffix rewrite assumes at least four characters after
+    // the drive/name prefix; reject a truncated selection instead of writing
+    // before the buffer.
+    if (strlen(CFrontend::m_stringDest) < 5) {
+        Sys_Log("stage: stage path too short: \"%s\"", CFrontend::m_stringDest);
+        return 0;
+    }
     CFrontend::m_stringDest[strlen(CFrontend::m_stringDest) - 4] =
         CFrontend::m_stringDest[strlen(CFrontend::m_stringDest) - 2];
     CFrontend::m_stringDest[strlen(CFrontend::m_stringDest) - 3] =
@@ -724,7 +736,8 @@ BYTE Race_LoadSelectedStage(void)
     strcat(CFrontend::m_stringDest, g_tgaSuffix);
     if ((char)RallyData_GetFlag24()) {
         sprintf(CFrontend::m_stringDest, CRegKey::m_regKeyPathFormatValue, g_unk0x00538548);
-        strcpy(CFrontend::m_stringDest + strlen(CFrontend::m_stringDest) - 5, g_tgaSuffix);
+        if (strlen(CFrontend::m_stringDest) >= 5)
+            strcpy(CFrontend::m_stringDest + strlen(CFrontend::m_stringDest) - 5, g_tgaSuffix);
     }
     if (CGameInfo::IsRecordFlagSet(0x10))
         Graphics_ReserveCubeMapsAndLoadEnvironment(CFrontend::m_stringDest,
@@ -766,21 +779,32 @@ BYTE Race_LoadSelectedStage(void)
     StageObject_SelectNonemptyRecordList((int *)pTsc);
     Sector_RebuildStageGrid();
     sprintf(CFrontend::m_stringDest, g_str0x00519474, GameMenu_GetChampionshipTransitionState());
-    pTre = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
-                                                CFrontend::m_stringDest, 0, 0, 0);
     {
+        DWORD treSize = 0;
         DWORD xhiSize = 0;
 
+        pTre = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
+                                                    CFrontend::m_stringDest, 0, &treSize, 0);
         sprintf(CFrontend::m_stringDest, g_str0x0051946c, GameMenu_GetChampionshipTransitionState());
         pXhi = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
                                                     CFrontend::m_stringDest, 0, &xhiSize, 0);
         // PORT: AMIGA: Scene_InitLighting needs the member extent to stop the
-        // .hpc vertex count from reading past a short .xhi member.
+        // .hpc vertex count and the .tre zone records from reading past a
+        // short member.
         g_trackHeightsByteCount = pXhi != NULL ? xhiSize : 0;
+        if (pTre != NULL && (char)CGameInfo::GetGraphicsOptionBit4() == 0) {
+            pTre = NULL;
+            treSize = 0;
+        }
+        // PORT: AMIGA: a missing .tre/.xhi leaves stale lighting and height
+        // state from the previous stage. Fail the stage instead of rendering
+        // with the wrong data.
+        if (pXhi == NULL || (pTre == NULL && (char)CGameInfo::GetGraphicsOptionBit4() != 0)) {
+            Sys_Log("stage: required lighting member missing");
+            return 0;
+        }
+        Scene_InitLighting((int *)pTre, (int *)pXhi, treSize);
     }
-    if (pTre != 0 && (char)CGameInfo::GetGraphicsOptionBit4() == 0)
-        pTre = 0;
-    Scene_InitLighting((int *)pTre, (int *)pXhi);
     StageTiming_RebuildSplitsAndCheckpoints();
     RallyData_ResetStageClockAndRecords(0);
     RallyData_LayoutPlayerSplitBars();
@@ -2779,7 +2803,8 @@ fade:
             return;
         }
     }
-    if (flag != 0 || GameInfo_GetFrontendSessionFlag() != 0 || g_unk0x0053811e != 0) {
+    if (flag != 0 || CGameInfo::GetGameInfoSessionFlag() != 0 ||
+            GameInfo_GetFrontendSessionFlag() != 0 || g_unk0x0053811e != 0) {
         if (CGameInfo::GetGameModeOptionBit19() != 0)
             NetPlayers_SendCarClass(3);
         g_unk0x00537f78[4] = g_unk0x00537f78[4] + 1;
@@ -2935,6 +2960,11 @@ void Race_UpdateDriverReadyAndRecordState(CallbackStateMachine *param1, unsigned
             ready = ready + 1;
     }
     flag = (g_unk0x00537fcc == (RallyDataState() & 0xff) && ready == 0);
+    // PORT: AMIGA: the attract demo must not treat the 400-frame record hold
+    // as a finish. It was ending the replay immediately after the first AI
+    // frame. Keep the driving state until the car actually finishes.
+    if (CGameInfo::GetGameInfoSessionFlag() != 0 && Race_GetPlayerRecordField4(0) == 0)
+        flag = 0;
     Race_UpdatePlayerViewAndDrivenCars((BYTE)param1->records[0].packedState, 1);
     if (CGameInfo::GetGameModeOptionBit19() != 0) {
         NetRace_DrainPendingMessages();
@@ -2947,7 +2977,11 @@ void Race_UpdateDriverReadyAndRecordState(CallbackStateMachine *param1, unsigned
             }
         }
     }
-    if (flag == 0 && GameInfo_GetFrontendSessionFlag() == 0) {
+    // PORT: AMIGA: the frontend session flag is set for the attract/demo
+    // session too; using it here promoted state 9 to the replay/fade state on
+    // the first frame. Attract must wait for the real race-end flag.
+    if (flag == 0 && (GameInfo_GetFrontendSessionFlag() == 0 ||
+                      CGameInfo::GetGameInfoSessionFlag() != 0)) {
         g_unk0x00537f08 = 1;
         return;
     }
@@ -3182,7 +3216,7 @@ void Race_ReleaseFrameResources(void)
 
 BYTE *GameMenu_GetChampionshipTransitionState(void);
 void StageLights_SetTransform(FixVector *pAxes);
-void StageTiming_IndexSerializedStageTables(BYTE *pData);
+void StageTiming_IndexSerializedStageTables(BYTE *pData, DWORD size);
 
 void NetPlayers_UpdateLocalSplitRecords(int splitCount);
 int NetRace_GetLastSentSplit(void);
@@ -3712,7 +3746,7 @@ void Race_LoadStageLightPlacement(void)
     if (pBsp != NULL && StageLightTransformDisk_Decode(axes, sizeof(axes), pBsp, bspSize))
         StageLights_SetTransform(axes);
     else
-        StageLights_SetTransform((FixVector *)pBsp);
+        StageLights_SetTransform(NULL); // PORT: AMIGA: reject malformed/missing .bsp.
 }
 
 // Loads the stage's .hpc data when present.
@@ -3720,6 +3754,7 @@ void Race_LoadStageLightPlacement(void)
 void Race_LoadHPCData(void)
 {
     BYTE *pData;
+    DWORD size = 0;
 
     // PORT: AMIGA: drop the previous stage's HPC views before a new lookup.
     g_trackVertexCountRecord = NULL;
@@ -3732,9 +3767,9 @@ void Race_LoadHPCData(void)
     g_trackTriangleListCount = NULL;
     sprintf(CFrontend::m_stringDest, g_strHpcFormat, GameMenu_GetChampionshipTransitionState());
     pData = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(), CFrontend::m_stringDest,
-                                                 0, 0, 0);
+                                                 0, &size, 0);
     if (pData != NULL)
-        StageTiming_IndexSerializedStageTables(pData);
+        StageTiming_IndexSerializedStageTables(pData, size);
 }
 
 int Sound_IsPlaying(unsigned int handle);
@@ -3876,8 +3911,12 @@ void Race_LoadCoDriverCallData(void)
         if (pNative != NULL && CodDisk_Decode(pNative, codSize, g_loadedCoDriverCalls, codSize, NULL)) {
             Disk_AttachToBuffer(g_loadedCoDriverCalls, pNative);
             g_loadedCoDriverCalls = pNative;
-        } else if (pNative != NULL) {
-            CFileBuffer::FreeGenericFileBuffer(pNative);
+        } else {
+            if (pNative != NULL)
+                CFileBuffer::FreeGenericFileBuffer(pNative);
+            // PORT: AMIGA: never expose the raw LE/un-aligned .cod member.
+            g_loadedCoDriverCalls = NULL;
+            g_coDriverCalls = NULL;
         }
         if (g_loadedCoDriverCalls != NULL)
             g_coDriverCalls = g_loadedCoDriverCalls;
@@ -4495,6 +4534,8 @@ void Race_ResolveStageTexturesAndPalettes(void)
                 LightPresetDisk_Decode(&nativePresets[i], sizeof(nativePresets[i]),
                                        handles[i], presetSizes[i]))
             handles[i] = (BYTE *)&nativePresets[i];
+        else
+            handles[i] = NULL; // PORT: AMIGA: never pass raw LE .hor data on.
     }
     StageLights_BlendPresetPair(RallyData_GetPrimaryStageScoreScale(), RallyData_GetSecondaryStageScoreScale(), handles, &g_stageLightPresetPrimary,
                  &g_stageLightPresetSecondary);
@@ -5389,7 +5430,8 @@ void Race_UpdatePlayerViewAndDrivenCars(BYTE param1, int param2)
                         CarInput_UpdateRaceOrderSlot(g_raceUpdateCar);
                     break;
                 case 9:
-                    if ((char)RallyData_GetSelectionFlag26() != 0) {
+                    if ((char)RallyData_GetSelectionFlag26() != 0 ||
+                            (char)CGameInfo::GetGameInfoSessionFlag() != 0) {
                         if (g_raceUpdateCar < count)
                             AI_UpdateAttractDrivingControls(g_raceUpdateCar, 0);
                         else
@@ -5485,8 +5527,17 @@ void Race_UpdatePlayerViewAndDrivenCars(BYTE param1, int param2)
                 View_UpdateCamera((BYTE)g_raceUpdatePlayer);
         }
         if (player != 0) {
-            if (first == 0 || second != 0)
-                Particle_UpdateAll(g_viewNodes[g_raceUpdatePlayer]);
+            if (first == 0 || second != 0) {
+                // PORT: AMIGA: g_viewNodes has three slots but only slots 0 and
+                // 1 are created; the loop counter is the player count here, so
+                // a two-player race used the uninitialised slot 2.
+                SceneNode *pView = (g_raceUpdatePlayer < 3 &&
+                                    g_viewNodes[g_raceUpdatePlayer] != NULL)
+                                       ? g_viewNodes[g_raceUpdatePlayer]
+                                       : g_viewNodes[0];
+                if (pView != NULL)
+                    Particle_UpdateAll(pView);
+            }
             if (CGameInfo::GetConfiguredGameMode() == 0xc && StageTiming_GetCheckpointField19(0) != 0) {
                 NetRace_SendStageAndOverallTimes(StageTiming_GetCarSplitTime(0, StageTiming_GetCheckpointGroupIndex(0)));
                 NetPlayers_UpdateBestRaceTime(StageTiming_GetCarSplitTime(0, StageTiming_GetCheckpointGroupIndex(0)));

@@ -4160,7 +4160,14 @@ void InRaceMenu_AdvanceCascade(CallbackStateMachine *param1, int param2)
     }
     if (g_unk0x005298f4 <= 0) {
         if ((BYTE)CGameInfo::GetGameInfoSessionFlag() != 0) {
-            CGame::PromoteCallbackEntryByRule(param1, param2, 6, 2);
+            // PORT: AMIGA: the attract/demo session is a real race, not a
+            // results/exit session. The original rule value 6 sends it to
+            // state 13 (leave/fade), which is why the demo showed terrain but
+            // never reached the pre-race/countdown states. Advance to state 7
+            // and let Race_UpdateDriverPreRaceScene start the demo.
+            CallbackStateRecord *pRecord = &param1->records[param2 & 0xff];
+            pRecord->bits.level = 2;
+            pRecord->bits.rule = 7;
             return;
         }
         if (CGameInfo::GetConfiguredGameMode() == 4) {
@@ -11108,7 +11115,7 @@ SceneNode *SceneNode_FindByType(SceneNode *, unsigned int);
 #include "Graphics.h"
 #include "FileBuffer.h"
 #include "SceneNode.h"
-struct SceneNode *Sector_BuildC3DModelScene(void *data, struct SceneNode *parent, struct GenericFile *archive);
+struct SceneNode *Sector_BuildC3DModelScene(void *data, struct SceneNode *parent, struct GenericFile *archive, DWORD size);
 char *Car_GetTextureSetPath(int, int, int);
 int  OptionPreview_UsesWheelVariantSix(int, int);
 int  OptionPreview_UsesLowWheelVariant(int, int);
@@ -11127,6 +11134,9 @@ int OptionPreview_LoadStageGeometryRecord(int index)
     BYTE *hC3D;
     BYTE *hL;
     BYTE *hS;
+    DWORD hC3DSize = 0;
+    DWORD hLSize = 0;
+    DWORD hSSize = 0;
     SceneNode *stage;
     unsigned char model;
     unsigned char variant;
@@ -11153,20 +11163,28 @@ int OptionPreview_LoadStageGeometryRecord(int index)
     if (CGameInfo::GetPreviewMode() == 0) {
         strncpy(CFrontend::m_stringDest + strlen(CFrontend::m_stringDest) - 6, "A1N.c3d", 8);
         hC3D = (BYTE *)CFileBuffer::GetGenericFileBuffer(CFrontend::m_stringDest, 0);
+        if (hC3D != NULL)
+            hC3DSize = (DWORD)CGenericFileLoader::GetGenericFileSize();
         if (!(OptionPreview_UsesLowWheelVariant(variant, 1) == 0)) {
             strncpy(CFrontend::m_stringDest + strlen(CFrontend::m_stringDest) - 5, "L.c3d", 5);
             hL = (BYTE *)CFileBuffer::GetGenericFileBuffer(CFrontend::m_stringDest, 0);
+            if (hL != NULL)
+                hLSize = (DWORD)CGenericFileLoader::GetGenericFileSize();
         } else {
             hL = NULL;
         }
         if (OptionPreview_UsesWheelVariantSix(variant, 6) != 0) {
             strncpy(CFrontend::m_stringDest + strlen(CFrontend::m_stringDest) - 5, "S.c3d", 5);
             hS = (BYTE *)CFileBuffer::GetGenericFileBuffer(CFrontend::m_stringDest, 0);
+            if (hS != NULL)
+                hSSize = (DWORD)CGenericFileLoader::GetGenericFileSize();
         } else {
             hS = NULL;
         }
     } else {
         hC3D = (BYTE *)CFileBuffer::GetGenericFileBuffer(CFrontend::m_stringDest, 0);
+        if (hC3D != NULL)
+            hC3DSize = (DWORD)CGenericFileLoader::GetGenericFileSize();
         hL = NULL;
         hS = NULL;
     }
@@ -11188,23 +11206,35 @@ int OptionPreview_LoadStageGeometryRecord(int index)
 
     nodeL = NULL;
     nodeS = NULL;
-    root = Sector_BuildC3DModelScene(hC3D, stage, pRecord);
+    root = Sector_BuildC3DModelScene(hC3D, stage, pRecord, hC3DSize);
+    if (root == NULL)
+        return 0;
     if (CGameInfo::GetPreviewMode() == 0) {
         Mesh **p = &pEntry->normalWheelMeshes[0];
-        for (i = 1; i <= 4; i++)
-            *p++ = (Mesh *)SceneNode_FindByType(root, (unsigned int)i)->pObject;
+        for (i = 1; i <= 4; i++) {
+            SceneNode *wheel = SceneNode_FindByType(root, (unsigned int)i);
+            *p++ = wheel != NULL ? (Mesh *)wheel->pObject : NULL;
+        }
         if (hL != NULL) {
             Mesh **q = &pEntry->lowWheelMeshes[0];
-            nodeL = Sector_BuildC3DModelScene(hL, stage, pRecord);
-            for (i = 1; i <= 4; i++)
-                *q++ = (Mesh *)SceneNode_FindByType(nodeL, (unsigned int)i)->pObject;
+            nodeL = Sector_BuildC3DModelScene(hL, stage, pRecord, hLSize);
+            if (nodeL == NULL)
+                return 0;
+            for (i = 1; i <= 4; i++) {
+                SceneNode *wheel = SceneNode_FindByType(nodeL, (unsigned int)i);
+                *q++ = wheel != NULL ? (Mesh *)wheel->pObject : NULL;
+            }
             SceneNode_SetViewMaskTree(nodeL, 0);
         }
         if (hS != NULL) {
             Mesh **q = &pEntry->sixWheelMeshes[0];
-            nodeS = Sector_BuildC3DModelScene(hS, stage, pRecord);
-            for (i = 1; i <= 4; i++)
-                *q++ = (Mesh *)SceneNode_FindByType(nodeS, (unsigned int)i)->pObject;
+            nodeS = Sector_BuildC3DModelScene(hS, stage, pRecord, hSSize);
+            if (nodeS == NULL)
+                return 0;
+            for (i = 1; i <= 4; i++) {
+                SceneNode *wheel = SceneNode_FindByType(nodeS, (unsigned int)i);
+                *q++ = wheel != NULL ? (Mesh *)wheel->pObject : NULL;
+            }
             SceneNode_SetViewMaskTree(nodeS, 0);
         }
     }

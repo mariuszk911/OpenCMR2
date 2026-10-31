@@ -1100,6 +1100,9 @@ extern Graphics *g_pGraphics;
 
 class CGraphics {
 public:
+    // PORT: AMIGA: read-only view of the resident-texture count used when
+    // rebasing C3D texture indices from other translation units.
+    static unsigned int TextureCount(void) { return m_textureCount; }
     static bool InitializeDirectX(void);
     static void SetDefaults(void);
     static void RecreateGraphicsDeviceAndResources(unsigned int screenWidth, unsigned int screenHeight, unsigned int colourDepth, unsigned int param4, unsigned int param5);
@@ -1107,6 +1110,7 @@ public:
     static BYTE EvictManagedTextureResources(void);
     static BOOL ReleaseDirect3D(void);
     static void ReleaseVertexBuffers(void);
+    static void ResetSharedVertexBufferFill(void);
     static int ReleaseSurfaces(void);
     static void SetSelectedDisplayDriverIndex(int param1);
     static void SetSelectedRenderDeviceIndex(int param1);

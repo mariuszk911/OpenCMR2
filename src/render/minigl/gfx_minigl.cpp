@@ -17,7 +17,9 @@
 #include <new>
 
 #include <exec/types.h>
+#include <exec/execbase.h>
 #include <intuition/intuition.h>
+#include <proto/exec.h>
 #include <proto/minigl.h>
 
 struct GfxTexture {
@@ -570,6 +572,15 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
         return 0;
     }
     s_miniglOpen = 1;
+    // PORT: AMIGA: MiniGL's immediate-mode vertex buffer defaults to 256
+    // entries and glVertex has no bounds check. The renderer submits up to 256
+    // vertices per glBegin block, so enlarge the buffer before the context
+    // allocates it. reVC's MiniGL backend uses 4096 for the immediate path.
+    mglChooseVertexBufferSize(4096);
+    // PORT: AMIGA: the default texture-object table is 2048 entries; the game
+    // reuses one table across stage reloads, so keep headroom and avoid
+    // glGenTextures returning 0 (which presents as a bad texture later).
+    mglChooseTextureBufferSize(4096);
     // PORT: AMIGA: windowed mode follows reVC. The application owns the
     // visible window (close gadget, focus, IDCMP port) and MiniGL renders into
     // its inner area with mglCreateContextFromWindow.
@@ -2323,6 +2334,8 @@ extern "C" void Gfx_DrawIndexedPrimitiveVB(int primitive, GfxVertexBuffer *buffe
 {
     if (buffer == NULL || buffer->vertices == NULL || indices == NULL || indexCount == 0)
         return;
+    // PORT: AMIGA: index arrays are CPU-written too (Mesh_BuildParts); V3D
+    // must see them before the draw, not a stale D-cache line.
     if (firstVertex >= buffer->count)
         return;
     const uint32_t avail = buffer->count - firstVertex;
@@ -2698,6 +2711,12 @@ extern "C" GfxTexture *Gfx_CreateTexture(int width, int height, int format, int 
     texture->pitch = pitch;
     texture->dirty = 1;
     return texture;
+}
+
+extern "C" void Gfx_Finish(void)
+{
+    if (s_context != NULL)
+        glFinish();
 }
 
 extern "C" void Gfx_DestroyTexture(GfxTexture *texture)
