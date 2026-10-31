@@ -1342,6 +1342,7 @@ extern int g_unk0x00537df0;
 
 void InRaceMenu_UpdateStateMachineFrame(CallbackStateMachine *param1);
 void InRaceMenu_AdvanceScreenEntries(CallbackStateMachine *param1);
+void InRaceMenu_DrawActivePage(void);
 void StageUI_ResetRaceEndEventCount(void);
 unsigned int *RallyData_GetChampionshipState(void);
 char RallyData_GetUsableRecordCategory(BYTE param1);
@@ -1442,6 +1443,10 @@ BOOL CGame::UpdateInRaceCallbackMachine(void)
         if (CGameInfo::IsInRaceMenuOpen() != 0) {
             InRaceMenu_UpdateStateMachineFrame(&g_raceCallbackStorage.machine);
             InRaceMenu_AdvanceScreenEntries(&g_raceCallbackStorage.machine);
+            // PORT: AMIGA: this path returns before the state render callbacks,
+            // and the screen-entry pass draws the page before the scene; queue it
+            // again so the in-race pause menu is composed for the frame.
+            InRaceMenu_DrawActivePage();
             AdvanceCallbackStateTimers(&g_raceCallbackStorage.machine);
             return FALSE;
         }
