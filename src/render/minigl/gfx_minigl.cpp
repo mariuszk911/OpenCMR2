@@ -108,23 +108,22 @@ struct GlStateCache {
     unsigned int boundTex[2];
     int texEnabled[2];
     GLint texEnvMode[2];
-    int projectionValid;
-    GLfloat projection[16];
+    // Matrix uploads are keyed on generation counters rather than on comparing
+    // the matrices: the game rewrites WORLD per object, so a value compare
+    // would cost more than the load it saves. A ~0u generation means "not
+    // loaded by us" (another path wrote the GL matrix).
+    GfxMatrix worldView;
+    uint32_t loadedWorldViewGen;
+    uint32_t loadedProjectionGen;
+    GLfloat glProjection[16];
 };
 
-// Lighting state is uploaded only when the game changes it. The view matrix
-// is part of the key because GL transforms light positions to eye space when
-// glLight* is called.
+// Lighting state is uploaded only when a writer invalidates it. Every setter
+// that changes light, material or view state calls InvalidateLightingCache()
+// (the view matters because GL transforms light positions to eye space when
+// glLight* is called), so the upload itself needs no copy of the inputs.
 struct LightingCache {
     int valid;
-    uint32_t ambient;
-    int localViewer;
-    int specularEnabled;
-    GfxMaterial material;
-    GfxLight lights[8];
-    int lightEnabled[8];
-    int lightSet[8];
-    GfxMatrix view;
 };
 
 struct StageDiagnostics {
@@ -216,6 +215,11 @@ int s_virtualHeight;
 GfxViewport s_viewport = { 0, 0, 640, 480, 0.0f, 1.0f };
 GfxMatrix s_transforms[18];
 int s_transformSet[18];
+// Bumped whenever Gfx_SetTransform rewrites a matrix that feeds the GL
+// modelview or projection. Gfx_PopState restores s_transforms wholesale and
+// goes through InvalidateGlCache, which resets the loaded generations instead.
+uint32_t s_worldViewGeneration;
+uint32_t s_projectionGeneration;
 
 static const int kMaxStoredLights = 64;
 GfxLight s_lights[kMaxStoredLights];
@@ -376,7 +380,8 @@ void InvalidateGlCache(void)
     s_glCache.texEnabled[1] = -1;
     s_glCache.texEnvMode[0] = 0;
     s_glCache.texEnvMode[1] = 0;
-    s_glCache.projectionValid = 0;
+    s_glCache.loadedWorldViewGen = ~0u;
+    s_glCache.loadedProjectionGen = ~0u;
     InvalidateLightingCache();
 }
 
@@ -985,7 +990,8 @@ void BeginScreenDraw(void)
     glLoadIdentity();
     glOrtho(0.0, (double)screenW, (double)screenH, 0.0, -1.0, 1.0);
     // The 3D projection is no longer loaded; make the next 3D draw reload it.
-    s_glCache.projectionValid = 0;
+    s_glCache.loadedProjectionGen = ~0u;
+    s_diag.matrixModeSwitches++;
 }
 
 
@@ -1156,10 +1162,17 @@ extern "C" void Gfx_SetTransform(int type, const GfxMatrix *matrix)
     if (matrix != NULL) {
         s_transforms[type] = *matrix;
         s_transformSet[type] = 1;
-        if (type == GFX_TRANSFORM_VIEW)
-            InvalidateLightingCache();
-        else if (type == GFX_TRANSFORM_PROJECTION)
-            s_glCache.projectionValid = 0;
+        // ~0u is the "not loaded by us" sentinel, so a live generation must
+        // never take that value or a wrapped counter would look like a hit.
+        if (type == GFX_TRANSFORM_WORLD || type == GFX_TRANSFORM_VIEW) {
+            if (++s_worldViewGeneration == ~0u)
+                ++s_worldViewGeneration;
+            if (type == GFX_TRANSFORM_VIEW)
+                InvalidateLightingCache();
+        } else if (type == GFX_TRANSFORM_PROJECTION) {
+            if (++s_projectionGeneration == ~0u)
+                ++s_projectionGeneration;
+        }
     }
 }
 
@@ -1660,40 +1673,56 @@ void BuildGlProjectionMatrix(const GfxMatrix &proj, GLfloat out[16])
 
 void Apply3DTransforms(GfxMatrix *outWorldView)
 {
-    GfxMatrix world, view, proj;
-    if (s_transformSet[GFX_TRANSFORM_WORLD])
-        world = s_transforms[GFX_TRANSFORM_WORLD];
-    else
-        Identity(&world);
-    if (s_transformSet[GFX_TRANSFORM_VIEW])
-        view = s_transforms[GFX_TRANSFORM_VIEW];
-    else
-        Identity(&view);
-    if (s_transformSet[GFX_TRANSFORM_PROJECTION])
-        proj = s_transforms[GFX_TRANSFORM_PROJECTION];
-    else
-        Identity(&proj);
-
-    MultiplyRowMatrices(world, view, outWorldView);
+    // The out-parameter is read by the reflection texcoord path even when the
+    // cached product is reused, so every return path fills it.
+    const bool worldViewHit = s_glCache.loadedWorldViewGen == s_worldViewGeneration;
+    if (worldViewHit) {
+        s_diag.modelviewSkips++;
+    } else {
+        GfxMatrix world, view;
+        if (s_transformSet[GFX_TRANSFORM_WORLD])
+            world = s_transforms[GFX_TRANSFORM_WORLD];
+        else
+            Identity(&world);
+        if (s_transformSet[GFX_TRANSFORM_VIEW])
+            view = s_transforms[GFX_TRANSFORM_VIEW];
+        else
+            Identity(&view);
+        MultiplyRowMatrices(world, view, &s_glCache.worldView);
+        s_glCache.loadedWorldViewGen = s_worldViewGeneration;
+    }
+    *outWorldView = s_glCache.worldView;
 
     // The projection changes per camera/pass, not per draw. It is also
-    // replaced by the 2D ortho projection, so BeginScreenDraw and the
-    // TL-to-3D transition clear the flag.
-    GLfloat glProj[16];
-    BuildGlProjectionMatrix(proj, glProj);
-    if (!s_glCache.projectionValid || memcmp(s_glCache.projection, glProj, sizeof(glProj)) != 0) {
+    // replaced by the 2D ortho projection, so BeginScreenDraw clears the
+    // loaded generation. D3D vertex submission always runs in the modelview
+    // mode; GL leaves the mode wherever the last load put it, so this function
+    // must restore it even when the modelview matrix itself is reused.
+    bool modeIsModelView = true;
+    if (s_glCache.loadedProjectionGen != s_projectionGeneration) {
+        GfxMatrix proj;
+        if (s_transformSet[GFX_TRANSFORM_PROJECTION])
+            proj = s_transforms[GFX_TRANSFORM_PROJECTION];
+        else
+            Identity(&proj);
+        BuildGlProjectionMatrix(proj, s_glCache.glProjection);
         glMatrixMode(GL_PROJECTION);
-        glLoadMatrixf(glProj);
-        memcpy(s_glCache.projection, glProj, sizeof(glProj));
-        s_glCache.projectionValid = 1;
+        glLoadMatrixf(s_glCache.glProjection);
+        s_glCache.loadedProjectionGen = s_projectionGeneration;
         s_diag.projectionLoads++;
         s_diag.matrixModeSwitches++;
+        modeIsModelView = false;
     }
 
-    glMatrixMode(GL_MODELVIEW);
-    glLoadMatrixf(&outWorldView->_11);
-    s_diag.modelviewLoads++;
-    s_diag.matrixModeSwitches++;
+    if (!worldViewHit) {
+        glMatrixMode(GL_MODELVIEW);
+        glLoadMatrixf(&s_glCache.worldView._11);
+        s_diag.modelviewLoads++;
+        s_diag.matrixModeSwitches++;
+    } else if (!modeIsModelView) {
+        glMatrixMode(GL_MODELVIEW);
+        s_diag.matrixModeSwitches++;
+    }
 }
 
 // Blend and alpha test are the same render states for 3D and the TL path, so
@@ -1863,20 +1892,12 @@ bool Apply3DLightingAndFog(void)
                                "AMIGA: GL_NORMALIZE is not implemented by MiniGL; normals are used as supplied");
         }
 
-        GfxMatrix view;
-        if (s_transformSet[GFX_TRANSFORM_VIEW])
-            view = s_transforms[GFX_TRANSFORM_VIEW];
-        else
-            Identity(&view);
-        if (!s_lightingCache.valid ||
-            memcmp(&s_lightingCache.view, &view, sizeof(view)) != 0 ||
-            s_lightingCache.ambient != s_ambient ||
-            s_lightingCache.localViewer != s_localViewer ||
-            s_lightingCache.specularEnabled != s_specularEnabled ||
-            memcmp(&s_lightingCache.material, &s_material, sizeof(s_material)) != 0 ||
-            memcmp(s_lightingCache.lights, s_lights, sizeof(s_lightingCache.lights)) != 0 ||
-            memcmp(s_lightingCache.lightEnabled, s_lightEnabled, sizeof(s_lightingCache.lightEnabled)) != 0 ||
-            memcmp(s_lightingCache.lightSet, s_lightSet, sizeof(s_lightingCache.lightSet)) != 0) {
+        if (!s_lightingCache.valid) {
+            GfxMatrix view;
+            if (s_transformSet[GFX_TRANSFORM_VIEW])
+                view = s_transforms[GFX_TRANSFORM_VIEW];
+            else
+                Identity(&view);
             float globalAmb[4];
             UnpackColorFloats(s_ambient, globalAmb);
             glLightModelfv(GL_LIGHT_MODEL_AMBIENT, globalAmb);
@@ -1959,14 +1980,6 @@ bool Apply3DLightingAndFog(void)
 
             s_diag.lightingUploads++;
             s_lightingCache.valid = 1;
-            s_lightingCache.ambient = s_ambient;
-            s_lightingCache.localViewer = s_localViewer;
-            s_lightingCache.specularEnabled = s_specularEnabled;
-            s_lightingCache.material = s_material;
-            memcpy(s_lightingCache.lights, s_lights, sizeof(s_lightingCache.lights));
-            memcpy(s_lightingCache.lightEnabled, s_lightEnabled, sizeof(s_lightingCache.lightEnabled));
-            memcpy(s_lightingCache.lightSet, s_lightSet, sizeof(s_lightingCache.lightSet));
-            s_lightingCache.view = view;
         } else {
             s_diag.lightingSkips++;
         }
@@ -2497,6 +2510,8 @@ void BeginTLDraw(void)
     }
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
+    // The modelview now holds the TL identity, not the cached product.
+    s_glCache.loadedWorldViewGen = ~0u;
     s_diag.tlMatrixLoads++;
     s_diag.matrixModeSwitches++;
 }
