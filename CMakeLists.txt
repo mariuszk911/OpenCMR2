@@ -30,11 +30,17 @@ endif()
 option(OPENCMR2_SANITIZE "Build with AddressSanitizer and UBSan" OFF)
 option(OPENCMR2_VENDORED_SDL "Download and build SDL3 instead of using an installed one" ${ANDROID})
 option(AMIGAOS "Build the native AmigaOS 68k target" OFF)
+# Task 0.1 section timing: off by default so normal builds contain no clock
+# call or timing accounting in the draw path. Only meaningful for AMIGAOS.
+option(OPENCMR2_MINIGL_SECTION_TIMING "Amiga MiniGL per-section timing counters (diagnostic build)" OFF)
 
 # Target identity for the fork-owned platform layer. The host builds leave
 # both macros undefined, so no ad-hoc #ifdef in the sources decides this.
 if(AMIGAOS)
     add_compile_definitions(OPENCMR2_AMIGA BIGENDIAN)
+    if(OPENCMR2_MINIGL_SECTION_TIMING)
+        add_compile_definitions(OPENCMR2_MINIGL_SECTION_TIMING)
+    endif()
     add_compile_options(
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>

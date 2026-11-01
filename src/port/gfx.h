@@ -245,6 +245,15 @@ void Gfx_Present(int vsync);
 /* Movie presentation: stretch the back buffer to the entire drawable area. */
 void Gfx_PresentStretched(int vsync);
 
+/* Diagnostic benchmark window (Amiga MiniGL). Once the game brackets a replay
+   with Begin/End, the summary covers gameplay only and excludes menu and movie
+   drawing. Until those call sites exist the window produces no output. Nested
+   or repeated Begin restarts the window; End without Begin is ignored, and End
+   after a stage flush reports the window as invalid instead of a wrong total.
+   Host builds make both no-ops. */
+void Gfx_BenchmarkBegin(void);
+void Gfx_BenchmarkEnd(void);
+
 enum GfxClearFlags {
     GFX_CLEAR_TARGET = 1,
     GFX_CLEAR_ZBUFFER = 2

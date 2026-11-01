@@ -17,6 +17,7 @@ FPU=${FPU:-68881}
 OPT=${OPT:--O2}
 STACK=${STACK:-2097152}
 JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}
+MINIGL_TIMING=${MINIGL_TIMING:-OFF}
 PISTORM3D_ROOT=${PISTORM3D:-"$REPO/SDKs/PiStorm3D"}
 
 usage() {
@@ -36,6 +37,8 @@ Environment overrides:
   OPT        optimisation flags (default: -O2)
   STACK      swapstack size in bytes (default: 2097152)
   JOBS       parallel build jobs (default: host CPU count)
+  MINIGL_TIMING  ON adds MiniGL per-section clock calls for a Task 0.1
+                 timing run (default: OFF; diagnostic builds only)
 EOF
 }
 
@@ -195,6 +198,7 @@ fi
 
 if [ "$MODE" = native ]; then
     REPO="$REPO" PISTORM3D="$PISTORM3D_ROOT" CPU="$CPU" FPU="$FPU" OPT="$OPT" STACK="$STACK" JOBS="$JOBS" \
+        MINIGL_TIMING="$MINIGL_TIMING" \
         sh "$REPO/tools/amiga/cmake-build.sh"
 else
     fix_ownership
@@ -204,6 +208,7 @@ else
         -e REPO=/src \
         -e PISTORM3D=/pistorm3d \
         -e CPU="$CPU" -e FPU="$FPU" -e OPT="$OPT" -e STACK="$STACK" -e JOBS="$JOBS" \
+        -e MINIGL_TIMING="$MINIGL_TIMING" \
         -v "$REPO":/src \
         -v "$PISTORM3D_ROOT":/pistorm3d:ro \
         -w /src \

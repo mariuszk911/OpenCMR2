@@ -3,6 +3,7 @@
 short Car_GetOrderCount(void);
 #include "SoundCurve.h"
 #include "port/sys.h"
+#include "port/gfx.h"
 #include "FloatToInt.h"
 #include "port/disk.h"
 #include "port/disk_layouts.h"
@@ -11955,6 +11956,12 @@ int Replay_SelectAndInitializeLane(ReplayStream *p, short lane, short start, BYT
     p->playing = 1;
     p->lane = lane;
     p->playStarted = 1;
+    // PORT: AMIGA benchmark window: the attract demo is the fixed A/B workload,
+    // so the player-car replay start opens the measured section. Replay frame
+    // playback already has playStarted set here, so this is the only place a
+    // demo run begins.
+    if (car == 0)
+        Gfx_BenchmarkBegin();
     if (start == 0)
         p->frame = 0;
     else
@@ -14231,8 +14238,13 @@ void Replay_PlayStreamFrame(ReplayStream *pState)
         if (p->frame == p->pLaneSamples[p->lane]) {
             p->playStarted = 0;
             p->lane++;
-            if (p->lane == p->laneCount)
+            if (p->lane == p->laneCount) {
                 Replay_ResetBufferIfActive(pState);
+                // PORT: AMIGA benchmark window: the attract demo is the fixed
+                // A/B workload, so its end delimits the measured section.
+                if (p->car == 0)
+                    Gfx_BenchmarkEnd();
+            }
         }
     } else {
         p->frame = 0;

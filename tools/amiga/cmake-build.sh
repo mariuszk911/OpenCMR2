@@ -10,6 +10,9 @@ set -eu
 : "${OPT:=-O2}"
 : "${STACK:=2097152}"
 : "${JOBS:=4}"
+# Diagnostic build only: adds clock calls to the MiniGL draw path. Off unless
+# explicitly requested for a Task 0.1 timing run.
+: "${MINIGL_TIMING:=OFF}"
 
 BUILD_DIR="$REPO/build/amiga"
 
@@ -32,6 +35,7 @@ cmake -S "$REPO" -B "$BUILD_DIR" -G Ninja \
     -DOPENCMR2_AMIGA_FPU="$FPU" \
     -DOPENCMR2_AMIGA_OPT="$OPT" \
     -DOPENCMR2_AMIGA_STACK="$STACK" \
+    -DOPENCMR2_MINIGL_SECTION_TIMING="$MINIGL_TIMING" \
     -DCMAKE_BUILD_TYPE=
 
 cmake --build "$BUILD_DIR" --parallel "$JOBS"

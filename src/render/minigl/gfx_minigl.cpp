@@ -136,7 +136,43 @@ struct StageDiagnostics {
     uint32_t textureUploads;
     uint32_t suppressedRttDraws;
     uint32_t suppressedRttClears;
+    // Plain increments only (no clock or logging in the draw path). The
+    // cache counters stay at zero until the Phase 1 caches land; they are
+    // reported so the baseline can be compared against them.
+    uint32_t modelviewLoads;
+    uint32_t modelviewSkips;
+    uint32_t matrixModeSwitches;
+    uint32_t projectionLoads;
+    uint32_t lightingUploads;
+    uint32_t lightingSkips;
+    uint32_t tlMatrixLoads;
+    uint32_t tlMatrixSkips;
+    uint32_t stageSetterCalls;
+    uint32_t lightingSetterCalls;
+    uint32_t indicesValidated;
+#if defined(OPENCMR2_MINIGL_SECTION_TIMING)
+    // Section totals in whole microseconds (integers only; the 68k target
+    // does not print floats). Accumulated per call, printed once per flush.
+    uint32_t timingSubmit3DCalls;
+    uint64_t timingSubmit3DUs;
+    uint32_t timingTLCalls;
+    uint64_t timingTLUs;
+    uint32_t timingPresentCalls;
+    uint64_t timingPresentUs;
+#endif
+    // Bumped by every FlushStageDiagnostics() reset. The benchmark window takes
+    // a delta of this struct, so a flush inside the window is detectable.
+    uint32_t flushSerial;
 };
+
+#if defined(OPENCMR2_MINIGL_SECTION_TIMING)
+// Converts Sys_GetTicksPrecise() milliseconds to whole microseconds. The
+// double-to-integer conversion truncates; resolution is one microsecond.
+uint64_t SectionUsFromMs(double ms)
+{
+    return ms <= 0.0 ? 0u : (uint64_t)(ms * 1000.0);
+}
+#endif
 
 void *s_context;
 int s_miniglOpen;
@@ -344,20 +380,69 @@ void InvalidateGlCache(void)
     InvalidateLightingCache();
 }
 
+// One place owns the diagnostic field list, so the stage flush and the
+// benchmark window cannot report different fields. The stage flush passes a
+// zeroed base; the window passes the snapshot taken by Gfx_BenchmarkBegin().
+const StageDiagnostics kNoDiagnosticBase = {};
+
+void LogDiagnosticLines(const char *summaryLabel, const char *countersLabel,
+                        const char *timingLabel, const char *qualifier,
+                        const StageDiagnostics &now, const StageDiagnostics &base)
+{
+    const char *q = qualifier != NULL ? qualifier : "";
+    const unsigned frames = (unsigned)(now.frames - base.frames);
+    const unsigned draws3D = (unsigned)(now.drawCalls3D - base.drawCalls3D);
+    const unsigned drawsTL = (unsigned)(now.drawCallsTL - base.drawCallsTL);
+    const unsigned triangles3D = (unsigned)(now.triangles3D - base.triangles3D);
+    const unsigned uploads = (unsigned)(now.textureUploads - base.textureUploads);
+    const unsigned rttDraws = (unsigned)(now.suppressedRttDraws - base.suppressedRttDraws);
+    const unsigned rttClears = (unsigned)(now.suppressedRttClears - base.suppressedRttClears);
+    Sys_Log("AMIGA: %s%s: frames=%u draws3d=%u drawsTL=%u tris3d=%u uploads=%u rttDropped=%u/%u",
+            summaryLabel, q, frames, draws3D, drawsTL, triangles3D, uploads, rttDraws, rttClears);
+    Sys_Log("AMIGA: %s%s: mvLoads=%u mvSkips=%u modeSwitches=%u projLoads=%u "
+            "lightUploads=%u lightSkips=%u tlMatLoads=%u tlMatSkips=%u stageSetters=%u lightSetters=%u idxValidated=%u",
+            countersLabel, q,
+            (unsigned)(now.modelviewLoads - base.modelviewLoads),
+            (unsigned)(now.modelviewSkips - base.modelviewSkips),
+            (unsigned)(now.matrixModeSwitches - base.matrixModeSwitches),
+            (unsigned)(now.projectionLoads - base.projectionLoads),
+            (unsigned)(now.lightingUploads - base.lightingUploads),
+            (unsigned)(now.lightingSkips - base.lightingSkips),
+            (unsigned)(now.tlMatrixLoads - base.tlMatrixLoads),
+            (unsigned)(now.tlMatrixSkips - base.tlMatrixSkips),
+            (unsigned)(now.stageSetterCalls - base.stageSetterCalls),
+            (unsigned)(now.lightingSetterCalls - base.lightingSetterCalls),
+            (unsigned)(now.indicesValidated - base.indicesValidated));
+#if defined(OPENCMR2_MINIGL_SECTION_TIMING)
+    // Totals are 64-bit microsecond counts, printed as hi/lo 32-bit halves so a
+    // long session cannot wrap. Averages are derived by the reader, not here.
+    const uint64_t submitUs = now.timingSubmit3DUs - base.timingSubmit3DUs;
+    const uint64_t tlUs = now.timingTLUs - base.timingTLUs;
+    const uint64_t presentUs = now.timingPresentUs - base.timingPresentUs;
+    Sys_Log("AMIGA: %s%s: submit3d calls=%u us_hi=%u us_lo=%u; tl calls=%u us_hi=%u us_lo=%u; present calls=%u us_hi=%u us_lo=%u",
+            timingLabel, q,
+            (unsigned)(now.timingSubmit3DCalls - base.timingSubmit3DCalls),
+            (unsigned)(submitUs >> 32), (unsigned)(submitUs & 0xffffffffu),
+            (unsigned)(now.timingTLCalls - base.timingTLCalls),
+            (unsigned)(tlUs >> 32), (unsigned)(tlUs & 0xffffffffu),
+            (unsigned)(now.timingPresentCalls - base.timingPresentCalls),
+            (unsigned)(presentUs >> 32), (unsigned)(presentUs & 0xffffffffu));
+#endif
+}
+
 void FlushStageDiagnostics(const char *reason)
 {
     if (!s_diag.inStage)
         return;
-    Sys_Log("AMIGA: M3.2 stage summary (%s): frames=%u draws3d=%u drawsTL=%u tris3d=%u uploads=%u rttDropped=%u/%u",
-            reason != NULL ? reason : "end",
-            (unsigned)s_diag.frames,
-            (unsigned)s_diag.drawCalls3D,
-            (unsigned)s_diag.drawCallsTL,
-            (unsigned)s_diag.triangles3D,
-            (unsigned)s_diag.textureUploads,
-            (unsigned)s_diag.suppressedRttDraws,
-            (unsigned)s_diag.suppressedRttClears);
+    char qualifier[48];
+    snprintf(qualifier, sizeof(qualifier), " (%s)", reason != NULL ? reason : "end");
+    LogDiagnosticLines("M3.2 stage summary", "M3.2 stage counters", "M3.2 section timing",
+                       qualifier, s_diag, kNoDiagnosticBase);
+    // The reset must not lose the serial: the benchmark window compares it to
+    // detect a flush inside the window.
+    const uint32_t serial = s_diag.flushSerial;
     memset(&s_diag, 0, sizeof(s_diag));
+    s_diag.flushSerial = serial + 1;
 }
 
 int EnsureLocked(void)
@@ -734,11 +819,43 @@ extern "C" void Gfx_BeginScene(void)
     EnsureLocked();
 }
 
+// Benchmark window. The counters are cumulative until a stage flush, so the
+// window is the difference between two snapshots: starting and ending the
+// window costs no per-draw work and cannot drift from the real totals. A flush
+// inside the window resets the counters underneath it, so that case is refused
+// rather than reported with a wrong value.
+namespace {
+int s_benchActive = 0;
+StageDiagnostics s_benchBase;
+uint32_t s_benchFlushSerial = 0;
+}
+
+extern "C" void Gfx_BenchmarkBegin(void)
+{
+    s_benchBase = s_diag;
+    s_benchFlushSerial = s_diag.flushSerial;
+    s_benchActive = 1;
+    Sys_Log("AMIGA: bench: begin");
+}
+
+extern "C" void Gfx_BenchmarkEnd(void)
+{
+    if (!s_benchActive)
+        return;
+    s_benchActive = 0;
+    if (s_diag.flushSerial != s_benchFlushSerial) {
+        Sys_Log("AMIGA: bench: window invalid, stage counters flushed inside it");
+        return;
+    }
+    LogDiagnosticLines("bench summary", "bench counters", "bench timing", "",
+                       s_diag, s_benchBase);
+}
+
 extern "C" void Gfx_EndScene(void)
 {
 }
 
-extern "C" void Gfx_Present(int vsync)
+void Gfx_PresentBody(int vsync)
 {
     (void)vsync;
     if (s_context == NULL)
@@ -752,6 +869,21 @@ extern "C" void Gfx_Present(int vsync)
     }
     mglSwitchDisplay();
 }
+
+#if defined(OPENCMR2_MINIGL_SECTION_TIMING)
+extern "C" void Gfx_Present(int vsync)
+{
+    const double start = Sys_GetTicksPrecise();
+    Gfx_PresentBody(vsync);
+    s_diag.timingPresentCalls++;
+    s_diag.timingPresentUs += SectionUsFromMs(Sys_GetTicksPrecise() - start);
+}
+#else
+extern "C" void Gfx_Present(int vsync)
+{
+    Gfx_PresentBody(vsync);
+}
+#endif
 
 extern "C" void Gfx_PresentStretched(int vsync)
 {
@@ -1043,6 +1175,7 @@ extern "C" void Gfx_GetTransform(int type, GfxMatrix *matrix)
 
 extern "C" void Gfx_SetLight(int index, const GfxLight *light)
 {
+    s_diag.lightingSetterCalls++;
     if (index < 0 || light == NULL)
         return;
     if (index >= 8) {
@@ -1068,6 +1201,7 @@ extern "C" void Gfx_GetLight(int index, GfxLight *light)
 
 extern "C" void Gfx_EnableLight(int index, int enable)
 {
+    s_diag.lightingSetterCalls++;
     if (index < 0)
         return;
     if (index >= 8 && enable != 0) {
@@ -1082,6 +1216,7 @@ extern "C" void Gfx_EnableLight(int index, int enable)
 
 extern "C" void Gfx_SetMaterial(const GfxMaterial *material)
 {
+    s_diag.lightingSetterCalls++;
     if (material != NULL) {
         s_material = *material;
         InvalidateLightingCache();
@@ -1094,16 +1229,19 @@ extern "C" void Gfx_SetLighting(int enable)
 }
 extern "C" void Gfx_SetAmbient(uint32_t color)
 {
+    s_diag.lightingSetterCalls++;
     s_ambient = color;
     InvalidateLightingCache();
 }
 extern "C" void Gfx_SetSpecular(int enable)
 {
+    s_diag.lightingSetterCalls++;
     s_specularEnabled = enable != 0;
     InvalidateLightingCache();
 }
 extern "C" void Gfx_SetLocalViewer(int enable)
 {
+    s_diag.lightingSetterCalls++;
     s_localViewer = enable != 0;
     InvalidateLightingCache();
 }
@@ -1111,21 +1249,25 @@ extern "C" void Gfx_SetNormalizeNormals(int enable) { s_normalizeNormals = enabl
 extern "C" void Gfx_SetColorVertex(int enable) { s_colorVertex = enable != 0; }
 extern "C" void Gfx_SetDiffuseMaterialSource(int source)
 {
+    s_diag.lightingSetterCalls++;
     s_diffuseSource = source;
     InvalidateLightingCache();
 }
 extern "C" void Gfx_SetSpecularMaterialSource(int source)
 {
+    s_diag.lightingSetterCalls++;
     s_specularSource = source;
     InvalidateLightingCache();
 }
 extern "C" void Gfx_SetAmbientMaterialSource(int source)
 {
+    s_diag.lightingSetterCalls++;
     s_ambientSource = source;
     InvalidateLightingCache();
 }
 extern "C" void Gfx_SetEmissiveMaterialSource(int source)
 {
+    s_diag.lightingSetterCalls++;
     s_emissiveSource = source;
     InvalidateLightingCache();
 }
@@ -1162,6 +1304,7 @@ static GfxTexture *ResolveDrawnTexture(GfxTexture *texture)
 
 extern "C" void Gfx_SetTexture(int stage, GfxTexture *texture)
 {
+    s_diag.stageSetterCalls++;
     if (stage < 0 || stage >= 2)
         return;
     GfxTexture *drawn = ResolveDrawnTexture(texture);
@@ -1217,31 +1360,37 @@ extern "C" void Gfx_SetTexture(int stage, GfxTexture *texture)
 
 extern "C" void Gfx_SetStageColorOp(int stage, int op)
 {
+    s_diag.stageSetterCalls++;
     if (stage >= 0 && stage < 2)
         s_stages[stage].colorOp = op;
 }
 extern "C" void Gfx_SetStageColorArg1(int stage, int arg)
 {
+    s_diag.stageSetterCalls++;
     if (stage >= 0 && stage < 2)
         s_stages[stage].colorArg1 = arg;
 }
 extern "C" void Gfx_SetStageColorArg2(int stage, int arg)
 {
+    s_diag.stageSetterCalls++;
     if (stage >= 0 && stage < 2)
         s_stages[stage].colorArg2 = arg;
 }
 extern "C" void Gfx_SetStageAlphaOp(int stage, int op)
 {
+    s_diag.stageSetterCalls++;
     if (stage >= 0 && stage < 2)
         s_stages[stage].alphaOp = op;
 }
 extern "C" void Gfx_SetStageAlphaArg1(int stage, int arg)
 {
+    s_diag.stageSetterCalls++;
     if (stage >= 0 && stage < 2)
         s_stages[stage].alphaArg1 = arg;
 }
 extern "C" void Gfx_SetStageAlphaArg2(int stage, int arg)
 {
+    s_diag.stageSetterCalls++;
     if (stage >= 0 && stage < 2)
         s_stages[stage].alphaArg2 = arg;
 }
@@ -1318,6 +1467,7 @@ static void ReapplyStageSampler(int stage)
 
 extern "C" void Gfx_SetStageAddress(int stage, int address)
 {
+    s_diag.stageSetterCalls++;
     if (stage < 0 || stage >= 2 || address == s_stages[stage].address)
         return;
     s_stages[stage].address = address;
@@ -1325,6 +1475,7 @@ extern "C" void Gfx_SetStageAddress(int stage, int address)
 }
 extern "C" void Gfx_SetStageMinFilter(int stage, int filter)
 {
+    s_diag.stageSetterCalls++;
     if (stage < 0 || stage >= 2 || filter == s_stages[stage].minFilter)
         return;
     s_stages[stage].minFilter = filter;
@@ -1332,6 +1483,7 @@ extern "C" void Gfx_SetStageMinFilter(int stage, int filter)
 }
 extern "C" void Gfx_SetStageMagFilter(int stage, int filter)
 {
+    s_diag.stageSetterCalls++;
     if (stage < 0 || stage >= 2 || filter == s_stages[stage].magFilter)
         return;
     s_stages[stage].magFilter = filter;
@@ -1342,37 +1494,44 @@ extern "C" void Gfx_SetStageMagFilter(int stage, int filter)
 // accept the calls so the game's state cache stays consistent.
 extern "C" void Gfx_SetStageMipFilter(int stage, int filter)
 {
+    s_diag.stageSetterCalls++;
     (void)stage;
     (void)filter;
 }
 extern "C" void Gfx_SetStageMaxMipLevel(int stage, int level)
 {
+    s_diag.stageSetterCalls++;
     (void)stage;
     (void)level;
 }
 extern "C" void Gfx_SetStageTexCoordIndex(int stage, uint32_t index)
 {
+    s_diag.stageSetterCalls++;
     if (stage >= 0 && stage < 2)
         s_stages[stage].texCoordIndex = index;
 }
 extern "C" void Gfx_SetStageTextureTransform(int stage, int flags)
 {
+    s_diag.stageSetterCalls++;
     if (stage >= 0 && stage < 2)
         s_stages[stage].textureTransform = flags;
 }
 extern "C" void Gfx_SetStageBumpEnvMat(int stage, int index, float value)
 {
+    s_diag.stageSetterCalls++;
     (void)stage;
     (void)index;
     (void)value;
 }
 extern "C" void Gfx_SetStageBumpEnvLScale(int stage, float value)
 {
+    s_diag.stageSetterCalls++;
     (void)stage;
     (void)value;
 }
 extern "C" void Gfx_SetStageBumpEnvLOffset(int stage, float value)
 {
+    s_diag.stageSetterCalls++;
     (void)stage;
     (void)value;
 }
@@ -1527,10 +1686,14 @@ void Apply3DTransforms(GfxMatrix *outWorldView)
         glLoadMatrixf(glProj);
         memcpy(s_glCache.projection, glProj, sizeof(glProj));
         s_glCache.projectionValid = 1;
+        s_diag.projectionLoads++;
+        s_diag.matrixModeSwitches++;
     }
 
     glMatrixMode(GL_MODELVIEW);
     glLoadMatrixf(&outWorldView->_11);
+    s_diag.modelviewLoads++;
+    s_diag.matrixModeSwitches++;
 }
 
 // Blend and alpha test are the same render states for 3D and the TL path, so
@@ -1794,6 +1957,7 @@ bool Apply3DLightingAndFog(void)
             }
             glPopMatrix();
 
+            s_diag.lightingUploads++;
             s_lightingCache.valid = 1;
             s_lightingCache.ambient = s_ambient;
             s_lightingCache.localViewer = s_localViewer;
@@ -1803,6 +1967,8 @@ bool Apply3DLightingAndFog(void)
             memcpy(s_lightingCache.lightEnabled, s_lightEnabled, sizeof(s_lightingCache.lightEnabled));
             memcpy(s_lightingCache.lightSet, s_lightSet, sizeof(s_lightingCache.lightSet));
             s_lightingCache.view = view;
+        } else {
+            s_diag.lightingSkips++;
         }
     }
 
@@ -2175,6 +2341,7 @@ bool ValidateIndices(const uint16_t *indices, uint32_t indexCount, uint32_t vert
 {
     if (indices == NULL)
         return true;
+    s_diag.indicesValidated += indexCount;
     for (uint32_t i = 0; i < indexCount; ++i) {
         if (indices[i] >= vertexCount) {
             LogDegradationOnce(DEGRADE_LOG_BAD_INDEX,
@@ -2195,8 +2362,24 @@ uint32_t CountTriangles(int primitive, uint32_t count)
     }
 }
 
+void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexCount,
+                      const uint16_t *indices, uint32_t indexCount);
+
 void Submit3DDraw(int primitive, const GfxVertex *vertices, uint32_t vertexCount,
                   const uint16_t *indices, uint32_t indexCount)
+{
+#if defined(OPENCMR2_MINIGL_SECTION_TIMING)
+    const double start = Sys_GetTicksPrecise();
+    Submit3DDrawBody(primitive, vertices, vertexCount, indices, indexCount);
+    s_diag.timingSubmit3DCalls++;
+    s_diag.timingSubmit3DUs += SectionUsFromMs(Sys_GetTicksPrecise() - start);
+#else
+    Submit3DDrawBody(primitive, vertices, vertexCount, indices, indexCount);
+#endif
+}
+
+void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexCount,
+                      const uint16_t *indices, uint32_t indexCount)
 {
     if (vertices == NULL || vertexCount == 0)
         return;
@@ -2314,6 +2497,8 @@ void BeginTLDraw(void)
     }
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
+    s_diag.tlMatrixLoads++;
+    s_diag.matrixModeSwitches++;
 }
 
 } // namespace
@@ -2356,7 +2541,7 @@ extern "C" void Gfx_DrawIndexedPrimitive(int primitive, const GfxVertex *vertice
     Submit3DDraw(primitive, vertices, vertexCount, indices, indexCount);
 }
 
-extern "C" void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount)
+void Gfx_DrawPrimitiveTLBody(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount)
 {
     if (vertices == NULL || vertexCount == 0)
         return;
@@ -2408,8 +2593,23 @@ extern "C" void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, 
     SubmitTLBlocks(mode, vertices, NULL, vertexCount);
 }
 
-extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount,
-                                           const uint16_t *indices, uint32_t indexCount)
+#if defined(OPENCMR2_MINIGL_SECTION_TIMING)
+extern "C" void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount)
+{
+    const double start = Sys_GetTicksPrecise();
+    Gfx_DrawPrimitiveTLBody(primitive, vertices, vertexCount);
+    s_diag.timingTLCalls++;
+    s_diag.timingTLUs += SectionUsFromMs(Sys_GetTicksPrecise() - start);
+}
+#else
+extern "C" void Gfx_DrawPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount)
+{
+    Gfx_DrawPrimitiveTLBody(primitive, vertices, vertexCount);
+}
+#endif
+
+void Gfx_DrawIndexedPrimitiveTLBody(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount,
+                                    const uint16_t *indices, uint32_t indexCount)
 {
     if (vertices == NULL || indices == NULL || indexCount == 0)
         return;
@@ -2432,6 +2632,23 @@ extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *ver
     BeginTLDraw();
     SubmitTLBlocks(mode, vertices, indices, indexCount);
 }
+
+#if defined(OPENCMR2_MINIGL_SECTION_TIMING)
+extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount,
+                                           const uint16_t *indices, uint32_t indexCount)
+{
+    const double start = Sys_GetTicksPrecise();
+    Gfx_DrawIndexedPrimitiveTLBody(primitive, vertices, vertexCount, indices, indexCount);
+    s_diag.timingTLCalls++;
+    s_diag.timingTLUs += SectionUsFromMs(Sys_GetTicksPrecise() - start);
+}
+#else
+extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *vertices, uint32_t vertexCount,
+                                           const uint16_t *indices, uint32_t indexCount)
+{
+    Gfx_DrawIndexedPrimitiveTLBody(primitive, vertices, vertexCount, indices, indexCount);
+}
+#endif
 
 extern "C" void Gfx_GetPixelFormat(int format, GfxPixelFormat *out)
 {

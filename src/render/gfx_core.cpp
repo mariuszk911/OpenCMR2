@@ -422,6 +422,9 @@ extern "C" void Gfx_BeginScene(void)
 {
 }
 
+extern "C" void Gfx_BenchmarkBegin(void) {}
+extern "C" void Gfx_BenchmarkEnd(void) {}
+
 extern "C" void Gfx_EndScene(void)
 {
 }
