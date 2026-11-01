@@ -4160,14 +4160,9 @@ void InRaceMenu_AdvanceCascade(CallbackStateMachine *param1, int param2)
     }
     if (g_unk0x005298f4 <= 0) {
         if ((BYTE)CGameInfo::GetGameInfoSessionFlag() != 0) {
-            // PORT: AMIGA: the attract/demo session is a real race, not a
-            // results/exit session. The original rule value 6 sends it to
-            // state 13 (leave/fade), which is why the demo showed terrain but
-            // never reached the pre-race/countdown states. Advance to state 7
-            // and let Race_UpdateDriverPreRaceScene start the demo.
-            CallbackStateRecord *pRecord = &param1->records[param2 & 0xff];
-            pRecord->bits.level = 2;
-            pRecord->bits.rule = 7;
+            // Original attract transition: rule value 6 advances to state 0xD,
+            // the recorded DemoRuns replay, instead of starting a normal race.
+            CGame::PromoteCallbackEntryByRule(param1, param2, 6, 2);
             return;
         }
         if (CGameInfo::GetConfiguredGameMode() == 4) {
@@ -4667,9 +4662,11 @@ void InRaceMenu_AdvanceScreenEntries(CallbackStateMachine *param1)
     i = 0;
     if (param1->count > 0) {
         do {
-            // the original passes the byte counter as a full dword (the callee
-            // keeps only its low byte)
-            RallyData_GrowEntryAndNotifyCompletion(param1, *(unsigned int *)&i);
+            // PORT: AMIGA: the original passed the byte counter as a dword read
+            // through its address. On big-endian 68k that puts `i` in the high
+            // byte, so the callee's `param2 & 0xff` read stack garbage and the
+            // last screen entry never drew the pause page. Pass the value.
+            RallyData_GrowEntryAndNotifyCompletion(param1, i);
             i++;
         } while (i < param1->count);
     }
@@ -4795,13 +4792,13 @@ extern BYTE g_unk0x0052af58[2];
 
 // Colours the in-race menu text and the selected/unselected sprites use.
 // GLOBAL: CMR2 0x00516074
-int g_inRaceMenuSelectedColour = 0xfffafafa;
+int g_inRaceMenuSelectedColour = OPENCMR2_RGBA32(0xfa, 0xfa, 0xfa, 0xff);
 // GLOBAL: CMR2 0x00516078
-int g_inRaceMenuUnselectedColour = 0xffdbaca7;
+int g_inRaceMenuUnselectedColour = OPENCMR2_RGBA32(0xa7, 0xac, 0xdb, 0xff);
 // GLOBAL: CMR2 0x00516084
-int g_unk0x00516084 = 0x80fafafa;
+int g_unk0x00516084 = OPENCMR2_RGBA32(0xfa, 0xfa, 0xfa, 0x80);
 // GLOBAL: CMR2 0x0051608c
-int g_unk0x0051608c = 0xbfae8072;
+int g_unk0x0051608c = OPENCMR2_RGBA32(0x72, 0x80, 0xae, 0xbf);
 
 void GameMenu_RequestStageRestart(Menu *pMenu, int param);
 void GameMenu_RequestNetworkRestart(Menu *pMenu, int param);
@@ -4870,9 +4867,13 @@ void InRaceMenu_DrawOptionList(Menu *pMenu)
     short rect[4];
     int i;
     int y;
+    BYTE titleFont;
+    BYTE bodyFont;
     char *string1;
     char *string2;
 
+    titleFont = Font_GetTitleSlot();
+    bodyFont = Font_GetBodySlot();
     rect[0] = 0;
     rect[1] = 0;
     rect[2] = (short)g_pGraphics->resX;
@@ -4898,16 +4899,18 @@ void InRaceMenu_DrawOptionList(Menu *pMenu)
                     string2 = CFrontend::GetTextString(pItem->id + 1);
                 }
                 if (pMenu->cursor == i) {
-                    Font_DrawText(1, string1, (int)(g_pGraphics->resX * 0x86) / 0x280, y,
+                    Font_DrawText(titleFont, string1, (int)(g_pGraphics->resX * 0x86) / 0x280, y,
                                   &g_inRaceMenuSelectedColour, 0x11);
-                    Font_DrawText(0, string2, (int)(g_pGraphics->resX * 0x86) / 0x280,
+                    Font_DrawText(bodyFont, string2,
+                                  (int)(g_pGraphics->resX * 0x86) / 0x280,
                                   (int)(g_pGraphics->resY * 0xf) / 0x1e0 + y, &g_inRaceMenuSelectedColour, 0x11);
                     Sprite_Queue((SpriteRect *)&g_inRaceMenuUpArrowTexture->field_0x11c, (SpriteRect *)rect,
                                  g_inRaceMenuUpArrowTexture, 2, 0, NULL, NULL, (BYTE *)&g_inRaceMenuSelectedColour, 8);
                 } else {
-                    Font_DrawText(1, string1, (int)(g_pGraphics->resX * 0x86) / 0x280, y,
+                    Font_DrawText(titleFont, string1, (int)(g_pGraphics->resX * 0x86) / 0x280, y,
                                   &g_inRaceMenuUnselectedColour, 0x11);
-                    Font_DrawText(0, string2, (int)(g_pGraphics->resX * 0x86) / 0x280,
+                    Font_DrawText(bodyFont, string2,
+                                  (int)(g_pGraphics->resX * 0x86) / 0x280,
                                   (int)(g_pGraphics->resY * 0xf) / 0x1e0 + y, &g_inRaceMenuUnselectedColour, 0x11);
                     Sprite_Queue((SpriteRect *)&g_inRaceMenuDownArrowTexture->field_0x11c, (SpriteRect *)rect,
                                  g_inRaceMenuDownArrowTexture, 2, 0, NULL, NULL, (BYTE *)&g_inRaceMenuUnselectedColour, 8);
@@ -4929,11 +4932,15 @@ void InRaceMenu_DrawMenuRows(Menu *pMenu)
     short rect[4];
     int i;
     int y;
+    BYTE titleFont;
+    BYTE bodyFont;
     char *string1;
     char *string2;
     int *pColour;
     Texture *texture;
 
+    titleFont = Font_GetTitleSlot();
+    bodyFont = Font_GetBodySlot();
     rect[0] = 0;
     rect[1] = 0;
     rect[2] = (short)g_pGraphics->resX;
@@ -4955,16 +4962,18 @@ void InRaceMenu_DrawMenuRows(Menu *pMenu)
             string2 = CFrontend::GetTextString(pItem->id + 1);
         }
         if (pMenu->cursor == i) {
-            Font_DrawText(1, string1, (int)(g_pGraphics->resX * 0x86) / 0x280, y,
+            Font_DrawText(titleFont, string1, (int)(g_pGraphics->resX * 0x86) / 0x280, y,
                           &g_inRaceMenuSelectedColour, 0x11);
-            Font_DrawText(0, string2, (int)(g_pGraphics->resX * 0x86) / 0x280,
+            Font_DrawText(bodyFont, string2,
+                          (int)(g_pGraphics->resX * 0x86) / 0x280,
                           (int)(g_pGraphics->resY * 0xf) / 0x1e0 + y, &g_inRaceMenuSelectedColour, 0x11);
             pColour = &g_inRaceMenuSelectedColour;
             texture = g_inRaceMenuUpArrowTexture;
         } else {
-            Font_DrawText(1, string1, (int)(g_pGraphics->resX * 0x86) / 0x280, y,
+            Font_DrawText(titleFont, string1, (int)(g_pGraphics->resX * 0x86) / 0x280, y,
                           &g_inRaceMenuUnselectedColour, 0x11);
-            Font_DrawText(0, string2, (int)(g_pGraphics->resX * 0x86) / 0x280,
+            Font_DrawText(bodyFont, string2,
+                          (int)(g_pGraphics->resX * 0x86) / 0x280,
                           (int)(g_pGraphics->resY * 0xf) / 0x1e0 + y, &g_inRaceMenuUnselectedColour, 0x11);
             pColour = &g_inRaceMenuUnselectedColour;
             texture = g_inRaceMenuDownArrowTexture;

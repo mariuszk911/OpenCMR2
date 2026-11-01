@@ -2960,11 +2960,6 @@ void Race_UpdateDriverReadyAndRecordState(CallbackStateMachine *param1, unsigned
             ready = ready + 1;
     }
     flag = (g_unk0x00537fcc == (RallyDataState() & 0xff) && ready == 0);
-    // PORT: AMIGA: the attract demo must not treat the 400-frame record hold
-    // as a finish. It was ending the replay immediately after the first AI
-    // frame. Keep the driving state until the car actually finishes.
-    if (CGameInfo::GetGameInfoSessionFlag() != 0 && Race_GetPlayerRecordField4(0) == 0)
-        flag = 0;
     Race_UpdatePlayerViewAndDrivenCars((BYTE)param1->records[0].packedState, 1);
     if (CGameInfo::GetGameModeOptionBit19() != 0) {
         NetRace_DrainPendingMessages();
@@ -2977,11 +2972,7 @@ void Race_UpdateDriverReadyAndRecordState(CallbackStateMachine *param1, unsigned
             }
         }
     }
-    // PORT: AMIGA: the frontend session flag is set for the attract/demo
-    // session too; using it here promoted state 9 to the replay/fade state on
-    // the first frame. Attract must wait for the real race-end flag.
-    if (flag == 0 && (GameInfo_GetFrontendSessionFlag() == 0 ||
-                      CGameInfo::GetGameInfoSessionFlag() != 0)) {
+    if (flag == 0 && GameInfo_GetFrontendSessionFlag() == 0) {
         g_unk0x00537f08 = 1;
         return;
     }
@@ -3380,17 +3371,18 @@ void Race_HandleStageReplayViewTransitions(CallbackStateMachine *param1, unsigne
     int n;
     int skip = 0;
     int count;
-    BYTE *p;
     BYTE **pp;
     CallbackStateMachine *pPlayers = param1;
 
     count = pPlayers->count;
     if (count >= 1) {
-        p = (BYTE *)(pPlayers)->records;
+        // PORT: AMIGA: read the state through the record bitfield. The raw
+        // first byte is the little-endian state; on 68k it is the high byte of
+        // the packed state, so this check always returned early and the exit
+        // flag was never consumed.
         for (i = 0; i < count; i++) {
-            if (*p != 11)
+            if (pPlayers->records[i].bits.state != 11)
                 return;
-            p += 8;
         }
     }
     if ((char)param2 != 0)
@@ -5346,10 +5338,10 @@ void Race_UpdatePlayerViewAndDrivenCars(BYTE param1, int param2)
     int count;
     int player;
     int flag;
-    int key;
     int k;
     int value;
     int index;
+    int key;
     BYTE b1;
     int b2;
     BYTE b3;
@@ -5430,8 +5422,7 @@ void Race_UpdatePlayerViewAndDrivenCars(BYTE param1, int param2)
                         CarInput_UpdateRaceOrderSlot(g_raceUpdateCar);
                     break;
                 case 9:
-                    if ((char)RallyData_GetSelectionFlag26() != 0 ||
-                            (char)CGameInfo::GetGameInfoSessionFlag() != 0) {
+                    if ((char)RallyData_GetSelectionFlag26() != 0) {
                         if (g_raceUpdateCar < count)
                             AI_UpdateAttractDrivingControls(g_raceUpdateCar, 0);
                         else
@@ -5478,7 +5469,7 @@ void Race_UpdatePlayerViewAndDrivenCars(BYTE param1, int param2)
             }
         }
         if ((char)CGameInfo::GetGameInfoSessionFlag() != 0 && player != 0 &&
-            (char)((CallbackStateMachine *)StageUI_GetRaceResultTable())->records[0].packedState == 13) {
+            (char)((CallbackStateMachine *)StageUI_GetRaceResultTable())->records[0].bits.state == 13) {
             if (g_unk0x00537f78[5] != 0) {
                 Input_ClearCharacterQueue();
                 g_unk0x00537f78[5] = 0;

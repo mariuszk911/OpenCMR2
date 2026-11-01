@@ -115,10 +115,37 @@ double fmin(double x, double y) { return x < y ? x : (x != x ? y : (y != y ? x :
 
 /* FTOI(__int64, ...) in the CMR2_QIFIST units is llrint. libnix's version is a
  * soft-float stub and does not return in the hard-float calling convention, so
- * it produced 0 for every conversion. Round half away from zero, which is exact
- * for the integer-valued fixed-point inputs the game converts. */
-long long llrint(double x) { return (long long)(x < 0.0 ? x - 0.5 : x + 0.5); }
-long lrint(double x) { return (long)(x < 0.0 ? x - 0.5 : x + 0.5); }
+ * it produced 0 for every conversion.
+ *
+ * FTOI must give the x87 FISTP result the game was built with: round to
+ * nearest, ties to even, under control word 0x027f (see game/FloatToInt.h and
+ * tests/ftoi_fistp.cpp). Rounding ties away from zero instead flips the
+ * conversion of an exact half, and the fixed-point maths does produce them:
+ * FixAcos alone has half-mantissa results in its 16.16 domain, and one
+ * flipped index shifts a corner friction angle by 1/4096 turn. That was the
+ * attract replay's divergence: the car left the demo's line halfway through
+ * the first long corner.
+ *
+ * The game never changes the FPU rounding mode, so it is the default
+ * round-to-nearest-even. Adding and subtracting 2^52 rounds the magnitude to
+ * an integer with that mode (ties to even), and is exact for |x| < 2^52;
+ * larger values are already integral. Values outside the 64-bit range store
+ * the same integer indefinite as Ftoi_Fist64. */
+long long llrint(double x)
+{
+	const double two52 = 4503599627370496.0;
+	double ax;
+	double r;
+
+	if (!(x >= -9223372036854775808.0 && x < 9223372036854775808.0))
+		return (long long)(UINT64_C(1) << 63);
+	ax = fabs(x);
+	if (ax >= two52)
+		return (long long)x;
+	r = (ax + two52) - two52;
+	return (long long)(x < 0.0 ? -r : r);
+}
+long lrint(double x) { return (long)llrint(x); }
 long long llrintf(float x) { return llrint((double)x); }
 long lrintf(float x) { return lrint((double)x); }
 

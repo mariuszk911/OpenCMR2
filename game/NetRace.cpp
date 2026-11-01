@@ -11,6 +11,7 @@
 #include "RallyData.h"
 #include "FixedPoint.h"
 #include "main.h"
+#include "port/colour.h"
 extern const float g_netOne;
 extern const float g_netZero;
 extern const float g_netFontOffset;
@@ -472,9 +473,9 @@ void NetRace_DrawPlayerFlashOverlay(unsigned int player, short *pRect, int check
             alpha = g_unk0x0053a06c[view] * 0xff >> 16;
             if (alpha > 0xff)
                 alpha |= 0xff;
-            colour[0] = ((BYTE *)&g_unk0x0053a00c[player & 0xff])[0];
-            colour[1] = ((BYTE *)&g_unk0x0053a00c[player & 0xff])[1];
-            colour[2] = ((BYTE *)&g_unk0x0053a00c[player & 0xff])[2];
+            // PORT: AMIGA: the packed colour is an x86 BGRA dword; read its
+            // channels by value so the bytes stay B,G,R on big-endian 68k.
+            Gfx_UnpackArgbToBgra(g_unk0x0053a00c[player & 0xff], colour);
             colour[3] = (BYTE)alpha;
             Sprite_FillRect(&g_pGraphics->field309_0x150, pRect, colour, g_unk0x0053a20c[view]);
         }

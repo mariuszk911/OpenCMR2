@@ -1443,12 +1443,23 @@ BOOL CGame::UpdateInRaceCallbackMachine(void)
         if (CGameInfo::IsInRaceMenuOpen() != 0) {
             InRaceMenu_UpdateStateMachineFrame(&g_raceCallbackStorage.machine);
             InRaceMenu_AdvanceScreenEntries(&g_raceCallbackStorage.machine);
-            // PORT: AMIGA: this path returns before the state render callbacks,
-            // and the screen-entry pass draws the page before the scene; queue it
-            // again so the in-race pause menu is composed for the frame.
-            InRaceMenu_DrawActivePage();
             AdvanceCallbackStateTimers(&g_raceCallbackStorage.machine);
             return FALSE;
+        }
+        {
+            extern BYTE g_unk0x0053810d;
+            if (g_unk0x0053810d != 0) {
+                // PORT: AMIGA: the pause-menu exit sets this flag from any race
+                // state, but its handler lives in state 11. During the countdown
+                // and other pre-race states the normal promotion does not reach
+                // state 11, so the closed menu left the game paused on the fade.
+                // Force the exit state so the next dispatch tears the race down.
+                for (i = 0; i < g_raceCallbackStorage.machine.count; i++) {
+                    g_raceCallbackStorage.machine.records[i].bits.state = 11;
+                    g_raceCallbackStorage.machine.records[i].bits.level = 1;
+                    g_raceCallbackStorage.machine.records[i].bits.rule = 0;
+                }
+            }
         }
         RunStateUpdateCallbacks(&g_raceCallbackStorage.machine);
         RunStateRenderCallbacks(&g_raceCallbackStorage.machine);

@@ -5651,7 +5651,9 @@ void FrontendMenu_SelectDisplayDevice(Menu *pMenu, int param)
     CGameInfo::SetGraphicsOptionBits21To24(1);
     g_pGraphics->field917_0x3c0 = 1;
     CGameInfo::SetGraphicsOptionBits25To26(1);
-    CGameInfo::SetGraphicsOptionBits27To28(1);
+    // Match the game-info defaults: 0 selects the H (day/high-sun) demo,
+    // 1 selects L (night/low-sun) and the white night stage light.
+    CGameInfo::SetGraphicsOptionBits27To28(0);
     CGameInfo::SetPreviewMode(2);
     Menu_SetNextAction(pMenu->pParent);
 }

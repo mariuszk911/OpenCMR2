@@ -1,4 +1,5 @@
 #include "port/sys.h"
+#include "port/colour.h"
 #include <stddef.h>
 #include <stdarg.h>
 #include <windows.h>
@@ -2321,18 +2322,18 @@ BYTE g_menuTextColour[4] = { 0xa7, 0xac, 0xdb, 0xff };
         sprintf(CFrontend::m_stringDest, g_standingsRowFormat,                                   \
                 CFrontend::GetTextString(pItem->id),                                             \
                 (char *)RallyData_GetRecord((BYTE)(StageUI_GetRaceEndEventCount() + 1)));                        \
-        Font_DrawText(1, CFrontend::m_stringDest, (int)(g_pGraphics->resX * 0x86) / 0x280,       \
+        Font_DrawText(titleFont, CFrontend::m_stringDest, (int)(g_pGraphics->resX * 0x86) / 0x280,  \
                       (int)(g_pGraphics->resY * 0xde) / 0x1e0 +                                  \
                           ((int)(g_pGraphics->resY * 0x36) / 0x1e0) * i,                         \
                       (int *)pColour, 0x11);                                                     \
     } else {                                                                                     \
-        Font_DrawText(1, CFrontend::GetTextString(pItem->id),                                    \
+        Font_DrawText(titleFont, CFrontend::GetTextString(pItem->id),                             \
                       (int)(g_pGraphics->resX * 0x86) / 0x280,                                   \
                       (int)(g_pGraphics->resY * 0xde) / 0x1e0 +                                  \
                           ((int)(g_pGraphics->resY * 0x36) / 0x1e0) * i,                         \
                       (int *)pColour, 0x11);                                                     \
     }                                                                                            \
-    Font_DrawText(0, CFrontend::GetTextString(pItem->id + 1),                                    \
+    Font_DrawText(bodyFont, CFrontend::GetTextString(pItem->id + 1),                             \
                   (int)(g_pGraphics->resX * 0x86) / 0x280,                                       \
                   (int)(g_pGraphics->resY * 0xf) / 0x1e0 +                                       \
                       (int)(g_pGraphics->resY * 0xde) / 0x1e0 +                                  \
@@ -2437,7 +2438,11 @@ void GameMenu_DrawStandingsMenuItems(Menu *pMenu)
     short rect[4];
     int x;
     int i;
+    BYTE titleFont;
+    BYTE bodyFont;
 
+    titleFont = Font_GetTitleSlot();
+    bodyFont = Font_GetBodySlot();
     x = (int)(g_pGraphics->resX * 0x1e) / 0x280;
     GameMenu_ClearMenuListWithHighlight();
     Font_DrawText(2, CFrontend::GetTextString(0x56), x, (int)(g_pGraphics->resY * 0x43) / 0x1e0,
@@ -2765,7 +2770,7 @@ void GameMenus_DrawTextRow(int x, int y, char *pText, ...)
 }
 
 // GLOBAL: CMR2 0x00519ed4
-DWORD g_menuHighlightColour = 0xbfae8072;
+DWORD g_menuHighlightColour = OPENCMR2_RGBA32(0x72, 0x80, 0xae, 0xbf);
 
 void *RallyData_GetAssignedCategoryRecord(unsigned int param1);
 BYTE Graphics_IsRegisteredTimerRunning(BYTE *p);
@@ -2901,7 +2906,11 @@ void GameMenu_DrawNetworkTimeTrialResults(Menu *pMenu)
     BYTE *pEntries;
     int i;
     int y;
+    BYTE titleFont;
+    BYTE bodyFont;
 
+    titleFont = Font_GetTitleSlot();
+    bodyFont = Font_GetBodySlot();
     rect[0] = (short)((int)(g_pGraphics->resX * 0x6c) / 0x280 - (int)(g_pGraphics->resX * 0x46) / 0x280);
     rect[1] = (short)((int)(g_pGraphics->resY * 0x55) / 0x1e0);
     rect[2] = (short)((int)(g_pGraphics->resX * 0x1a9) / 0x280);

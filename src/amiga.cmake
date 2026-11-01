@@ -341,3 +341,15 @@ target_link_libraries(amiga_menu_layout_test PRIVATE opencmr2_domain_a)
 target_include_directories(amiga_menu_layout_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
 opencmr2_amiga_stack(amiga_menu_layout_test)
+
+# The FTOI contract where the conversion is llrint: the hard-float shim must
+# round to nearest, ties to even, like the x87 FISTP the game was built with
+# (tests/ftoi_fistp.cpp on x86). Rounding ties away from zero made the attract
+# replay diverge from the recorded line.
+add_executable(amiga_ftoi_ties_test ${PROJECT_SOURCE_DIR}/tests/ftoi_ties.cpp
+    platform/amiga/amiga_libfix.c)
+target_include_directories(amiga_ftoi_ties_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR})
+target_compile_options(amiga_ftoi_ties_test PRIVATE "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/port/types.h")
+set_source_files_properties(platform/amiga/amiga_libfix.c TARGET_DIRECTORY amiga_ftoi_ties_test
+    PROPERTIES COMPILE_FLAGS "-fno-builtin -fno-math-errno")
+opencmr2_amiga_stack(amiga_ftoi_ties_test)

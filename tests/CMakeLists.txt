@@ -360,6 +360,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "i[3-6]86|x86|AMD64|amd64")
     add_test(NAME ftoi_fistp COMMAND ftoi_fistp_test)
 endif()
 
+# The same contract where FTOI is llrint: ties to even, including the exact
+# 24-bit halves the fixed-point maths produces. Also built for the Amiga target
+# (src/amiga.cmake), where llrint is the hard-float shim.
+add_executable(ftoi_ties_test ftoi_ties.cpp)
+target_include_directories(ftoi_ties_test PRIVATE ${PROJECT_SOURCE_DIR}/game)
+target_compile_options(ftoi_ties_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")
+add_test(NAME ftoi_ties COMMAND ftoi_ties_test)
+
 # Tests that run game code, on every target.
 add_executable(math_tables_test math_tables.cpp)
 target_link_libraries(math_tables_test PRIVATE opencmr2_platform)

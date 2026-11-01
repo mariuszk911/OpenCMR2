@@ -66,7 +66,15 @@ void SampleToDisk(unsigned char *dst, const ReplaySample &sample) {
 void PayloadToHost(ReplayStream &p) {
     if (p.type == 0) {
         for (int i = 0; i < p.laneCapacity; ++i) {
-            IntsToHost(p.pInputs[i].raceRecord, 6);
+            // RaceRecord: five ints followed by two shorts (0x14/0x16).
+            // Converting the last int as a dword swaps those shorts on 68k;
+            // field_0x14 is the route node used by the attract AI.
+            unsigned char *record = reinterpret_cast<unsigned char *>(p.pInputs[i].raceRecord);
+            IntsToHost(p.pInputs[i].raceRecord, 5);
+            const short field14 = (short)ReadLE16(record + 0x14);
+            const short field16 = (short)ReadLE16(record + 0x16);
+            memcpy(record + 0x14, &field14, sizeof(field14));
+            memcpy(record + 0x16, &field16, sizeof(field16));
             for (int j = 0; j < 10; ++j)
                 EventToHost(p.pInputs[i].events[j]);
         }
@@ -91,7 +99,14 @@ void PayloadToDisk(const ReplayStream &p, unsigned char *payload) {
     for (int i = 0; i < p.laneCapacity; ++i) {
         unsigned char *lane = payload + size_t(i) * record;
         if (p.type == 0) {
-            IntsToDisk(lane + offsetof(ReplayInputLane, raceRecord), p.pInputs[i].raceRecord, 6);
+            // RaceRecord: five ints and two shorts; see PayloadToHost.
+            unsigned char *record = reinterpret_cast<unsigned char *>(p.pInputs[i].raceRecord);
+            IntsToDisk(lane + offsetof(ReplayInputLane, raceRecord), p.pInputs[i].raceRecord, 5);
+            short field14, field16;
+            memcpy(&field14, record + 0x14, sizeof(field14));
+            memcpy(&field16, record + 0x16, sizeof(field16));
+            WriteLE16(lane + offsetof(ReplayInputLane, raceRecord) + 0x14, (uint16_t)field14);
+            WriteLE16(lane + offsetof(ReplayInputLane, raceRecord) + 0x16, (uint16_t)field16);
             for (int j = 0; j < 10; ++j)
                 EventToDisk(lane + offsetof(ReplayInputLane, events) + size_t(j) * sizeof(ReplayEvent),
                             p.pInputs[i].events[j]);

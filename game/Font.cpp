@@ -262,6 +262,33 @@ int Font_GetLineHeight(BYTE index)
     return 0;
 }
 
+// PORT: AMIGA: the frontend and option-menu font tables map slots in opposite
+// order, and one of them can fail to load. Pick the larger loaded font for a
+// row title and the other loaded font for its subtitle.
+BYTE Font_GetTitleSlot(void)
+{
+    int h0 = Font_GetLineHeight(0);
+    int h1 = Font_GetLineHeight(1);
+
+    if (h0 == 0 && h1 == 0)
+        return 0;
+    if (h0 == 0)
+        return 1;
+    if (h1 == 0)
+        return 0;
+    return (BYTE)(h1 > h0 ? 1 : 0);
+}
+
+BYTE Font_GetBodySlot(void)
+{
+    int h0 = Font_GetLineHeight(0);
+    int h1 = Font_GetLineHeight(1);
+
+    if (h0 == 0 || h1 == 0)
+        return Font_GetTitleSlot();
+    return (BYTE)(Font_GetTitleSlot() ^ 1);
+}
+
 // FUNCTION: CMR2 0x0040b7c0
 void Font_DrawChar(BYTE ch, short x, short y)
 {

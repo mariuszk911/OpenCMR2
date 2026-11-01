@@ -5950,7 +5950,10 @@ void StageObject_PositionRearViewLightNodes(unsigned int param_1)
     car = param_1;
     pCar = Car_Get(car);
     level = StageObject_GetSceneLightBrightness();
-    pCar->field_0xb58 = level == 0x10000 ? 0 : 1;
+    // Headlights follow darkness, not "not exactly full brightness": a
+    // firework ambient flash used to change the level and switch them on in
+    // daylight. Keep them off unless the scene is actually dark.
+    pCar->field_0xb58 = level < 0x8000 ? 1 : 0;
     value = FixMul(0x4c0000, level);
     CarLight_GetScaledChannelLevels(car, (int *)&param_1, (int *)&param_1, 4);
     if (param_1 == 0)
@@ -13849,6 +13852,47 @@ void AI_UpdateRouteDrivingControls(Car *pCar, int car, int preview)
         force = 1;
     else
         force = controls[4];
+    {
+        // Temporary CPU/replay AI diagnostics: node, speed, lateral/heading
+        // error, wall response and applied controls.
+        static unsigned int aiRouteTrace;
+        static unsigned int aiRouteLastNode[8];
+        static BYTE aiRouteFlags[8];
+        int spd = AI_INT(0);
+        int lat = AI_INT(0x38);
+        int head = AI_INT(0x64);
+        int wall = AI_CHAR(0xa4);
+        BYTE flags = 0;
+
+        if (spd < 0x80000)
+            flags |= 1;
+        if (spd > 0x500000)
+            flags |= 2;
+        if (wall != 0 || lat > 0x100000 || lat < -0x100000)
+            flags |= 4;
+        if ((aiRouteTrace % 50) == 0)
+            Sys_Log("AIROUTE car=%d pv=%d node=%d spd=%d carspd=%d lat=%d head=%d "
+                    "mode=%d wall=%d c=%d/%d/%d/%d/%d hb=%d tick=%lu",
+                    car, preview, node, spd, pCar->speed, lat, head, modes[0], wall,
+                    controls[0], controls[1], controls[2], controls[3], force,
+                    pCar->handbrake, (unsigned long)Sys_GetTicks());
+        if ((flags & 1) && !(aiRouteFlags[car & 7] & 1))
+            Sys_Log("AIROUTE STALL car=%d node=%d spd=%d lat=%d wall=%d",
+                    car, node, spd, lat, wall);
+        if ((flags & 2) && !(aiRouteFlags[car & 7] & 2))
+            Sys_Log("AIROUTE RUSH car=%d node=%d spd=%d carspd=%d",
+                    car, node, spd, pCar->speed);
+        if ((flags & 4) && !(aiRouteFlags[car & 7] & 4))
+            Sys_Log("AIROUTE DIVERGE car=%d node=%d spd=%d lat=%d head=%d wall=%d",
+                    car, node, spd, lat, head, wall);
+        aiRouteFlags[car & 7] = flags;
+        if (aiRouteLastNode[car & 7] != (unsigned int)node) {
+            Sys_Log("AIROUTE NODE car=%d %u->%d spd=%d carspd=%d",
+                    car, aiRouteLastNode[car & 7], node, spd, pCar->speed);
+            aiRouteLastNode[car & 7] = (unsigned int)node;
+        }
+        aiRouteTrace++;
+    }
     if (preview != 0)
         return;
     pCar->flag0x1d0[0] = 0;
@@ -14110,6 +14154,8 @@ void StageTiming_UpdateAllViewWeather(void);
 // up the camera event of the current frame. Ends the replay after the last
 // section.
 // FUNCTION: CMR2 0x0046cfa0
+short RallyData_GetActiveCarRaceRecordField14(Car *p);
+
 void Replay_PlayStreamFrame(ReplayStream *pState)
 {
     ReplayStream *p;
@@ -14198,6 +14244,24 @@ void Replay_PlayStreamFrame(ReplayStream *pState)
         } else {
             p->playStarted = 1;
             p->pStateLane = p->pStates + p->lane;
+        }
+    }
+    {
+        // Temporary replay timing diagnostics: frame advance vs call rate.
+        static unsigned int rplTrace;
+        if ((rplTrace++ % 50) == 0) {
+            int lane = p->lane & 0xff;
+            int total = (p->pLaneSamples != NULL && lane < p->laneCount)
+                            ? p->pLaneSamples[lane] : -1;
+            Sys_Log("RPL car=%d type=%d frame=%d/%d lane=%d/%d spl=%d step=%d "
+                    "spd=%d node=%d pos=%d/%d/%d in=%d/%d/%d/%d hb=%d tick=%lu",
+                    p->car, p->type, p->frame, total, lane, p->laneCount,
+                    p->samplesPerLane, p->step, pCar->speed,
+                    (int)RallyData_GetActiveCarRaceRecordField14(pCar),
+                    pCar->position.x, pCar->position.y, pCar->position.z,
+                    pCar->flag0x1d0[0], pCar->flag0x1d0[1],
+                    pCar->flag0x1d0[2], pCar->flag0x1d0[3], pCar->handbrake,
+                    (unsigned long)Sys_GetTicks());
         }
     }
 }
@@ -15150,12 +15214,11 @@ int AI_UpdateAttractDrivingControls(int car, int preview)
 
     pCar = Car_Get(car);
     node = (unsigned short)RallyData_GetActiveCarRaceRecordField14(pCar);
-    // PORT: AMIGA: route node 0 has no previous node; the angle wrap below
-    // turns it into the last node and the demo AI applies full lock/brake.
-    if (node == 0 && (char)CGameInfo::GetGameInfoSessionFlag() != 0)
-        node = 1;
-    if (node + 5 > (unsigned int)RallyData_GetRouteStateValue())
+    if (node + 5 > (unsigned int)RallyData_GetRouteStateValue()) {
+        Sys_Log("AI END car=%d node=%u route=%u spd=%d", car, node,
+                (unsigned int)RallyData_GetRouteStateValue(), pCar->speed);
         return 0;
+    }
     state[0x15] = node;
     StageTiming_RecomputeCarSplitBarSamples(pCar, 0x342, state, 0);
     handbrake = 0;
@@ -15219,6 +15282,47 @@ int AI_UpdateAttractDrivingControls(int car, int preview)
     if (state[0] >= 0x190000)
         throttle = 0;
 apply:
+    {
+        // Temporary AI-ride diagnostics: periodic state plus one-shot
+        // stall/divergence/rush and route-node events.
+        static unsigned int aiTrace;
+        static unsigned int aiLastNode[8];
+        static BYTE aiFlags[8];
+        unsigned int route = (unsigned int)RallyData_GetRouteStateValue();
+        int spd = state[0];
+        int lat = state[7];
+        int head = state[0xe];
+        BYTE flags = 0;
+
+        if (spd < 0x80000)
+            flags |= 1;
+        if (spd > 0x500000)
+            flags |= 2;
+        if (lat > 0x100000 || lat < -0x100000 ||
+            head > 0x5a0000 || head < -0x5a0000 || mode != 0)
+            flags |= 4;
+        if ((aiTrace % 50) == 0)
+            Sys_Log("AI car=%d node=%u/%u spd=%d carspd=%d lat=%d head=%d mode=%d "
+                    "thr=%d brk=%d l=%d r=%d hb=%d lights=%d tick=%lu",
+                    car, node, route, spd, pCar->speed, lat, head, mode,
+                    throttle, brake, left, right, handbrake, pCar->field_0xb58,
+                    (unsigned long)Sys_GetTicks());
+        if ((flags & 1) && !(aiFlags[car & 7] & 1))
+            Sys_Log("AI STALL car=%d node=%u spd=%d thr=%d brk=%d", car, node, spd,
+                    throttle, brake);
+        if ((flags & 2) && !(aiFlags[car & 7] & 2))
+            Sys_Log("AI RUSH car=%d node=%u spd=%d brk=%d", car, node, spd, brake);
+        if ((flags & 4) && !(aiFlags[car & 7] & 4))
+            Sys_Log("AI DIVERGE car=%d node=%u spd=%d lat=%d head=%d mode=%d",
+                    car, node, spd, lat, head, mode);
+        aiFlags[car & 7] = flags;
+        if (aiLastNode[car & 7] != node) {
+            Sys_Log("AI NODE car=%d %u->%u spd=%d carspd=%d", car,
+                    aiLastNode[car & 7], node, spd, pCar->speed);
+            aiLastNode[car & 7] = node;
+        }
+        aiTrace++;
+    }
     if (preview != 0)
         return 1;
     pCar->flag0x1d0[0] = 0;
@@ -15420,8 +15524,20 @@ void Fireworks_Update(void)
                 if (pRocket->sound != -1 && Sound_IsPlaying(pRocket->sound))
                     Sound_Free(pRocket->sound);
                 pRocket->state = 2;
-                g_stageAmbientFlashLevel = 0x10000;
-                *(DWORD *)g_stageAmbientFlashColour = g_fireworkFlashColours[pRocket->colour];
+                // The ambient flash is added to the whole scene; keep it below
+                // the original full scale so a burst does not wash out the
+                // stage and car. 0x10000 is the original maximum.
+                g_stageAmbientFlashLevel = 0x2000;
+                {
+                    // PORT: AMIGA: the table is 0xAARRGGBB; the ambient fade
+                    // reads R,G,B,A bytes. Unpack the channels explicitly so
+                    // the flash does not take alpha as red on 68k.
+                    DWORD firework = g_fireworkFlashColours[pRocket->colour];
+                    g_stageAmbientFlashColour[0] = (BYTE)(firework >> 16);
+                    g_stageAmbientFlashColour[1] = (BYTE)(firework >> 8);
+                    g_stageAmbientFlashColour[2] = (BYTE)firework;
+                    g_stageAmbientFlashColour[3] = (BYTE)(firework >> 24);
+                }
                 if (pRocket->burst != 0) {
                     pRocket->prevPos = pRocket->pos;
                     for (k = 0; k < 20; k++)

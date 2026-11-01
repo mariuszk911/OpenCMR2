@@ -85,6 +85,8 @@ void Font_Select(BYTE index, int *pColour);
 int Font_GetTextWidth(BYTE index, BYTE *text);
 int Font_GetTextHeight(BYTE index, char *text);
 int Font_GetLineHeight(BYTE index);
+BYTE Font_GetTitleSlot(void);
+BYTE Font_GetBodySlot(void);
 void Font_DrawChar(BYTE ch, short x, short y);
 void Font_DrawText(BYTE index, char *text, short x, short y, int *pColour, unsigned int flags);
 void Font_SetBlendMode(int mode);
