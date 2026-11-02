@@ -57,6 +57,12 @@ namespace {
 // mglChooseVertexBufferSize taking effect in whatever library version is
 // installed. Lists are split at a whole primitive, strips/fans are flattened.
 enum { kMaxBlockVertices = 256 };
+// Client arrays (Task 1.3b). GLDrawElements chunks internally at
+// min(VertexBufferSize, MGL_MAXVERTS=1024) (gl/src/vertexelements.c), so the
+// renderer submits one call per draw and does not chunk itself. Every absolute
+// index must stay below 16384 because the array pipeline transforms by
+// absolute index.
+enum { kArrayMaxIndex = 16384, kArrayFastVertexLimit = 1024 };
 
 struct CapabilityPolicy {
     int probed;
@@ -68,6 +74,11 @@ struct CapabilityPolicy {
     int hasAdd;
     int hasColorMaterial;
     int hasBlendSubtract;
+    // Client arrays (Task 1.3b): probed once, and only when requested through
+    // video.client_arrays. `clientArrayUnits` is how many texcoord arrays the
+    // library accepts (unit 1 is unproven on MiniGL 29.x).
+    int clientArrays;
+    int clientArrayUnits;
 };
 
 struct StageState {
@@ -116,6 +127,9 @@ struct GlStateCache {
     uint32_t loadedWorldViewGen;
     uint32_t loadedProjectionGen;
     GLfloat glProjection[16];
+    // glEnableClientState bits kept across draws so a draw that needs the same
+    // arrays costs no dispatch calls (bit values: kClientArray* below).
+    uint32_t clientArrayMask;
 };
 
 // Lighting state is uploaded only when a writer invalidates it. Every setter
@@ -159,6 +173,28 @@ struct StageDiagnostics {
     uint32_t timingPresentCalls;
     uint64_t timingPresentUs;
 #endif
+    // Draw-size histogram for the client-array decision (Task 1.3b): draws
+    // bucketed by index count (or vertex count for non-indexed draws), plus how
+    // many are plain GL_TRIANGLES, which is the only primitive MiniGL accepts
+    // through the array pipeline.
+    uint32_t drawSizeHistogram[7];
+    uint32_t triangleIndexedDraws;
+    uint32_t trianglePlainDraws;
+    uint32_t otherPrimitiveDraws;
+    // Task 1.3b eligibility: plain indexed triangles at or above librw's
+    // 12-index threshold, split by whether the direct-texcoord fast path also
+    // allows a client-array submission (no reflection texgen, no texture
+    // transform). Draws the array path could not take are counted separately.
+    uint32_t arrayEligibleDraws;
+    uint32_t arrayEligibleIndices;
+    uint32_t arrayRejectedDraws;
+    // Draws actually submitted through glDrawElements, and the indices they
+    // carried, so the A/B can prove the path was taken.
+    uint32_t arrayDraws;
+    uint32_t arrayIndices;
+    // Draws whose referenced vertex span exceeds the library's 1024-vertex
+    // fast-path limit, i.e. the ones compaction would help.
+    uint32_t arraySpanOverLimitDraws;
     // Bumped by every FlushStageDiagnostics() reset. The benchmark window takes
     // a delta of this struct, so a flush inside the window is detectable.
     uint32_t flushSerial;
@@ -175,6 +211,9 @@ uint64_t SectionUsFromMs(double ms)
 
 void *s_context;
 int s_miniglOpen;
+// video.client_arrays is read once when the context is created; it must also
+// size the array scratch before MiniGL allocates it.
+int s_clientArraysRequested;
 CapabilityPolicy s_caps;
 GlStateCache s_glCache;
 LightingCache s_lightingCache;
@@ -382,6 +421,7 @@ void InvalidateGlCache(void)
     s_glCache.texEnvMode[1] = 0;
     s_glCache.loadedWorldViewGen = ~0u;
     s_glCache.loadedProjectionGen = ~0u;
+    s_glCache.clientArrayMask = 0;
     InvalidateLightingCache();
 }
 
@@ -418,6 +458,29 @@ void LogDiagnosticLines(const char *summaryLabel, const char *countersLabel,
             (unsigned)(now.stageSetterCalls - base.stageSetterCalls),
             (unsigned)(now.lightingSetterCalls - base.lightingSetterCalls),
             (unsigned)(now.indicesValidated - base.indicesValidated));
+    // Buckets: <=12, <=32, <=64, <=128, <=256, <=1024, >1024.
+    Sys_Log("AMIGA: %s%s: <=12=%u <=32=%u <=64=%u <=128=%u <=256=%u <=1024=%u >1024=%u; "
+            "triIndexed=%u triPlain=%u other=%u",
+            countersLabel, q,
+            (unsigned)(now.drawSizeHistogram[0] - base.drawSizeHistogram[0]),
+            (unsigned)(now.drawSizeHistogram[1] - base.drawSizeHistogram[1]),
+            (unsigned)(now.drawSizeHistogram[2] - base.drawSizeHistogram[2]),
+            (unsigned)(now.drawSizeHistogram[3] - base.drawSizeHistogram[3]),
+            (unsigned)(now.drawSizeHistogram[4] - base.drawSizeHistogram[4]),
+            (unsigned)(now.drawSizeHistogram[5] - base.drawSizeHistogram[5]),
+            (unsigned)(now.drawSizeHistogram[6] - base.drawSizeHistogram[6]),
+            (unsigned)(now.triangleIndexedDraws - base.triangleIndexedDraws),
+            (unsigned)(now.trianglePlainDraws - base.trianglePlainDraws),
+            (unsigned)(now.otherPrimitiveDraws - base.otherPrimitiveDraws));
+    Sys_Log("AMIGA: %s%s: arrayEligibleDraws=%u arrayEligibleIndices=%u arrayRejectedDraws=%u "
+            "arrayDraws=%u arrayIndices=%u arraySpanOverLimit=%u",
+            countersLabel, q,
+            (unsigned)(now.arrayEligibleDraws - base.arrayEligibleDraws),
+            (unsigned)(now.arrayEligibleIndices - base.arrayEligibleIndices),
+            (unsigned)(now.arrayRejectedDraws - base.arrayRejectedDraws),
+            (unsigned)(now.arrayDraws - base.arrayDraws),
+            (unsigned)(now.arrayIndices - base.arrayIndices),
+            (unsigned)(now.arraySpanOverLimitDraws - base.arraySpanOverLimitDraws));
 #if defined(OPENCMR2_MINIGL_SECTION_TIMING)
     // Totals are 64-bit microsecond counts, printed as hi/lo 32-bit halves so a
     // long session cannot wrap. Averages are derived by the reader, not here.
@@ -499,6 +562,31 @@ void EnsureNeutralReflectionTexture(void)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, kNeutralTexels);
 }
 
+// Client-array enable state is cached; only a change issues a GL call. A draw
+// that needs the same arrays as the previous one costs nothing here.
+enum {
+    kClientArrayVertex = 1u << 0,
+    kClientArrayNormal = 1u << 1,
+    kClientArrayColor = 1u << 2,
+    kClientArrayTex0 = 1u << 3,
+    kClientArrayTex1 = 1u << 4
+};
+
+void SetClientArray(uint32_t bit, GLenum cap, int on)
+{
+    const bool want = on != 0;
+    if (((s_glCache.clientArrayMask & bit) != 0) == want)
+        return;
+    if (want)
+        glEnableClientState(cap);
+    else
+        glDisableClientState(cap);
+    if (want)
+        s_glCache.clientArrayMask |= bit;
+    else
+        s_glCache.clientArrayMask &= ~bit;
+}
+
 void ProbeCapabilities(void)
 {
     if (s_caps.probed)
@@ -552,6 +640,28 @@ void ProbeCapabilities(void)
     // Tier selection: Tier 1 when 2+ texture units, GL_ADD, linear fog and
     // alpha test all probe cleanly; Tier 0 baseline otherwise.
     s_caps.tier = (s_caps.maxTexUnits >= 2 && s_caps.hasAdd && s_caps.hasFogLinear && s_caps.hasAlphaTest) ? 1 : 0;
+
+    // Client arrays (Task 1.3b). The vertex/colour/texcoord array entry points
+    // are part of the documented PiStorm3D pipeline; the part that is not
+    // proven on 29.x is a second *client* texcoord unit, so probe that without
+    // drawing anything. The first real array draw additionally checks
+    // glGetError and falls back permanently if the library rejects it.
+    if (s_clientArraysRequested) {
+        s_caps.clientArrays = 1;
+        s_caps.clientArrayUnits = 1;
+        glClientActiveTextureARB(GL_TEXTURE1_ARB);
+        if (glGetError() == GL_NO_ERROR) {
+            glTexCoordPointer(2, GL_FLOAT, (GLsizei)sizeof(GfxVertex), NULL);
+            glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+            if (glGetError() == GL_NO_ERROR)
+                s_caps.clientArrayUnits = 2;
+            glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        }
+        glClientActiveTextureARB(GL_TEXTURE0_ARB);
+        while (glGetError() != GL_NO_ERROR) {}
+        Sys_Log("AMIGA: client arrays requested=1 accepted=1 texcoordUnits=%d",
+                s_caps.clientArrayUnits);
+    }
 
     EnsureNeutralReflectionTexture();
 
@@ -666,7 +776,11 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
     // entries and glVertex has no bounds check. The renderer submits up to 256
     // vertices per glBegin block, so enlarge the buffer before the context
     // allocates it. reVC's MiniGL backend uses 4096 for the immediate path.
-    mglChooseVertexBufferSize(4096);
+    // The client-array pipeline transforms by absolute index and clips from
+    // size/2, so it needs 2 * the largest index. Task 1.3b only; the immediate
+    // path keeps librw's 4096.
+    s_clientArraysRequested = Sys_GetOption("video.client_arrays", 0) != 0;
+    mglChooseVertexBufferSize(s_clientArraysRequested ? 32768 : 4096);
     // PORT: AMIGA: the default texture-object table is 2048 entries; the game
     // reuses one table across stage reloads, so keep headroom and avoid
     // glGenTextures returning 0 (which presents as a bad texture later).
@@ -2256,11 +2370,19 @@ struct EmitPlan {
     bool overrideColor;   // stage argument selects the texture factor
     bool overrideAlpha;
     uint32_t color;
+    // Texcoord half, computed once per draw. `plainList` means the primitive
+    // needs no flatten mapping; `directTexCoord` means every active stage takes
+    // its coordinates straight from the vertex (no reflection texgen and no
+    // texture transform), which is what allows the inlined emit loop.
+    bool plainList;
+    bool directTexCoord;
+    int activeStages;
+    bool stageUsesU1[2];
 };
 
 // Draw-invariant stage-zero colour selection, computed once per draw rather
 // than per vertex.
-EmitPlan BuildEmitPlan(bool prelit)
+EmitPlan BuildEmitPlan(bool prelit, GLenum mode, int activeStages)
 {
     const StageState &s0 = s_stages[0];
     const bool colorFactor =
@@ -2279,10 +2401,26 @@ EmitPlan BuildEmitPlan(bool prelit)
     plan.overrideColor = prelit && colorFactor;
     plan.overrideAlpha = prelit && alphaFactor;
     plan.color = s_textureFactor;
+
+    plan.plainList = mode == GL_TRIANGLES || mode == GL_LINES;
+    plan.activeStages = activeStages;
+    plan.directTexCoord = plan.plainList;
+    for (int i = 0; i < 2; ++i) {
+        plan.stageUsesU1[i] = false;
+        if (i >= activeStages)
+            continue;
+        const StageState &st = s_stages[i];
+        if ((st.texCoordIndex & 0xffff0000u) == GFX_TCI_CAMERASPACEREFLECTIONVECTOR)
+            plan.directTexCoord = false;
+        const int xformType = i == 0 ? GFX_TRANSFORM_TEXTURE0 : GFX_TRANSFORM_TEXTURE1;
+        if (st.textureTransform != GFX_TTFF_DISABLE && s_transformSet[xformType])
+            plan.directTexCoord = false;
+        plan.stageUsesU1[i] = (st.texCoordIndex & 0xffffu) == 1u;
+    }
     return plan;
 }
 
-void Emit3DVertex(const GfxVertex *v, bool lit, const EmitPlan &plan, int activeStages,
+void Emit3DVertex(const GfxVertex *v, bool normals, const EmitPlan &plan, int activeStages,
                   const GfxMatrix &worldView)
 {
     if (activeStages >= 1) {
@@ -2301,7 +2439,7 @@ void Emit3DVertex(const GfxVertex *v, bool lit, const EmitPlan &plan, int active
         glColor4ub((GLubyte)((rgb >> 16) & 0xffu), (GLubyte)((rgb >> 8) & 0xffu),
                    (GLubyte)(rgb & 0xffu), (GLubyte)((alpha >> 24) & 0xffu));
     }
-    if (lit)
+    if (normals)
         glNormal3f(v->nx, v->ny, v->nz);
     glVertex3f(v->x, v->y, v->z);
 }
@@ -2314,10 +2452,151 @@ void EmitTLVertex(const GfxTLVertex *v)
     glVertex2f(v->sx, v->sy);
 }
 
+// Client-array submission for eligible plain triangle draws (Task 1.3b).
+// Returns true when the draw was consumed. The immediate path stays the
+// fallback for every draw this cannot express (lines, strips, texgen, texture
+// transforms, colour overrides, too few indices, indices beyond the library's
+// absolute-index budget) and for the whole session if the library rejects the
+// pipeline at runtime.
+bool Submit3DArrays(const GfxVertex *vertices, const uint16_t *indices,
+                    uint32_t indexCount, const EmitPlan &plan, bool normals)
+{
+    if (!s_caps.clientArrays || indexCount < 12u || !plan.directTexCoord ||
+        plan.activeStages > s_caps.clientArrayUnits ||
+        plan.overrideColor || plan.overrideAlpha)
+        return false;
+
+    uint16_t minIndex = 0xffffu;
+    uint16_t maxIndex = 0;
+    for (uint32_t i = 0; i < indexCount; ++i) {
+        if (indices[i] >= kArrayMaxIndex) {
+            s_diag.arrayRejectedDraws++;
+            return false;
+        }
+        if (indices[i] < minIndex)
+            minIndex = indices[i];
+        if (indices[i] > maxIndex)
+            maxIndex = indices[i];
+    }
+    // The library's fast path covers a bounded vertex window per submission; a
+    // spread-out index list defeats it even when the index count is small.
+    if (minIndex != 0xffffu && (uint32_t)(maxIndex - minIndex) + 1u > (uint32_t)kArrayFastVertexLimit)
+        s_diag.arraySpanOverLimitDraws++;
+
+    const GLsizei stride = (GLsizei)sizeof(GfxVertex);
+    const void *uvSrc = plan.stageUsesU1[0] ? &vertices[0].u1 : &vertices[0].u0;
+    const bool twoStages = plan.activeStages >= 2;
+
+    // Drain first, then configure, so a failure in these calls is not confused
+    // with an earlier error and is itself caught below.
+    while (glGetError() != GL_NO_ERROR) {}
+    glVertexPointer(3, GL_FLOAT, stride, &vertices[0].x);
+    SetClientArray(kClientArrayVertex, GL_VERTEX_ARRAY, 1);
+    if (normals) {
+        glNormalPointer(GL_FLOAT, stride, &vertices[0].nx);
+        SetClientArray(kClientArrayNormal, GL_NORMAL_ARRAY, 1);
+    } else {
+        // A bound normal array also disables the library's fast gather, so it
+        // is disabled rather than merely not re-pointed.
+        SetClientArray(kClientArrayNormal, GL_NORMAL_ARRAY, 0);
+    }
+    if (plan.emitColor) {
+        // GfxVertex packs 0xAARRGGBB, which is A,R,G,B in memory on this
+        // big-endian target; MGL_UBYTE_ARGB is the matching array layout.
+        glColorPointer(4, MGL_UBYTE_ARGB, stride, &vertices[0].diffuse);
+    }
+    SetClientArray(kClientArrayColor, GL_COLOR_ARRAY, plan.emitColor ? 1 : 0);
+    if (plan.activeStages >= 1)
+        glTexCoordPointer(2, GL_FLOAT, stride, uvSrc);
+    SetClientArray(kClientArrayTex0, GL_TEXTURE_COORD_ARRAY, plan.activeStages >= 1 ? 1 : 0);
+    if (twoStages) {
+        glClientActiveTextureARB(GL_TEXTURE1_ARB);
+        glTexCoordPointer(2, GL_FLOAT, stride, plan.stageUsesU1[1] ? &vertices[0].u1 : &vertices[0].u0);
+        SetClientArray(kClientArrayTex1, GL_TEXTURE_COORD_ARRAY, 1);
+        glClientActiveTextureARB(GL_TEXTURE0_ARB);
+    } else if ((s_glCache.clientArrayMask & kClientArrayTex1) != 0) {
+        glClientActiveTextureARB(GL_TEXTURE1_ARB);
+        SetClientArray(kClientArrayTex1, GL_TEXTURE_COORD_ARRAY, 0);
+        glClientActiveTextureARB(GL_TEXTURE0_ARB);
+    }
+    const bool setupFailed = glGetError() != GL_NO_ERROR;
+
+    if (!setupFailed)
+        glDrawElements(GL_TRIANGLES, (GLsizei)indexCount, GL_UNSIGNED_SHORT, indices);
+
+    const bool drawFailed = glGetError() != GL_NO_ERROR;
+    if (setupFailed || drawFailed) {
+        // Hard rejection: keep every later draw on the immediate path instead
+        // of producing wrong or missing geometry. A rejected setup drew
+        // nothing, so the immediate path can still draw this one; a rejected
+        // glDrawElements may have drawn part of it and is not re-submitted.
+        s_caps.clientArrays = 0;
+        Sys_Log("AMIGA: client arrays rejected by MiniGL, falling back to immediate mode");
+        return !setupFailed;
+    }
+
+    s_diag.arrayDraws++;
+    s_diag.arrayIndices += indexCount;
+    return true;
+}
+
 void Submit3DBlocks(GLenum mode, const GfxVertex *vertices, const uint16_t *indices,
-                    uint32_t sourceCount, const EmitPlan &plan, bool lit, int activeStages,
+                    uint32_t sourceCount, const EmitPlan &plan, bool normals, int activeStages,
                     const GfxMatrix &worldView)
 {
+    // Task 1.3b eligibility: the client-array path needs plain indexed
+    // triangles above librw's threshold, plus texcoords that come straight
+    // from the vertex (plan.directTexCoord).
+    if (mode == GL_TRIANGLES && indices != NULL) {
+        if (plan.directTexCoord && !plan.overrideColor && !plan.overrideAlpha) {
+            if (sourceCount >= 12u) {
+                s_diag.arrayEligibleDraws++;
+                s_diag.arrayEligibleIndices += sourceCount;
+            }
+        } else {
+            s_diag.arrayRejectedDraws++;
+        }
+    }
+    if (mode == GL_TRIANGLES && indices != NULL &&
+        Submit3DArrays(vertices, indices, sourceCount, plan, normals))
+        return;
+
+    if (plan.plainList && plan.directTexCoord) {
+        // Plain list: the flatten mapping is the identity and each active stage
+        // reads u0/v0 or u1/v1, so every per-vertex decision is hoisted out of
+        // the loop. The block split still happens at whole primitives.
+        const uint32_t block = BlockVertexCount(mode);
+        const bool useU1Stage0 = plan.stageUsesU1[0];
+        const bool useU1Stage1 = plan.stageUsesU1[1];
+        const int stages = plan.activeStages;
+        for (uint32_t first = 0; first < sourceCount; first += block) {
+            const uint32_t end = (sourceCount - first) > block ? first + block : sourceCount;
+            glBegin(mode);
+            for (uint32_t i = first; i < end; ++i) {
+                const GfxVertex *v = indices != NULL ? &vertices[indices[i]] : &vertices[i];
+                if (stages >= 1) {
+                    const float *uv = useU1Stage0 ? &v->u1 : &v->u0;
+                    glTexCoord2f(uv[0], uv[1]);
+                }
+                if (stages >= 2) {
+                    const float *uv = useU1Stage1 ? &v->u1 : &v->u0;
+                    glMultiTexCoord2fARB(GL_TEXTURE1_ARB, uv[0], uv[1]);
+                }
+                if (plan.emitColor) {
+                    const uint32_t rgb = plan.overrideColor ? plan.color : v->diffuse;
+                    const uint32_t alpha = plan.overrideAlpha ? plan.color : v->diffuse;
+                    glColor4ub((GLubyte)((rgb >> 16) & 0xffu), (GLubyte)((rgb >> 8) & 0xffu),
+                               (GLubyte)(rgb & 0xffu), (GLubyte)((alpha >> 24) & 0xffu));
+                }
+                if (normals)
+                    glNormal3f(v->nx, v->ny, v->nz);
+                glVertex3f(v->x, v->y, v->z);
+            }
+            glEnd();
+        }
+        return;
+    }
+
     const GLenum flattened = FlattenedMode(mode);
     const uint32_t total = FlattenedCount(mode, sourceCount);
     const uint32_t block = BlockVertexCount(flattened);
@@ -2327,7 +2606,7 @@ void Submit3DBlocks(GLenum mode, const GfxVertex *vertices, const uint16_t *indi
         for (uint32_t i = first; i < end; ++i) {
             const uint32_t src = FlattenedSource(mode, i);
             Emit3DVertex(indices != NULL ? &vertices[indices[src]] : &vertices[src],
-                         lit, plan, activeStages, worldView);
+                         normals, plan, activeStages, worldView);
         }
         glEnd();
     }
@@ -2420,6 +2699,20 @@ void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexC
     }
     s_diag.drawCalls3D++;
     s_diag.triangles3D += CountTriangles(primitive, indices != NULL ? indexCount : vertexCount);
+    {
+        const uint32_t size = indices != NULL ? indexCount : vertexCount;
+        const int bucket = size <= 12u ? 0 : size <= 32u ? 1 : size <= 64u ? 2 : size <= 128u ? 3
+                                         : size <= 256u ? 4 : size <= 1024u ? 5 : 6;
+        s_diag.drawSizeHistogram[bucket]++;
+        if (mode == GL_TRIANGLES) {
+            if (indices != NULL)
+                s_diag.triangleIndexedDraws++;
+            else
+                s_diag.trianglePlainDraws++;
+        } else {
+            s_diag.otherPrimitiveDraws++;
+        }
+    }
 
     if (s_tlScreenActive) {
         s_tlScreenActive = 0;
@@ -2430,9 +2723,21 @@ void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexC
     Apply3DRasterState();
     const bool prelit = Apply3DLightingAndFog();
     const int activeStages = Apply3DTextureStages();
-    const EmitPlan plan = BuildEmitPlan(prelit);
+    // The library renders a multitextured draw unlit when fog is on or unit 1
+    // uses DECAL/REPLACE (gl/src/draw.c's `lit` predicate). Normals are then
+    // irrelevant, and leaving the normal array unbound also lets the library
+    // take its fast gather (gl/src/vertexarray.c gf_decode declines any draw
+    // with a normal array bound).
+    bool emitNormals = !prelit;
+    if (emitNormals && activeStages >= 2) {
+        const GLint env1 = MapStageEnvMode(1);
+        if (s_glCache.fog != 0 || env1 == GL_DECAL || env1 == GL_REPLACE)
+            emitNormals = false;
+    }
+
+    const EmitPlan plan = BuildEmitPlan(prelit, mode, activeStages);
     Submit3DBlocks(mode, vertices, indices, indices != NULL ? indexCount : vertexCount,
-                   plan, !prelit, activeStages, worldView);
+                   plan, emitNormals, activeStages, worldView);
 }
 
 // Matches stage zero's GL state to s_boundTexture before a 2D draw. A 3D pass
