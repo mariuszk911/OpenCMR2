@@ -587,6 +587,26 @@ void SetClientArray(uint32_t bit, GLenum cap, int on)
         s_glCache.clientArrayMask &= ~bit;
 }
 
+// The 2D/TL path never reads a client array. Unbind every array the 3D array
+// path may have left armed before the menu draws, so a later draw cannot
+// inherit a stale normal/colour pointer (the optimised MiniGL fast gather now
+// accepts a bound normal array instead of declining it). SetClientArray keeps
+// the shadow mask truthful, so the next array draw re-enables exactly what it
+// needs. Unit 1 is selected around its disable the same way Submit3DArrays
+// does.
+void ClearClientArrays(void)
+{
+    if ((s_glCache.clientArrayMask & kClientArrayTex1) != 0) {
+        glClientActiveTextureARB(GL_TEXTURE1_ARB);
+        SetClientArray(kClientArrayTex1, GL_TEXTURE_COORD_ARRAY, 0);
+        glClientActiveTextureARB(GL_TEXTURE0_ARB);
+    }
+    SetClientArray(kClientArrayVertex, GL_VERTEX_ARRAY, 0);
+    SetClientArray(kClientArrayNormal, GL_NORMAL_ARRAY, 0);
+    SetClientArray(kClientArrayColor, GL_COLOR_ARRAY, 0);
+    SetClientArray(kClientArrayTex0, GL_TEXTURE_COORD_ARRAY, 0);
+}
+
 void ProbeCapabilities(void)
 {
     if (s_caps.probed)
@@ -2496,8 +2516,9 @@ bool Submit3DArrays(const GfxVertex *vertices, const uint16_t *indices,
         glNormalPointer(GL_FLOAT, stride, &vertices[0].nx);
         SetClientArray(kClientArrayNormal, GL_NORMAL_ARRAY, 1);
     } else {
-        // A bound normal array also disables the library's fast gather, so it
-        // is disabled rather than merely not re-pointed.
+        // The draw is unlit, so the normal pointer is unused. Unbinding it also
+        // spares the gather a per-vertex normal copy, which the fast path now
+        // performs whenever a normal array is bound.
         SetClientArray(kClientArrayNormal, GL_NORMAL_ARRAY, 0);
     }
     if (plan.emitColor) {
@@ -2725,9 +2746,8 @@ void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexC
     const int activeStages = Apply3DTextureStages();
     // The library renders a multitextured draw unlit when fog is on or unit 1
     // uses DECAL/REPLACE (gl/src/draw.c's `lit` predicate). Normals are then
-    // irrelevant, and leaving the normal array unbound also lets the library
-    // take its fast gather (gl/src/vertexarray.c gf_decode declines any draw
-    // with a normal array bound).
+    // irrelevant; leaving the array unbound still spares the gather a
+    // per-vertex normal copy, since the fast path now accepts a bound array.
     bool emitNormals = !prelit;
     if (emitNormals && activeStages >= 2) {
         const GLint env1 = MapStageEnvMode(1);
@@ -2810,6 +2830,20 @@ void BeginTLDraw(void)
     SelectActiveUnit(0);
     SyncStage0ForTL();
     if (!s_tlScreenActive) {
+        // Entering the 2D/TL pass: drop any client arrays the last 3D draw
+        // left enabled. The TL path is immediate mode, but the arrays would
+        // otherwise stay armed across the menu and be consumed by a later
+        // draw, which is exactly the state leak the normal fast gather
+        // exposed.
+        if (s_glCache.clientArrayMask != 0) {
+            static int logged;
+            if (!logged) {
+                logged = 1;
+                Sys_Log("AMIGA: cleared stale client arrays before 2D (mask=%x)",
+                        (unsigned)s_glCache.clientArrayMask);
+            }
+        }
+        ClearClientArrays();
         BeginScreenDraw();
         s_tlScreenActive = 1;
     }
