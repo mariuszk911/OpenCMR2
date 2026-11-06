@@ -1,14 +1,14 @@
 /*
- * M0.9 startup smoke harness. Domain B: MiniGL/NDK headers are expected here.
+ * Startup smoke harness. Domain B: MiniGL/NDK headers are expected here.
  *
  * Proves the cross toolchain, libnix startup, MiniGL 29.1, timer.device and
- * AHI before game code exists. It is not the game and does not use the port
+ * AHI without any game code. It is not the game and does not use the port
  * layer. Run:
  *
  *     amiga_smoke RAM:m0-smoke.ppm > RAM:m0-smoke.log
  *
- * Copy the log and the PPM to build/amiga/ afterward. The PiStorm run remains
- * M0.9's target evidence; an emulator run is not a substitute.
+ * Copy the log and the PPM to build/amiga/ afterward. An emulator run is not a
+ * substitute for the PiStorm run.
  */
 #include <stdio.h>
 #include <string.h>

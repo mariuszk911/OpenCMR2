@@ -11,7 +11,7 @@ set -eu
 : "${STACK:=2097152}"
 : "${JOBS:=4}"
 # Diagnostic build only: adds clock calls to the MiniGL draw path. Off unless
-# explicitly requested for a Task 0.1 timing run.
+# explicitly requested for a timing run.
 : "${MINIGL_TIMING:=OFF}"
 
 BUILD_DIR="$REPO/build/amiga"

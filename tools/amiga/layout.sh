@@ -1,5 +1,5 @@
 #!/bin/sh
-# M0.5 layout probe. Run through tools/amiga/build.sh --layout; the wrapper
+# Layout probe. Run through tools/amiga/build.sh --layout; the wrapper
 # provides REPO, CPU, FPU and OPT.
 #
 # Domain A includes the game headers and is compiled with -malign-int.
@@ -49,7 +49,7 @@ note "domain A values: $WORK/domain_a.values"
 note "domain B values: $WORK/domain_b.values"
 
 # A runnable probe for the target; the extracted values above are the
-# authoritative comparison, this binary is for M0.9/M1 target runs.
+# authoritative comparison, this binary is for target runs.
 $CXX $CXXFLAGS -DOPENCMR2_LAYOUT_PRINT -malign-int $GAME_INCLUDES \
     "$REPO/tests/amiga/layout_probe.cpp" -o "$WORK/layout_probe_amiga"
 note "runnable probe: $WORK/layout_probe_amiga"

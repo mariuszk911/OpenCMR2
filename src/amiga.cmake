@@ -24,9 +24,8 @@ endfunction()
 list(REMOVE_ITEM GAME_SOURCES ${GAME_DIR}/CrtTypeInfo.cpp)
 
 # ---- Domain A: game layout -------------------------------------------------
-# The flag set that defines the original 32-bit/MSVC layout. M0.5 passed on the
-# cross-compiled ABI (build/amiga/m0-layout.log), so -malign-int is now part of
-# Domain A. Domain B must never see it.
+# The flag set that defines the original 32-bit/MSVC layout. Domain B must never
+# see -malign-int.
 add_library(opencmr2_domain_a INTERFACE)
 target_compile_options(opencmr2_domain_a INTERFACE
     -malign-int
@@ -36,9 +35,7 @@ target_compile_options(opencmr2_domain_a INTERFACE
     "$<$<COMPILE_LANGUAGE:CXX>:-include>"
     "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/port/menu_layout.h>")
 
-# Not linked into the M0 scaffold yet: M1 adds the platform services, then the
-# executable links this library. port/disk.cpp is Domain A too; M0.8 removed
-# its host allocation-size calls.
+# port/disk.cpp is Domain A too.
 add_library(cmr2_game OBJECT
     ${GAME_SOURCES}
     diagnostics/observer.cpp
@@ -59,8 +56,7 @@ add_library(cmr2_game OBJECT
     port/stage_camera_disk.cpp
     port/stage_light_transform_disk.cpp
     port/start_table_disk.cpp)
-# M0 does not link the game yet, so keep it out of the default `all` target.
-# M1 removes this once the platform services exist and the executable links it.
+# Built through the executable that links it, not on its own.
 set_target_properties(cmr2_game PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_include_directories(cmr2_game PUBLIC
     ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
@@ -80,6 +76,9 @@ add_library(opencmr2_platform OBJECT
     render/minigl/gfx_minigl.cpp
     input/input_amiga.cpp
     audio/audio_ahi.cpp
+    audio/mixer.cpp
+    audio/msadpcm.cpp
+    platform/amiga/amiga_ahi.c
     port/intdiv.cpp
     platform/amiga/minigl_abi_check.cpp)
 target_include_directories(opencmr2_platform PUBLIC
@@ -89,10 +88,9 @@ target_include_directories(opencmr2_platform PRIVATE ${MINIGL_INCLUDE_DIR})
 # __builtin_sqrt must expand to fsqrt instead of a fallback call to sqrt.
 set_source_files_properties(platform/amiga/amiga_libfix.c PROPERTIES COMPILE_FLAGS "-fno-builtin -fno-math-errno")
 
-# ---- M1 stubs (Domain B) ---------------------------------------------------
-# Compiled by the default build so the target compiler checks them now, but
-# not linked into the M0 scaffold: the movie stub calls Gfx_*, which arrives
-# with the MiniGL executor in M1. M1 links this library into the executable.
+# ---- Stubs (Domain B) ------------------------------------------------------
+# The features left out on this target: movies, network, profiling and the
+# host-only render enhancements.
 add_library(opencmr2_amiga_stubs OBJECT
     video/movie_stub.cpp
     net/net_stub.cpp
@@ -101,19 +99,15 @@ add_library(opencmr2_amiga_stubs OBJECT
 target_include_directories(opencmr2_amiga_stubs PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
 
-# The stubs are not in the M0 link. Build them, and link them once here with
-# throwaway Gfx/Sys definitions, so their new/delete and libnix dependencies
-# are proven on the target before M1 wires the real services.
+# Links the stubs alone against throwaway Gfx/Sys definitions, proving their
+# new/delete and libnix dependencies without the game.
 add_executable(amiga_stub_link_check
     ${PROJECT_SOURCE_DIR}/tests/amiga/stub_link_check.c
     $<TARGET_OBJECTS:opencmr2_amiga_stubs>)
 set_target_properties(amiga_stub_link_check PROPERTIES LINKER_LANGUAGE CXX)
 target_include_directories(amiga_stub_link_check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# ---- M0 executable ---------------------------------------------------------
-# A scaffold that proves the cross toolchain, libnix startup and linker before
-# the game is wired in. M1 replaces it with the CMain entry point and the
-# MiniGL/OS facade; M0.9 exercises MiniGL in its own smoke target.
+# ---- Executable ------------------------------------------------------------
 add_executable(opencmr2
     platform/amiga/main_amiga.cpp
     $<TARGET_OBJECTS:cmr2_game>
@@ -126,7 +120,7 @@ target_link_libraries(opencmr2 PRIVATE opencmr2_domain_a opencmr2_platform)
 target_link_directories(opencmr2 PRIVATE ${MINIGL_LIBRARY_DIR})
 target_link_libraries(opencmr2 PRIVATE minigl m)
 
-# ---- M0.9 startup smoke harness (Domain B) --------------------------------
+# ---- Startup smoke harness (Domain B) --------------------------------------
 # Standalone: MiniGL 29.1, timer.device and AHI, no game or port-layer code.
 set(AHI_SDK "${PROJECT_SOURCE_DIR}/SDKs/m68k-amigaos-ahi")
 if(NOT EXISTS "${AHI_SDK}/Developer/Include/C/devices/ahi.h")
@@ -145,7 +139,7 @@ target_include_directories(amiga_minigl_tl_rects_test PRIVATE ${MINIGL_INCLUDE_D
 target_link_directories(amiga_minigl_tl_rects_test PRIVATE ${MINIGL_LIBRARY_DIR})
 target_link_libraries(amiga_minigl_tl_rects_test PRIVATE minigl)
 
-# M1 Sys time/logging smoke: Domain B, no MiniGL. Not staged.
+# Sys time/logging smoke: Domain B, no MiniGL. Not staged.
 add_executable(amiga_sys_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_time_test.c
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_sys_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -156,14 +150,14 @@ add_executable(amiga_sys_file_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_file_te
 target_include_directories(amiga_sys_file_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_sys_file_test)
 
-# M1 saved-controller path: the game's ".\Configuration\Controller.rcf" must
+# Saved-controller path: the game's ".\Configuration\Controller.rcf" must
 # resolve under the user directory and the 0x11a4-byte file must open.
 add_executable(amiga_controller_path_test ${PROJECT_SOURCE_DIR}/tests/amiga/controller_path_test.c
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_controller_path_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_controller_path_test)
 
-# M1 input.device adapter: a real activated window plus a bridge-injected
+# input.device adapter: a real activated window plus a bridge-injected
 # Return proves the held-key path the game reads. Not a game launch.
 add_executable(amiga_input_device_test ${PROJECT_SOURCE_DIR}/tests/amiga/input_device_test.c
     platform/amiga/amiga_sys.cpp)
@@ -181,7 +175,7 @@ add_executable(amiga_platform_test ${PROJECT_SOURCE_DIR}/tests/amiga/platform_te
 target_include_directories(amiga_platform_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_platform_test)
 
-# M0.7 save-image codec: native 68k struct -> little-endian .rcs and back.
+# Save-image codec: native 68k struct -> little-endian .rcs and back.
 add_executable(amiga_save_image_test ${PROJECT_SOURCE_DIR}/tests/amiga/save_image_test.cpp
     port/save_image_disk.cpp)
 target_include_directories(amiga_save_image_test PRIVATE
@@ -191,7 +185,7 @@ target_include_directories(amiga_save_image_test PRIVATE
 target_link_libraries(amiga_save_image_test PRIVATE opencmr2_domain_a)
 opencmr2_amiga_stack(amiga_save_image_test)
 
-# M0.7 replay payload: native stream -> little-endian file -> native stream,
+# Replay payload: native stream -> little-endian file -> native stream,
 # including the type-2 sample bitfields.
 add_executable(amiga_replay_payload_test ${PROJECT_SOURCE_DIR}/tests/replay_payload.cpp
     port/replay_disk.cpp
@@ -305,18 +299,18 @@ add_executable(amiga_kill_task_test ${PROJECT_SOURCE_DIR}/tests/amiga/kill_task_
 target_include_directories(amiga_kill_task_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_kill_task_test)
 
-# M1: the callback state's packed DWORD must match the MSVC layout on 68k too.
+# The callback state's packed DWORD must match the MSVC layout on 68k too.
 add_executable(amiga_callback_state_test ${PROJECT_SOURCE_DIR}/tests/amiga/callback_state_test.cpp)
 target_include_directories(amiga_callback_state_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
 target_compile_options(amiga_callback_state_test PRIVATE -malign-int)
 opencmr2_amiga_stack(amiga_callback_state_test)
 
-# M1: Menu/MenuItem must keep the MSVC LSB bitfield layout on 68k; the game
+# Menu/MenuItem must keep the MSVC LSB bitfield layout on 68k; the game
 # compiles them through port/menu_layout.h, which declares the bitfields in
 # reverse so GCC's MSB-first allocation stores the original byte
 # (scalar_storage_order does not change bitfield order on GCC 6.5).
-# M1: SaveSlot keeps the MSVC LSB-first bitfield word on 68k; the profile
+# SaveSlot keeps the MSVC LSB-first bitfield word on 68k; the profile
 # code reads category/car both by name and from the packed slot DWORD.
 add_executable(amiga_save_slot_test ${PROJECT_SOURCE_DIR}/tests/amiga/save_slot_test.cpp)
 target_include_directories(amiga_save_slot_test PRIVATE
@@ -324,13 +318,13 @@ target_include_directories(amiga_save_slot_test PRIVATE
 target_compile_options(amiga_save_slot_test PRIVATE -malign-int)
 opencmr2_amiga_stack(amiga_save_slot_test)
 
-# M3.1: real 68060 BE/alignment coverage for the C3D header and payload.
+# Real 68060 BE/alignment coverage for the C3D header and payload.
 # The host forced-swap test is only a branch test.
 add_executable(amiga_c3d_header_test ${PROJECT_SOURCE_DIR}/tests/amiga/c3d_header_test.cpp)
 target_include_directories(amiga_c3d_header_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_c3d_header_test)
 
-# M2: the packed menu/split-panel colour word must put R, G, B, A in memory
+# The packed menu/split-panel colour word must put R, G, B, A in memory
 # on 68k; the host test can only check its own byte order.
 add_executable(amiga_menu_colour_test ${PROJECT_SOURCE_DIR}/tests/amiga/menu_colour_test.cpp)
 target_include_directories(amiga_menu_colour_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

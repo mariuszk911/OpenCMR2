@@ -12,7 +12,7 @@ SDL3 and the SDL GPU API (Vulkan, Metal) and needs the original game data.
 | `src/port/` | The platform API the game calls: `types.h`, `sys.h`, `gfx.h`, `audio.h`, `input.h`, `movie.h`, `net.h`. Portable functions, compatibility types and disk-to-native layout conversion. |
 | `src/platform/` | `main()`, window and event loop, time, files, configuration (SDL3). |
 | `src/render/` | The SDL_GPU renderer behind `gfx.h`, and its shaders. |
-| `src/audio/` | Mixer behind `audio.h` (SDL3 audio streams), WAV and MS-ADPCM decoding. |
+| `src/audio/` | Mixers behind `audio.h` (SDL3 audio streams; fixed-point mixer and AHI on AmigaOS), WAV and MS-ADPCM decoding. |
 | `src/input/` | Keyboard, mouse, joysticks, gamepads and force feedback (SDL3). |
 | `src/video/` | Standalone Bink 1 (`BIKi`) video/audio decoder behind `movie.h`; queued sound uses the SDL3 mixer. No external codec library. See [VIDEO.md](VIDEO.md). |
 | `src/net/` | Network sessions behind `net.h` (replaces DirectPlay). |
@@ -123,7 +123,8 @@ pan, and a streamed music buffer refilled by regions. `audio.h` keeps those
 semantics (sample, voice, stream) on our own types; `src/audio` mixes all
 voices into one SDL3 audio stream and applies DirectSound's 3D attenuation.
 WAV files and MS-ADPCM are decoded by our own code (the game used mmio and
-ACM).
+ACM). The AmigaOS backend is described in
+[AMIGA_PORT.md](AMIGA_PORT.md#audio-output).
 
 ## Input
 

@@ -1,5 +1,5 @@
 /*
- * M1 saved-controller path check. The game builds the path as
+ * Saved-controller path check. The game builds the path as
  * ".\Configuration\Controller.rcf" and reads a 0x11a4-byte file from the user
  * directory. This test resolves that exact path through the Sys layer and
  * opens it with dos.library, so it does not depend on the game or the logger.

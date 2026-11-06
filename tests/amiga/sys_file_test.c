@@ -1,5 +1,5 @@
 /*
- * M1 Sys files/paths smoke for AmigaOS. All writable state is under RAM:;
+ * Sys files/paths smoke for AmigaOS. All writable state is under RAM:;
  * the test builds its own user/data fixture tree and never opens PROGDIR:.
  *
  * An emulator run is emulator evidence, not PiStorm evidence.

@@ -1,5 +1,5 @@
 /*
- * M1 Sys settings smoke for AmigaOS. All writable state is under RAM:; the
+ * Sys settings smoke for AmigaOS. All writable state is under RAM:; the
  * test builds its own opencmr2.ini and never opens PROGDIR:.
  *
  * An emulator run is emulator evidence, not PiStorm evidence.

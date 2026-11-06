@@ -1,5 +1,5 @@
 #!/bin/sh
-# M0.4 toolchain capability probes. Run through tools/amiga/build.sh --probe;
+# Toolchain capability probes. Run through tools/amiga/build.sh --probe;
 # the wrapper provides REPO, CPU, FPU, OPT and JOBS.
 #
 # The probes record facts about GCC 6.5 and libnix, not assumptions:

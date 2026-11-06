@@ -1,8 +1,4 @@
 // System services on AmigaOS: see port/sys.h.
-//
-// This slice covers the clock, sleep, logging, files and game paths. Settings,
-// window/IDCMP and message boxes land with their M1 components, so the game
-// cannot boot on this file alone yet.
 #include "port/sys.h"
 #include "port/sys_steps.h"
 #include "port/endian.h"
@@ -940,8 +936,7 @@ static void LogConfigFile(const char *native, BPTR handle)
         return;
     memset(head, 0, sizeof(head));
     /* AmigaDOS Seek returns the previous position, so the second call is the
-     * offset at EOF. The old one-call form logged size=0 for every file and
-     * skipped the slot-map read. */
+     * offset at EOF. */
     if (Seek(handle, 0, OFFSET_END) < 0)
         size = 0;
     else

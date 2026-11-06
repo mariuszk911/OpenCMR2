@@ -1,5 +1,5 @@
 /*
- * M1 Sys event translation smoke for AmigaOS. Run from a Shell:
+ * Sys event translation smoke for AmigaOS. Run from a Shell:
  *
  *     amiga_event_test
  *

@@ -1,5 +1,5 @@
 /*
- * M0.5 layout probe.
+ * Layout probe.
  *
  * Records sizeof/offsetof/alignof for the types that must keep the original
  * 32-bit layout and for the types that cross the game/executor boundary. The

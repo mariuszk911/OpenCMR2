@@ -1,6 +1,6 @@
 /*
- * OpenCMR2 audio interface, implemented in src/audio (one SDL3 audio stream
- * fed by our mixer).
+ * OpenCMR2 audio interface, implemented in src/audio: audio_sdl.cpp mixes into
+ * one SDL3 audio stream, audio_ahi.cpp into one AHI channel on AmigaOS.
  *
  * The game was written against DirectSound buffers and keeps that model:
  * buffers of PCM data that play (once or looping) at their own frequency,
@@ -100,7 +100,7 @@ static inline void AudioWaveFormatFromLE(AudioWaveFormat *format)
 }
 
 /* Decodes whole Microsoft ADPCM blocks (format from the file) into 16-bit
-   PCM. Returns the number of bytes written; stops when dst is full. */
+   little-endian PCM, the layout of the .wav samples. Returns the number of bytes written; stops when dst is full. */
 DWORD Audio_DecodeMsAdpcm(const AudioWaveFormat *format, const BYTE *src, DWORD srcBytes, BYTE *dst, DWORD dstBytes);
 
 #ifdef __cplusplus

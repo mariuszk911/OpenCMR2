@@ -1,5 +1,5 @@
 /*
- * M1 input.device adapter check. This is not the game: it opens the same
+ * input.device adapter check. This is not the game: it opens the same
  * activated game window AmigaSys_CreateGameWindow uses, installs the
  * input.device handler, and waits for a bridge-injected Return down. The
  * release is injected through IDCMP, which is the fallback path

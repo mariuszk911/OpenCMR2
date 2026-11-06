@@ -312,6 +312,15 @@ add_executable(amiga_stubs_test amiga_stubs.cpp
 target_include_directories(amiga_stubs_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_stubs COMMAND amiga_stubs_test)
 
+# The fixed-point mixer and ADPCM decoder behind the Amiga audio backend. The
+# AHI output itself is target-only.
+add_executable(audio_mixer_test audio_mixer.cpp
+    ${PROJECT_SOURCE_DIR}/src/audio/mixer.cpp
+    ${PROJECT_SOURCE_DIR}/src/audio/msadpcm.cpp)
+target_include_directories(audio_mixer_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(audio_mixer_test PRIVATE m)
+add_test(NAME audio_mixer COMMAND audio_mixer_test)
+
 # Portable Sys time logic: the fixed-step clock and the Amiga E-clock/DateStamp
 # conversions. The timer.device calls are target-only.
 add_executable(sys_time_test sys_time.cpp)

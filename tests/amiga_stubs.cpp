@@ -1,4 +1,4 @@
-// M1 stubs on the host: the black movie frame, the unavailable network and
+// Stubs on the host: the black movie frame, the unavailable network and
 // the no-op Amiga profiling hooks. The Amiga target compiles the same
 // translation units, so this test protects the contract the game relies on.
 #include "diagnostics/timing.h"

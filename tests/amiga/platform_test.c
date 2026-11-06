@@ -1,5 +1,5 @@
 /*
- * M1 platform lifecycle smoke for AmigaOS.
+ * Platform lifecycle smoke for AmigaOS.
  *
  * This test never writes to PROGDIR: or to any game installation. The target's
  * only safe writable scratch is RAM:; the fixture tree lives under

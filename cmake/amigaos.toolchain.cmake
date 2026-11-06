@@ -2,7 +2,7 @@
 #
 # Only tools/amiga/build.sh uses this file. Host presets stay on Clang and
 # C++17, and CMakePresets.json is untouched. Domain-specific flags (Domain A's
-# -malign-int after the M0.5 gate) belong in src/amiga.cmake, never here.
+# -malign-int) belong in src/amiga.cmake, never here.
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR m68k)
 set(CMAKE_C_COMPILER m68k-amigaos-gcc)

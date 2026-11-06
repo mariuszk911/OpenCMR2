@@ -1,5 +1,5 @@
 /*
- * M1 Sys time/logging smoke for AmigaOS. Not staged; run from a Shell:
+ * Sys time/logging smoke for AmigaOS. Not staged; run from a Shell:
  *
  *     amiga_sys_test > sys_time.log
  *

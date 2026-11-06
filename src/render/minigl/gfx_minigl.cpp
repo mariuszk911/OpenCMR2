@@ -1,7 +1,7 @@
 // MiniGL renderer executor.
 //
 // Owns the MiniGL context/window, frame lifecycle, 2D TL rendering, and the
-// M3.2 capability-tiered 3D fixed-function pipeline.
+// capability-tiered 3D fixed-function pipeline.
 #include "port/gfx.h"
 #include "port/sys.h"
 #include "platform/amiga/amiga_sys.h"
@@ -57,7 +57,7 @@ namespace {
 // mglChooseVertexBufferSize taking effect in whatever library version is
 // installed. Lists are split at a whole primitive, strips/fans are flattened.
 enum { kMaxBlockVertices = 256 };
-// Client arrays (Task 1.3b). GLDrawElements chunks internally at
+// Client arrays. GLDrawElements chunks internally at
 // min(VertexBufferSize, MGL_MAXVERTS=1024) (gl/src/vertexelements.c), so the
 // renderer submits one call per draw and does not chunk itself. Every absolute
 // index must stay below 16384 because the array pipeline transforms by
@@ -74,7 +74,7 @@ struct CapabilityPolicy {
     int hasAdd;
     int hasColorMaterial;
     int hasBlendSubtract;
-    // Client arrays (Task 1.3b): probed once, and only when requested through
+    // Client arrays: probed once, and only when requested through
     // video.client_arrays. `clientArrayUnits` is how many texcoord arrays the
     // library accepts (unit 1 is unproven on MiniGL 29.x).
     int clientArrays;
@@ -149,9 +149,7 @@ struct StageDiagnostics {
     uint32_t textureUploads;
     uint32_t suppressedRttDraws;
     uint32_t suppressedRttClears;
-    // Plain increments only (no clock or logging in the draw path). The
-    // cache counters stay at zero until the Phase 1 caches land; they are
-    // reported so the baseline can be compared against them.
+    // Plain increments only (no clock or logging in the draw path).
     uint32_t modelviewLoads;
     uint32_t modelviewSkips;
     uint32_t matrixModeSwitches;
@@ -173,7 +171,7 @@ struct StageDiagnostics {
     uint32_t timingPresentCalls;
     uint64_t timingPresentUs;
 #endif
-    // Draw-size histogram for the client-array decision (Task 1.3b): draws
+    // Draw-size histogram for the client-array decision: draws
     // bucketed by index count (or vertex count for non-indexed draws), plus how
     // many are plain GL_TRIANGLES, which is the only primitive MiniGL accepts
     // through the array pipeline.
@@ -181,7 +179,7 @@ struct StageDiagnostics {
     uint32_t triangleIndexedDraws;
     uint32_t trianglePlainDraws;
     uint32_t otherPrimitiveDraws;
-    // Task 1.3b eligibility: plain indexed triangles at or above librw's
+    // Eligibility: plain indexed triangles at or above librw's
     // 12-index threshold, split by whether the direct-texcoord fast path also
     // allows a client-array submission (no reflection texgen, no texture
     // transform). Draws the array path could not take are counted separately.
@@ -661,7 +659,7 @@ void ProbeCapabilities(void)
     // alpha test all probe cleanly; Tier 0 baseline otherwise.
     s_caps.tier = (s_caps.maxTexUnits >= 2 && s_caps.hasAdd && s_caps.hasFogLinear && s_caps.hasAlphaTest) ? 1 : 0;
 
-    // Client arrays (Task 1.3b). The vertex/colour/texcoord array entry points
+    // Client arrays. The vertex/colour/texcoord array entry points
     // are part of the documented PiStorm3D pipeline; the part that is not
     // proven on 29.x is a second *client* texcoord unit, so probe that without
     // drawing anything. The first real array draw additionally checks
@@ -782,7 +780,7 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
         return 0;
     if (s_context != NULL) {
         // MiniGL's window/screen is created with the context; changing mode
-        // needs a renderer restart, which M1 does not do yet.
+        // needs a renderer restart, which is not implemented.
         if (width != s_width || height != s_height)
             Sys_Log("gfx: keeping %dx%d (requested %dx%d)", s_width, s_height, width, height);
         return 1;
@@ -797,7 +795,7 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
     // vertices per glBegin block, so enlarge the buffer before the context
     // allocates it. reVC's MiniGL backend uses 4096 for the immediate path.
     // The client-array pipeline transforms by absolute index and clips from
-    // size/2, so it needs 2 * the largest index. Task 1.3b only; the immediate
+    // size/2, so it needs 2 * the largest index; the immediate
     // path keeps librw's 4096.
     s_clientArraysRequested = Sys_GetOption("video.client_arrays", 0) != 0;
     mglChooseVertexBufferSize(s_clientArraysRequested ? 32768 : 4096);
@@ -1040,7 +1038,7 @@ extern "C" void Gfx_Clear(uint32_t flags, uint32_t color, float z)
     glClearColor(((color >> 16) & 0xff) / 255.0f, ((color >> 8) & 0xff) / 255.0f,
                  (color & 0xff) / 255.0f, ((color >> 24) & 0xff) / 255.0f);
     // All current callers pass z = 1.0, the GL default clear depth. GLClearDepth
-    // is not exercised by the M0.9 smoke and crashed on the target; clearing to
+    // crashed on the target; clearing to
     // the default is equivalent for every call site in the game.
     (void)z;
     GLbitfield bits = 0;
@@ -1559,7 +1557,7 @@ static GLint FilterMode(int filter)
 // Applies the stage sampler state to the texture object currently bound on
 // that stage's texture unit. GL keeps wrap and filter per texture object, so
 // the last applied values are cached on the object and unchanged draws issue
-// no glTexParameteri calls. Mipmaps remain off by default in M3.2.
+// no glTexParameteri calls. Mipmaps are off by default.
 static void ApplyStageSampler(int stage, GfxTexture *object, unsigned int texId)
 {
     const GLint wrap = StageWrapMode(stage);
@@ -1636,7 +1634,7 @@ extern "C" void Gfx_SetStageMagFilter(int stage, int filter)
     s_stages[stage].magFilter = filter;
     ReapplyStageSampler(stage);
 }
-// Mipmaps and bump-environment mapping are outside the M3.2 policy: textures
+// Mipmaps and bump-environment mapping are not supported: textures
 // upload one level and BUMPENVMAP degrades to MODULATE. The entry points still
 // accept the calls so the game's state cache stays consistent.
 extern "C" void Gfx_SetStageMipFilter(int stage, int filter)
@@ -1950,7 +1948,7 @@ void Apply3DRasterState(void)
     ApplyBlendAndAlphaTest();
 }
 
-// Locked M3.2 lighting policy:
+// Lighting policy:
 // - lighting off (modes 4/5): prelit, GL lighting is disabled and the vertex
 //   colour goes straight to glColor.
 // - lighting on: GL fixed-function lighting with up to 8 lights. D3D material
@@ -2472,7 +2470,7 @@ void EmitTLVertex(const GfxTLVertex *v)
     glVertex2f(v->sx, v->sy);
 }
 
-// Client-array submission for eligible plain triangle draws (Task 1.3b).
+// Client-array submission for eligible plain triangle draws.
 // Returns true when the draw was consumed. The immediate path stays the
 // fallback for every draw this cannot express (lines, strips, texgen, texture
 // transforms, colour overrides, too few indices, indices beyond the library's
@@ -2565,7 +2563,7 @@ void Submit3DBlocks(GLenum mode, const GfxVertex *vertices, const uint16_t *indi
                     uint32_t sourceCount, const EmitPlan &plan, bool normals, int activeStages,
                     const GfxMatrix &worldView)
 {
-    // Task 1.3b eligibility: the client-array path needs plain indexed
+    // Eligibility: the client-array path needs plain indexed
     // triangles above librw's threshold, plus texcoords that come straight
     // from the vertex (plan.directTexCoord).
     if (mode == GL_TRIANGLES && indices != NULL) {

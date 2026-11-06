@@ -1,5 +1,5 @@
 /*
- * M1: the game indexes and compares the packed callback state as a
+ * The game indexes and compares the packed callback state as a
  * little-endian DWORD. On 68k the bitfields are declared in reverse order so
  * the packed value stays identical to the MSVC layout. This is the crash that
  * made the first frontend render call address 5.

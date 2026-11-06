@@ -1,4 +1,4 @@
-// M0.7 BFL directory fixture. The normal build parses a little-endian archive
+// BFL directory fixture. The normal build parses a little-endian archive
 // on the host. The forced big-endian variant pre-swaps the fixture bytes so the
 // forced branch yields the same values, proving every field is decoded as
 // little-endian rather than loaded raw.
