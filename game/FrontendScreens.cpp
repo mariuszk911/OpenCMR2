@@ -767,8 +767,7 @@ void FrontendMenu_DrawCredits(Menu *pMenu)
 
     allOffScreen = true;
     ppText = (char **)FrontendCredits_GetNameTable();
-    // PORT: AMIGA: a released or failed credits load leaves no tables; the
-    // original would write the y table through NULL.
+    // PORT: AMIGA: a failed credits load leaves no tables; do not write y through NULL.
     if (ppText == NULL || FrontendCredits_GetRoleTable() == NULL)
         return;
     elapsed = (unsigned int)CFrontend::GetFrontendTimestamp();
@@ -780,8 +779,7 @@ void FrontendMenu_DrawCredits(Menu *pMenu)
             + FrontendCredits_GetScrollOffset() + (int)g_pGraphics->resY + Font_GetLineHeight(2);
         if (((int *)FrontendCredits_GetRoleTable())[i] < (int)g_pGraphics->resY + 100
             && ((int *)FrontendCredits_GetRoleTable())[i] > -100) {
-            // PORT: AMIGA: the table holds int y values; the short view read
-            // the high half on 68k, putting every line on screen.
+            // PORT: AMIGA: the table holds ints; the short view read the high half on 68k.
             Font_DrawText(2, ppText[0], (int)g_pGraphics->resX / 2 - 10,
                           (short)((int *)FrontendCredits_GetRoleTable())[i],
                           (int *)g_colourWhite0x00524968, 0x14);
@@ -3674,9 +3672,7 @@ void FrontendScroller_InitRallyStageSelection(Menu *pMenu, int param)
 
     count = 0;
 #if defined(__m68k__)
-    // PORT: AMIGA: car setup must never open with an unassigned slot. Paths
-    // that reach it before the profile flow (or a failed tag entry) otherwise
-    // build an empty list, which the menu cursor/index code cannot represent.
+    // PORT: AMIGA: car setup must not open with an unassigned slot (empty list).
     if (pMenu == FrontendMenu_GetCarSetup()) {
         int player = CGameInfo::GetConfiguredPlayerCount() - g_profilePlayersRemaining - 1;
         unsigned int rawSlot;
@@ -4698,8 +4694,7 @@ static int g_menuPathPointFine[2];
 // or more pixels of a larger screen.
 static void FrontendAnimation_PlaceOnScreen(const int *pFine, int dx, int dy, short *pX, short *pY)
 {
-    // PORT: AMIGA: the 64-bit division is a Domain B helper; the shifted
-    // additions stay 64-bit in game code.
+    // PORT: AMIGA: the 64-bit division is a Domain B helper.
     long long x = (long long)Port_MulDiv(g_pGraphics->resX, pFine[0], 640) + ((long long)dx << 16);
     long long y = (long long)Port_MulDiv(g_pGraphics->resY, pFine[1], 480) + ((long long)dy << 16);
 
@@ -5651,8 +5646,7 @@ void FrontendMenu_SelectDisplayDevice(Menu *pMenu, int param)
     CGameInfo::SetGraphicsOptionBits21To24(1);
     g_pGraphics->field917_0x3c0 = 1;
     CGameInfo::SetGraphicsOptionBits25To26(1);
-    // Match the game-info defaults: 0 selects the H (day/high-sun) demo,
-    // 1 selects L (night/low-sun) and the white night stage light.
+    // 0 selects the H (day) demo, 1 selects L (night) and the white stage light.
     CGameInfo::SetGraphicsOptionBits27To28(0);
     CGameInfo::SetPreviewMode(2);
     Menu_SetNextAction(pMenu->pParent);
@@ -6140,8 +6134,7 @@ int FrontendDraw_ModeProgressBar(int param_1, int param_2, int param_3, int para
         rect[0] = (short)(x >> 16);
     }
     if (param_5 != 0) {
-        // PORT: AMIGA: rect[0] is x; treating the first two shorts as an int
-        // makes the big-endian low word (y) become Font_DrawText's short x.
+        // PORT: AMIGA: rect[0] is x; an int view made y the short x on big-endian.
         Font_DrawText(1, param_5, rect[0], (int)(g_pGraphics->resY * 0x18) / 0x1e0 + param_2,
                       (int *)g_colourText0x0052496c, 0x14);
         return rect[0];
@@ -10517,8 +10510,7 @@ void FrontendMenu_DrawCarSetup(Menu *pMenu)
 {
     short (*pRects)[4];
 #if defined(__m68k__)
-    // PORT: AMIGA: the generic menu cursor has no lower bound for an empty
-    // list; clamp before any palette/rect/name index below.
+    // PORT: AMIGA: clamp the cursor of an empty list before any index below.
     if (pMenu->itemCount <= 0)
         pMenu->cursor = 0;
     else if (pMenu->cursor < 0)

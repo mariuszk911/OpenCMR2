@@ -3020,8 +3020,7 @@ void StageObject_AddCarSoundTimeSeconds(int index, int seconds);
 unsigned char RallyDataStageIndex(void);
 int Frontend_StoreSelectedDeviceOption(int index);
 void Menu_QueueDefaultAction(void);
-// PORT: AMIGA: these static members are declared in GameInfo.h. GCC 6.5
-// rejects qualified declarations at namespace scope, so the repeats are gone.
+// PORT: AMIGA: declared in GameInfo.h; GCC 6.5 rejects the qualified repeats.
 unsigned int RallyData_GetSelectionBits10To11(void);
 unsigned char RallyData_GetSelectionFlag28(void);
 unsigned int RallyData_GetSetupModeBits(void);

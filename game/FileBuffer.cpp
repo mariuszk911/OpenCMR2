@@ -81,14 +81,12 @@ void *CFileBuffer::GetGenericFileBuffer(char *fileName, BOOL isLocalFile)
             return NULL;
 
         lpBuffer = AllocateLockedBuffer(pFileHeaderOut.archiveSize);
-        // PORT: AMIGA: a short archive read must not return a partly filled
-        // buffer; C3D/texture offsets would walk the zero tail.
+        // PORT: AMIGA: a short read must not return a partly filled buffer.
         if (lpBuffer == NULL) {
             gzclose(unk0x004bdee0);
             return NULL;
         }
-        // PORT: AMIGA: record the owning buffer so port/disk.cpp can release
-        // attached native copies without malloc_usable_size.
+        // PORT: AMIGA: record the owner so port/disk.cpp can release attached copies.
         Disk_RegisterBuffer(lpBuffer, pFileHeaderOut.archiveSize);
         CGenericFileLoader::m_fileSize = pFileHeaderOut.archiveSize;
         if ((DWORD)gzread(unk0x004bdee0, lpBuffer, pFileHeaderOut.archiveSize) != pFileHeaderOut.archiveSize) {
@@ -127,8 +125,7 @@ void *CFileBuffer::GetGenericFileBuffer(char *fileName, BOOL isLocalFile)
             free(lpBuffer);
             return NULL;
         }
-        // PORT: AMIGA: register only a buffer that is actually returned; a
-        // short read leaves no stale entry in port/disk.cpp's registry.
+        // PORT: AMIGA: register only a buffer that is actually returned.
         if (lpBuffer != NULL)
             Disk_RegisterBuffer(lpBuffer, fileSize);
     }
@@ -170,8 +167,7 @@ char g_ppsPath[260];
 char *Profile_BuildSavePath(char *pName)
 {
     unsigned int packed;
-    // PORT: AMIGA: profile names are byte-aligned records; use memcpy so the
-    // date word does not fault on a 040/060 unaligned access.
+    // PORT: AMIGA: memcpy the date word; no unaligned access on 040/060.
     memcpy(&packed, pName + 4, sizeof(packed));
 
     // the original passes one value more than the format uses

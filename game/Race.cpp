@@ -708,8 +708,7 @@ BYTE Race_LoadSelectedStage(void)
     BYTE *pTsc;
     BYTE *pTre;
     BYTE *pXhi;
-    // PORT: AMIGA: the previous stage's meshes have been released by the
-    // race callback unwind; reuse every shared vertex buffer from offset 0.
+    // PORT: AMIGA: reuse every shared vertex buffer from offset 0 after the previous stage.
     CGraphics::ResetSharedVertexBufferFill();
     if (g_raceFileCallbackSet == 0) {
         CGame::RegisterCallback(Race_ReleaseStageFile, 0);
@@ -718,9 +717,7 @@ BYTE Race_LoadSelectedStage(void)
     CGenericFileLoader::LoadIntoFileRecord((GenericFile *)&g_raceFile, g_unk0x00538548);
     RallyData_LoadChallengeScreenTextures();
     sprintf(CFrontend::m_stringDest, CRegKey::m_regKeyPathFormatValue, Race_GetStagePathBuffer38340());
-    // PORT: AMIGA: the suffix rewrite assumes at least four characters after
-    // the drive/name prefix; reject a truncated selection instead of writing
-    // before the buffer.
+    // PORT: AMIGA: the suffix rewrite needs 4+ characters; reject a truncated selection.
     if (strlen(CFrontend::m_stringDest) < 5)
         return 0;
     CFrontend::m_stringDest[strlen(CFrontend::m_stringDest) - 4] =
@@ -762,8 +759,7 @@ BYTE Race_LoadSelectedStage(void)
         sprintf(CFrontend::m_stringDest, g_str0x0051947c, GameMenu_GetChampionshipTransitionState());
         pTsc = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
                                                     CFrontend::m_stringDest, 0, &tscSize, 0);
-        // PORT: AMIGA: .tsc records are little-endian and the stage keeps a
-        // pointer into the list; decode into a copy owned by the archive.
+        // PORT: AMIGA: .tsc records are little-endian; decode into an archive-owned copy.
         if (pTsc != NULL && tscSize != 0)
             pNativeTsc = (BYTE *)CFileBuffer::AllocateLockedBuffer(tscSize);
         if (pNativeTsc != NULL && StageCameraDisk_Decode(pNativeTsc, tscSize, pTsc, tscSize, NULL)) {
@@ -785,17 +781,13 @@ BYTE Race_LoadSelectedStage(void)
         sprintf(CFrontend::m_stringDest, g_str0x0051946c, GameMenu_GetChampionshipTransitionState());
         pXhi = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
                                                     CFrontend::m_stringDest, 0, &xhiSize, 0);
-        // PORT: AMIGA: Scene_InitLighting needs the member extent to stop the
-        // .hpc vertex count and the .tre zone records from reading past a
-        // short member.
+        // PORT: AMIGA: pass the member extent so Scene_InitLighting cannot read past it.
         g_trackHeightsByteCount = pXhi != NULL ? xhiSize : 0;
         if (pTre != NULL && (char)CGameInfo::GetGraphicsOptionBit4() == 0) {
             pTre = NULL;
             treSize = 0;
         }
-        // PORT: AMIGA: a missing .tre/.xhi leaves stale lighting and height
-        // state from the previous stage. Fail the stage instead of rendering
-        // with the wrong data.
+        // PORT: AMIGA: a missing .tre/.xhi leaves stale state; fail the stage.
         if (pXhi == NULL || (pTre == NULL && (char)CGameInfo::GetGraphicsOptionBit4() != 0)) {
             Sys_Log("stage: required lighting member missing");
             return 0;
@@ -2345,8 +2337,7 @@ BYTE RallyData_IsFirstAvailableStageSelected(void);
 void RallyTiming_ResetOverallPlayerTimes(void);
 void RallyTiming_ResetDriverSplitState(void);
 void RallyTiming_RebuildChampionshipPositionMap(void);
-// PORT: AMIGA: declared in Frontend.h and Game.h. GCC 6.5 rejects qualified
-// declarations at namespace scope, so the repeats are gone.
+// PORT: AMIGA: declared in Frontend.h and Game.h; GCC 6.5 rejects the repeats.
 void NetRace_InitializeRaceSoundVolumes(void);
 void Surface_LoadStageFonts(void);
 BYTE SurfaceText_LoadRegionalStringTable(void);
@@ -3373,10 +3364,7 @@ void Race_HandleStageReplayViewTransitions(CallbackStateMachine *param1, unsigne
 
     count = pPlayers->count;
     if (count >= 1) {
-        // PORT: AMIGA: read the state through the record bitfield. The raw
-        // first byte is the little-endian state; on 68k it is the high byte of
-        // the packed state, so this check always returned early and the exit
-        // flag was never consumed.
+        // PORT: AMIGA: read the state through the bitfield; the raw first byte is the high byte on 68k.
         for (i = 0; i < count; i++) {
             if (pPlayers->records[i].bits.state != 11)
                 return;
@@ -3730,8 +3718,7 @@ void Race_LoadStageLightPlacement(void)
     sprintf(CFrontend::m_stringDest, g_strBspFormat, GameMenu_GetChampionshipTransitionState());
     pBsp = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
                                                 CFrontend::m_stringDest, 0, &bspSize, 0);
-    // PORT: AMIGA: .bsp is four little-endian FixVectors; SetTransform copies
-    // them immediately, so a stack copy is enough.
+    // PORT: AMIGA: .bsp is four little-endian FixVectors; a stack copy suffices.
     if (pBsp != NULL && StageLightTransformDisk_Decode(axes, sizeof(axes), pBsp, bspSize))
         StageLights_SetTransform(axes);
     else
@@ -3893,8 +3880,7 @@ void Race_LoadCoDriverCallData(void)
 
         sprintf(CFrontend::m_stringDest, g_strCodFormat, GameMenu_GetChampionshipTransitionState());
         g_loadedCoDriverCalls = (unsigned int *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(), CFrontend::m_stringDest, 0, &codSize, 0);
-        // PORT: AMIGA: .cod is an array of little-endian 32-bit call records;
-        // decode into a copy owned by the stage archive.
+        // PORT: AMIGA: .cod is little-endian; decode into a stage-archive-owned copy.
         if (g_loadedCoDriverCalls != NULL && codSize != 0)
             pNative = (unsigned int *)CFileBuffer::AllocateLockedBuffer(codSize + 1);
         if (pNative != NULL && CodDisk_Decode(pNative, codSize, g_loadedCoDriverCalls, codSize, NULL)) {
@@ -4516,8 +4502,7 @@ void Race_ResolveStageTexturesAndPalettes(void)
     for (i = 0; i < 48; i++)
         handles[i] = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
                                                        pNames[i], NULL, &presetSizes[i], 0);
-    // PORT: AMIGA: .hor records are little-endian. Decode the 48 presets into
-    // stack copies; the blend only reads them during this call.
+    // PORT: AMIGA: .hor records are little-endian; decode the 48 presets to stack copies.
     for (i = 0; i < 48; i++) {
         if (handles[i] != NULL &&
                 LightPresetDisk_Decode(&nativePresets[i], sizeof(nativePresets[i]),
@@ -5516,9 +5501,7 @@ void Race_UpdatePlayerViewAndDrivenCars(BYTE param1, int param2)
         }
         if (player != 0) {
             if (first == 0 || second != 0) {
-                // PORT: AMIGA: g_viewNodes has three slots but only slots 0 and
-                // 1 are created; the loop counter is the player count here, so
-                // a two-player race used the uninitialised slot 2.
+                // PORT: AMIGA: only g_viewNodes slots 0 and 1 exist; a two-player loop used slot 2.
                 SceneNode *pView = (g_raceUpdatePlayer < 3 &&
                                     g_viewNodes[g_raceUpdatePlayer] != NULL)
                                        ? g_viewNodes[g_raceUpdatePlayer]

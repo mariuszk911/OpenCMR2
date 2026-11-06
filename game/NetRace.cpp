@@ -473,8 +473,7 @@ void NetRace_DrawPlayerFlashOverlay(unsigned int player, short *pRect, int check
             alpha = g_unk0x0053a06c[view] * 0xff >> 16;
             if (alpha > 0xff)
                 alpha |= 0xff;
-            // PORT: AMIGA: the packed colour is an x86 BGRA dword; read its
-            // channels by value so the bytes stay B,G,R on big-endian 68k.
+            // PORT: AMIGA: read the BGRA dword's channels by value.
             Gfx_UnpackArgbToBgra(g_unk0x0053a00c[player & 0xff], colour);
             colour[3] = (BYTE)alpha;
             Sprite_FillRect(&g_pGraphics->field309_0x150, pRect, colour, g_unk0x0053a20c[view]);

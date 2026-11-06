@@ -1030,8 +1030,7 @@ void Scene_RelightSector(int sector)
     int k;
 
     force = 0;
-    // PORT: AMIGA: callers pass a visible-sector index; a corrupt/empty grid
-    // must not index the sector and lighting arrays out of range.
+    // PORT: AMIGA: a corrupt or empty grid must not index the sector arrays out of range.
     if (g_sceneSectorLights == NULL || g_sceneSectorLights2 == NULL ||
             sector < 0 || sector >= g_sectorCount || g_sectors[sector] == NULL)
         return;
@@ -1336,9 +1335,7 @@ void Scene_LoadLighting(int *pData, DWORD size)
 
     if (pData == NULL)
         return;
-    // PORT: AMIGA: the lighting payload is little-endian and may be unaligned.
-    // Decode scalars and build aligned native arrays; the record pointers and
-    // the vertex/triangle/level arrays are native for the shadow meshes.
+    // PORT: AMIGA: the payload is little-endian and may be unaligned; decode into aligned native arrays.
     if (size < 50)
         return;
     const BYTE *tre = (const BYTE *)pData;
@@ -1549,8 +1546,7 @@ void Scene_LoadLighting(int *pData, DWORD size)
         for (i = 0; i < pHeader->triangleCount; i++) {
             MeshTriangle *pTri = &pHeader->pTriangles[i];
             LightZoneItem *pOwner;
-            // PORT: AMIGA: the texture field is an item index until this loop;
-            // a corrupt/decode-mismatched value must not index the item array.
+            // PORT: AMIGA: the texture field is an item index here; reject a corrupt value.
             if (pTri->textures[0] < 0 ||
                     pTri->textures[0] >= g_sceneLightZones[zone].itemCount)
                 continue;
@@ -1721,9 +1717,7 @@ void Scene_InitLighting(int *pData, int *pHeights, DWORD pDataSize)
         } while (k < (unsigned int)g_sectorCount);
     }
     Scene_LoadLighting(pData, pDataSize);
-    // PORT: AMIGA: .xhi holds one height per track vertex; use the HPC vertex
-    // count and copy to native integers. The member extent was captured by
-    // Race_LoadSelectedStage; a short or mismatched .xhi must not be read.
+    // PORT: AMIGA: .xhi has one height per HPC vertex; check the extent from Race_LoadSelectedStage.
     if (pHeights != NULL && g_trackVertexCountRecord != NULL &&
         g_trackVertexCountRecord->count != 0) {
         const size_t heightBytes = (size_t)g_trackVertexCountRecord->count * 4;

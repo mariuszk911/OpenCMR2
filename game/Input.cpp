@@ -500,10 +500,7 @@ void CInput::LoadControllerInfo(void) {
             ControllerData decoded[CONTROLLER_DISK_RECORDS];
             unsigned short mapping[CONTROLLER_DISK_MAPPINGS];
 
-            // PORT: AMIGA: Controller.rcf is little-endian. Decode into native
-            // copies; a file written by the pre-fix big-endian build is
-            // migrated so the user's bindings survive the upgrade. The auto
-            // decoder also handles a legacy file with both slots mapped to 0.
+            // PORT: AMIGA: Controller.rcf is little-endian; decode native copies and migrate a legacy BE file.
             if (ControllerDisk_DecodeAuto(decoded, mapping, fileBuffer, 0x11a4)) {
                 memcpy(&m_controllerInfo, decoded, sizeof(decoded));
 
@@ -1276,8 +1273,7 @@ void CInput::SaveControllerInfo(void)
     buffer = (unsigned int *)CFileBuffer::AllocateLockedBuffer(0x11a4);
     if (buffer == NULL)
         return;
-    // PORT: AMIGA: Controller.rcf is little-endian; the loader rejects a
-    // native big-endian save, so pack the records and mappings explicitly.
+    // PORT: AMIGA: Controller.rcf is little-endian; pack records and mappings explicitly.
     if (!ControllerDisk_Pack(buffer, 0x11a4, m_controllerInfo, m_unk0x005168f4)) {
         CFileBuffer::FreeGenericFileBuffer(buffer);
         return;

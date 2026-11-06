@@ -40,8 +40,7 @@ bool CNetworkLeaderboards::LoadLeaderboards(void) {
     leaderboards = (NetworkLeaderboardsFile*)CFileBuffer::GetGenericFileBuffer(fileLocation, TRUE);
     if (leaderboards != NULL) {
         if (CGenericFileLoader::GetGenericFileSize() == 0x2088) {
-            // PORT: AMIGA: the .nlb header ints and entry wins are
-            // little-endian; decode the private file buffer in place.
+            // PORT: AMIGA: .nlb header ints and entry wins are little-endian; decode in place.
             if (LeaderboardDisk_Decode(leaderboards, 0x2088, leaderboards, 0x2088)) {
                 m_leaderboardId = leaderboards->leaderboardID;
                 m_totalLeaderboards = leaderboards->totalLeaderboards;
@@ -135,8 +134,7 @@ void CNetworkLeaderboards::AddLeaderboard(void)
 {
     int i;
 
-    // PORT: AMIGA: a corrupt/out-of-range count must not index past
-    // m_leaderboards[32].
+    // PORT: AMIGA: a corrupt count must not index past m_leaderboards[32].
     if (m_totalLeaderboards < 0 || m_totalLeaderboards >= MAX_LEADERBOARDS)
         return;
     *(BYTE *)&m_leaderboards[m_totalLeaderboards].isLoaded = 1;

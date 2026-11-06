@@ -5,8 +5,7 @@
 #include "Texture.h"
 
 // Bitmap font (.pcf data + .tga texture). The .pcf file is a header, a
-// 256-entry character map and the glyph table; the fork-owned parser
-// (src/port/font_pcf.cpp) builds the native copies at load time.
+// 256-entry character map and the glyph table; port/font_pcf.cpp builds native copies.
 
 struct FontKernPair {
     BYTE ch;                // 0x0  following character
@@ -15,8 +14,7 @@ struct FontKernPair {
 };
 
 // ON-DISK: the .pcf glyph record, 0x10 bytes. pKern holds a 32-bit offset
-// from the start of the file; the port parser builds native glyphs from the
-// file records instead of relocating the buffer in place.
+// from the start of the file; the port parser builds native glyphs instead.
 struct FontGlyph {
     BYTE field_0x0[4];
     short width;            // 0x4

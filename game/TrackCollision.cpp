@@ -255,10 +255,7 @@ void TrackCollision_LoadFinishRecords(void)
                                                     CFrontend::m_stringDest, 0, &size, 0);
     g_finData = NULL;
     g_finCount = size / 0x30;
-    // PORT: AMIGA: the records are little-endian and are linked in place
-    // through the 32-bit field at +0x28 (Sector_RebuildStageGrid), which
-    // cannot hold a pointer on 64-bit targets: decode native FinRecords,
-    // freed with the file buffer.
+    // PORT: AMIGA: records are little-endian and linked through a 32-bit field; decode native FinRecords.
     if (pFile != NULL) {
         FinRecord *pNative = (FinRecord *)CFileBuffer::AllocateLockedBuffer(g_finCount * sizeof(FinRecord) + 1);
         unsigned int count = 0;

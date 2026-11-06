@@ -681,8 +681,7 @@ void FrontendDraw_AnimatedMatrixBackground(short x0, short y0, char *pMap)
     colour[3] = 0xff;
     centre2[0] = g_pGraphics->resX;
     centre2[1] = 0;
-    // PORT: the frontend render now presents every frame (see Game.cpp), so
-    // CMain::UpdateFrameTime keeps the original 10 ms frame delta advancing.
+    // PORT: the frontend presents every frame (see Game.cpp); keep the 10 ms frame delta.
     g_matrixPhase1 = (short)(((CMain::GetFrameDelta() + 1) * -0x6000) / 360);
     g_matrixPhase2 = (short)(((CMain::GetFrameDelta() + 1) * -0x3000) / 360);
     // PORT: retain the original matrix, palette and per-dot ripple exactly;

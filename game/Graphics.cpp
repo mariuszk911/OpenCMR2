@@ -220,9 +220,7 @@ BYTE CGraphics::EvictManagedTextureResources(void) {
     unsigned int index, textureID;
     int face;
 
-    // PORT: AMIGA: the menu frame submitted just before a race transition may
-    // still be reading these V3D textures. Destroying them while the GPU is
-    // busy hard-locks the PiStorm, so drain the queue first.
+    // PORT: AMIGA: drain the queue; destroying textures the GPU reads hard-locks the PiStorm.
     Gfx_Finish();
     m_unk0x0065fa2c = 0;
 
@@ -281,11 +279,7 @@ void CGraphics::ReleaseCachedTextureSurfaces(void)
     g_unk0x0065fa30 = 0;
 }
 
-// PORT: AMIGA: stage meshes are freed with their C3D archive, but the shared
-// vertex buffers keep their fill counters. Attract mode reloads a stage every
-// cycle, so without this reset the allocator eventually runs past the 100
-// buffers. Call it when a stage is about to load and no live stage mesh can
-// still reference the old contents.
+// PORT: AMIGA: reset the vertex-buffer fill counters before a stage loads (attract reloads each cycle).
 void CGraphics::ResetSharedVertexBufferFill(void)
 {
     int i;
@@ -690,8 +684,7 @@ void CGraphics::RemapTextureAlpha(Texture *pTexture, WORD from0, WORD to0, WORD 
         t2 = to2;
         for (y = 0; y < height; y++) {
             for (x = 0; x < width; x++) {
-                // PORT: AMIGA: 32-bit texels are Direct3D B,G,R,A bytes (a
-                // little-endian DWORD); read and write them explicitly.
+                // PORT: AMIGA: texels are B,G,R,A bytes; read and write them explicitly.
                 pixel = ReadLE32(p32);
                 if ((pixel >> 24) == f0)
                     pixel = (pixel & 0xffffff) | (t0 << 24);
@@ -725,8 +718,7 @@ void CGraphics::BltTexture(Texture *pTexture, int surfaceIndex)
 
 // Moves an 8-bit channel value into a 16-bit pixel channel whose top bit is
 // `depth` bits above bit 7 (negative: below).
-// PORT: AMIGA: integer depth arithmetic; GCC 6.5 resolves abs(short) to the
-// double overload, which is not a valid shift count.
+// PORT: AMIGA: integer depth arithmetic; abs(short) picks the double overload on GCC 6.5.
 #define PACK_CHANNEL(mask, depth, v)                                                \
     ((depth) >= 0 ? (((mask) >> (depth)) & (v)) << (depth)                          \
                   : (((mask) << -(depth)) & (v)) >> -(depth))
@@ -1019,8 +1011,7 @@ TGAImageInfo *CGraphics::ParseTGAHeader(BYTE *pData)
 {
     TGAHeader *pHeader = (TGAHeader *)pData;
 
-    // PORT: AMIGA: the TGA origin and dimensions are little-endian on disk;
-    // read them without mutating the file buffer, which reloads reuse.
+    // PORT: AMIGA: TGA origin/size are little-endian; read without mutating the buffer.
     if (pHeader == NULL || pHeader->colourMapType != 0 || ReadLE16(&pHeader->xOrigin) != 0 ||
         ReadLE16(&pHeader->yOrigin) != 0 || (pHeader->descriptor & 0x70) != 0 ||
         pHeader->imageType == 3 || pHeader->imageType != 2)
@@ -1763,8 +1754,7 @@ void CGraphics::GenerateBumpMap(Texture *pSrc, Texture *pDst)
 
     if (pSrc == NULL || pDst == NULL || pSrc->pSurface == NULL || pDst->pSurface == NULL)
         return;
-    // PORT: AMIGA: a failed lock leaves the descriptors zero; never read the
-    // source through a NULL pointer.
+    // PORT: AMIGA: a failed lock leaves zero descriptors; do not read a NULL source.
     memset(&srcDesc, 0, sizeof(srcDesc));
     memset(&dstDesc, 0, sizeof(dstDesc));
     const bool srcLocked = Gfx_LockTexture(pSrc->pSurface, 0, 0, &srcDesc) != 0;
@@ -2217,8 +2207,7 @@ void Graphics_ReloadAllTextures(void)
             }
         }
     }
-    // PORT: AMIGA: a failed cube face leaves an unusable slot; do not leave
-    // the reload pass believing every face was recreated.
+    // PORT: AMIGA: a failed cube face is an unusable slot; do not report it recreated.
     for (i = 0; i < CGraphics::m_unk0x0065fa28; i++) {
         if (CGraphics::CreateCubeMapSurfaces((RenderTexture *)CGraphics::m_pTextureManager->textureBuffer2[i]) == NULL)
             Sys_Log("graphics: reflection cube %d could not be reloaded", i);
@@ -2662,9 +2651,7 @@ int Graphics_RenderNodeCubeMapFaces(SceneNode *pNode, int bit)
     return 1;
 }
 
-// PORT: AMIGA: a failed image load must release a disk-loaded source buffer;
-// archive sources are owned by the archive (0x1000 is set by
-// CreateTextureFromImageData).
+// PORT: AMIGA: a failed image load releases a disk-loaded source; the archive owns the rest.
 static void ReleaseTextureSource(Texture *pTexture, void *pData)
 {
     if (pData != NULL && pTexture != NULL && !(pTexture->flags & 0x1000))
@@ -2687,8 +2674,7 @@ Texture *CGraphics::LoadDDSTexture(DDSFile *pDDS, Texture *pTexture)
     int height;
 
     header = pDDS->desc;
-    // PORT: AMIGA: the DDS header fields this loader uses are little-endian on
-    // disk; convert a local copy so reloads still see the original bytes.
+    // PORT: AMIGA: DDS header fields are little-endian; convert a local copy.
     header.dwFlags = ReadLE32(&header.dwFlags);
     header.dwWidth = ReadLE32(&header.dwWidth);
     header.dwHeight = ReadLE32(&header.dwHeight);
@@ -2719,8 +2705,7 @@ Texture *CGraphics::LoadDDSTexture(DDSFile *pDDS, Texture *pTexture)
     else
         format = header.ddpfPixelFormat.dwRGBAlphaBitMask != 0 ? GFX_FORMAT_BGRA8 : GFX_FORMAT_BGRX8;
     pTemp = Gfx_CreateTexture(header.dwWidth, header.dwHeight, format, 1, GFX_TEXTURE_STAGING);
-    // PORT: AMIGA: a failed staging allocation must not fall through to a
-    // memcpy through an unlocked descriptor.
+    // PORT: AMIGA: a failed staging allocation must not fall through to memcpy.
     if (pTemp == NULL) {
         Sys_Log("graphics: cannot allocate a %ldx%ld DDS staging texture",
                 (long)header.dwWidth, (long)header.dwHeight);
@@ -3815,17 +3800,13 @@ void Graphics_LoadTextureRecordList(BYTE *param1, char *param2, unsigned int par
     if (param3 != 0) {
         remaining = param3;
         do {
-            // PORT: AMIGA: the record table lives between the C3D records and
-            // the texture-name block; never read past that block.
+            // PORT: AMIGA: the record table ends at the texture-name block; never read past it.
             if (limit != NULL &&
                     (param1 >= limit || (size_t)(limit - param1) < 0x10)) {
                 Sys_Log("graphics: texture record table overruns the C3D");
                 return;
             }
-            // PORT: AMIGA: the record count and name indices are little-endian
-            // and the record can be unaligned inside the C3D payload. The
-            // fixed header is 0x10 bytes and each entry is one 8-byte slot;
-            // the name index is the slot's low 16 bits.
+            // PORT: AMIGA: count and name indices are little-endian, possibly unaligned (0x10 header, 8-byte slots).
             const unsigned int count = ReadLE16(param1 + 0xc);
             if (count > 0x1000 ||
                     (limit != NULL && (size_t)(limit - param1) < 0x10u + (size_t)count * 8u)) {
@@ -3836,16 +3817,14 @@ void Graphics_LoadTextureRecordList(BYTE *param1, char *param2, unsigned int par
             for (i = 0; i < count; i++) {
                 const unsigned int nameIndex = ReadLE16(param1 + 0x14 + i * 8);
                 const char *pBaseName;
-                // PORT: AMIGA: a corrupt/unsupported record must not turn into
-                // a wild pointer through the names block and StrUpperPolish.
+                // PORT: AMIGA: a corrupt record must not become a wild name pointer.
                 if (nameIndex >= param3) {
                     Sys_Log("graphics: texture name index %lu >= %lu",
                             (unsigned long)nameIndex, (unsigned long)param3);
                     continue;
                 }
                 pName = param2 + nameIndex * 0x104;
-                // PORT: AMIGA: the 0x104-byte slot has no guaranteed terminator;
-                // reject it before StrUpperPolish or sprintf walk off the block.
+                // PORT: AMIGA: the slot has no guaranteed terminator; reject before StrUpperPolish.
                 if (memchr(pName, '\0', 0x104) == NULL) {
                     Sys_Log("graphics: unterminated texture name %lu",
                             (unsigned long)nameIndex);
@@ -3858,8 +3837,7 @@ void Graphics_LoadTextureRecordList(BYTE *param1, char *param2, unsigned int par
                     pBaseName = pName;
                 else
                     pBaseName++;
-                // PORT: preserve the variadic ABI (macOS ARM64); the textures
-                // directory plus a full-length name overflows fileName[260].
+                // PORT: keep the variadic ABI (macOS ARM64); directory plus name overflows fileName[260].
                 snprintf(fileName, sizeof(fileName), g_fontTgaFormat, CFrontend::m_stringDest, pBaseName);
                 if (param4 == 6) {
                     if (Graphics_FindAndEnsureResidentTexture(fileName) != 0)
@@ -6094,16 +6072,14 @@ Texture *CGraphics::CreateTextureFromImageData(char *name, void *pData, unsigned
     // the call is a no-op (kept so the code matches the original).
     if (CGraphics::m_textureCount == 0)
         memset(m_pTextureManager->textureBuffer, 0x98000, 0);
-    // PORT: AMIGA: compare the four bytes. Reading a DWORD here is little-
-    // endian only and made every archive DDS go to the TGA loader.
+    // PORT: AMIGA: compare bytes; a DWORD read is little-endian only.
     if (memcmp(pData, "DDS ", 4) == 0)
         isDDS = TRUE;
     for (i = 0; i < 0x800; i++) {
         if (m_pTextureManager->textureBuffer[i] == NULL) {
             m_pTextureManager->textureBuffer[i] = (Texture *)CFileBuffer::AllocateLockedBuffer(sizeof(Texture));
             pTexture = m_pTextureManager->textureBuffer[i];
-            // PORT: AMIGA: check before writing through the pointer; the
-            // original dereferenced it first.
+            // PORT: AMIGA: check the pointer before writing through it.
             if (pTexture == NULL)
                 return NULL;
             pTexture->textureId = i;
@@ -6318,8 +6294,7 @@ Texture *CGraphics::LoadTGATexture(BYTE *pTGA, Texture *pTexture)
                     a = p[3];
                 else
                     a = 0xff;
-                // PORT: AMIGA: integer depth arithmetic; abs(short) selects
-                // the double overload under GCC 6.5.
+                // PORT: AMIGA: integer depth arithmetic; abs(short) picks the double overload.
                 if (aDepth >= 0)
                     a = ((aMask >> (aDepth)) & a) << (aDepth);
                 else
@@ -7175,8 +7150,7 @@ void Graphics_DrawMeshTextureBatches(Mesh *pMesh)
             texture = pTri->textures[0];
         else
             texture = pTri->textures[pTri->field_0x2c];
-        // PORT: AMIGA: textures[] is file-controlled and uses -1 for "none";
-        // never index the 2048-entry texture table with it.
+        // PORT: AMIGA: textures[] is file data (-1 = none); never index the table with it.
         if (texture < 0 || texture >= 2048) {
             pTri++;
             continue;
@@ -7200,8 +7174,7 @@ void Graphics_DrawMeshTextureBatches(Mesh *pMesh)
         pTri++;
     }
     if (count != 0) {
-        // PORT: AMIGA: currentTexture is the last accepted triangle's index;
-        // re-deriving it from the final triangle can hit a rejected entry.
+        // PORT: AMIGA: use the last accepted triangle's index, not the final (maybe rejected) one.
         if (currentTexture >= 0 && currentTexture < 2048)
             CGraphics::ApplyTextureStageChange(0, CGraphics::m_pTextureManager->textureBuffer[currentTexture]);
         Gfx_DrawIndexedPrimitiveVB(GFX_TRIANGLELIST, CGraphics::m_pTextureManager->pVertexBuffers[pMesh->vertexBufferIndex], pMesh->vertexOffset, pMesh->field_0x10, g_unk0x0059be74, count);

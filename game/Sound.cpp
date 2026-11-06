@@ -767,8 +767,7 @@ BOOL Sound_LoadWave(char *name, BYTE flags, GenericFile *pFile)
         return FALSE;
 
     if (strncmp((char *)pWave + 8, g_strWave, 4) == 0) {
-        // PORT: AMIGA: the canonical WAV fields in this fast path are
-        // little-endian on disk.
+        // PORT: AMIGA: the canonical WAV fields are little-endian on disk.
         channels = ReadLE16(pWave + 0x16);
         rate = ReadLE32(pWave + 0x18);
         bits = ReadLE16(pWave + 0x22);

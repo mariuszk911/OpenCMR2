@@ -13,11 +13,7 @@ struct CallbackStateRecord
     union {
         int packedState;             // 0x00  same storage as bits
         struct {
-            // PORT: AMIGA - the game indexes and reads packedState as if the
-            // first declared field (state) held the low byte, the MSVC/little-
-            // endian layout. GCC on 68k allocates the first bitfield from the
-            // high bit, so declare the fields in reverse order on big-endian
-            // targets; the packed DWORD is then identical on both ends.
+            // PORT: AMIGA: fields reversed on big-endian so the packed DWORD matches MSVC.
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && \
     (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
             unsigned int reserved : 6;

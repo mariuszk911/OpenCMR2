@@ -162,8 +162,7 @@ void Mesh_BuildParts(Mesh *pMesh)
             count++;
         }
     }
-    // PORT: AMIGA: pParts has 50 slots; a corrupt/unsupported triangle set
-    // must not write the parts into the following Mesh fields.
+    // PORT: AMIGA: pParts has 50 slots; do not write past them.
     if (count > 50) {
         Sys_Log("mesh: part count %d exceeds 50", count);
         pMesh->partCount = 0;
@@ -250,9 +249,7 @@ void Mesh_UploadVertices(Mesh *pMesh)
     int i;
     void *pVertices;
 
-    // PORT: AMIGA: a mesh larger than one shared buffer can never be placed by
-    // this allocator. Leave it on a known buffer instead of reading past the
-    // 100-entry fill table, which is what the original fall-through does.
+    // PORT: AMIGA: a mesh larger than one shared buffer is left on a known buffer.
     if (pMesh->field_0x10 < 0 || pMesh->field_0x10 >= 2000) {
         Sys_Log("mesh: refusing %ld vertices (buffer holds 2000)",
                 (long)pMesh->field_0x10);
@@ -276,8 +273,7 @@ void Mesh_UploadVertices(Mesh *pMesh)
             return;
         }
     }
-    // PORT: AMIGA: never index vertexBufferFill[100]; the original sprintf
-    // did exactly that when every shared buffer was full.
+    // PORT: AMIGA: never index vertexBufferFill[100] when every buffer is full.
     Sys_Log("mesh: no shared vertex buffer has room for %ld vertices",
             (long)pMesh->field_0x10);
     pMesh->vertexBufferIndex = 0;
@@ -291,9 +287,7 @@ void Mesh_RefreshVertices(Mesh *pMesh)
     GfxVertexBuffer *pBuffer;
     void *pVertices;
 
-    // PORT: AMIGA: the lighting pass calls this for every sector/object mesh;
-    // a mesh that could not be uploaded has no valid buffer and must not be
-    // copied through a NULL lock.
+    // PORT: AMIGA: a mesh that could not be uploaded has no buffer; do not copy through NULL.
     if (pMesh == NULL || pMesh->pVertexData == NULL || pMesh->field_0x10 <= 0 ||
             pMesh->vertexBufferIndex < 0 || pMesh->vertexBufferIndex >= 100)
         return;

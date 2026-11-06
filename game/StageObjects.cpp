@@ -1576,8 +1576,7 @@ void Replay_RestoreCarState(Block0x309 *pSrc, Car *pDst)
     }
     memcpy(wheelEmitter, pDst->wheelEmitter, sizeof(wheelEmitter));
 
-    // PORT: AMIGA: the lane is stored in the original disk layout; apply the
-    // scalar swaps while copying it into the native Car.
+    // PORT: AMIGA: the lane is in the disk layout; swap scalars while copying.
     Disk_Unpack(pDst, pSrc, &g_diskLayout_Car);
 
     pDst->pSceneRoot = pSceneRoot;
@@ -1607,9 +1606,7 @@ void Replay_CopyAuxState(Block0x134 *pSrc, Block0x134 *pDst)
     *pDst = *pSrc;
 }
 
-// Copies a 0x134-int car state record, keeping the destination's geometry
-// pointers. The generated pointer list is the only layout-safe description:
-// the geometry block is 0xb4 bytes on 32-bit and 0x168 on 64-bit.
+// Copies a 0x134-int car state record, keeping the destination's geometry pointers.
 static void Replay_KeepPartSetPointers(Block0x134 *pDst, unsigned char *keep)
 {
     int i;
@@ -1638,8 +1635,7 @@ void Replay_RestoreAuxState(Block0x134 *pSrc, Block0x134 *pDst)
 {
     unsigned char keep[sizeof(CarPartSet)];
 
-    // PORT: AMIGA: both paths must keep every live geometry pointer that
-    // Disk_Unpack zeroes; only the scalar damage state comes from the lane.
+    // PORT: AMIGA: keep the live geometry pointers that Disk_Unpack zeroes.
     Replay_KeepPartSetPointers(pDst, keep);
     Disk_Unpack(pDst, pSrc, &g_diskLayout_CarPartSet);
     Replay_RestorePartSetPointers(pDst, keep);
@@ -1757,8 +1753,7 @@ BYTE StageObject_ReleaseLoadedObjectFile(void);
 // Loads the stage's sky and ground objects: the TEMP.SKY archive (also opened
 // as .bfl, .c3d and top.c3d) and TEMP.GRO, releasing each one's meshes first.
 // FUNCTION: CMR2 0x0046f060
-// PORT: AMIGA: a C3D node may have no mesh (pObject == NULL); the original
-// dereferenced it unconditionally, which is a hard fault. Guard every node.
+// PORT: AMIGA: a C3D node may have no mesh; guard every node.
 void StageObjects_LoadSkyAndGround(void)
 {
     char buffer[MAX_PATH];
@@ -5951,9 +5946,7 @@ void StageObject_PositionRearViewLightNodes(unsigned int param_1)
     car = param_1;
     pCar = Car_Get(car);
     level = StageObject_GetSceneLightBrightness();
-    // Headlights follow darkness, not "not exactly full brightness": a
-    // firework ambient flash used to change the level and switch them on in
-    // daylight. Keep them off unless the scene is actually dark.
+    // Headlights follow darkness; a firework flash must not switch them on in daylight.
     pCar->field_0xb58 = level < 0x8000 ? 1 : 0;
     value = FixMul(0x4c0000, level);
     CarLight_GetScaledChannelLevels(car, (int *)&param_1, (int *)&param_1, 4);
@@ -6420,9 +6413,7 @@ void StageObject_AverageWheelGroundLighting(unsigned int param_1, int param_2)
     unsigned short flags;
     FixVector lighting[3];
     int h;
-    // PORT: AMIGA: Scene_GetLightColour/Scene_GetAmbientColour write a DWORD.
-    // Keep the storage aligned and read the colour bytes through a BYTE view;
-    // the original byte arrays were also read through unaligned int pointers.
+    // PORT: AMIGA: aligned DWORD storage, read through a BYTE view.
     DWORD light;
     DWORD ambient;
     // Original RGB triplet at ebp-0x38/-0x34/-0x30 is passed as one buffer.
@@ -6463,9 +6454,7 @@ void StageObject_AverageWheelGroundLighting(unsigned int param_1, int param_2)
         else if (avg < 0)
             avg = 0;
         Scene_GetLightColour(&light, avg);
-        // PORT: AMIGA: the original masked an int read from the byte array;
-        // that assumes little-endian and reads past the array. Read the RGBA
-        // bytes directly so the car light is identical on both endiannesses.
+        // PORT: AMIGA: read the RGBA bytes directly; the masked int read assumed little-endian.
         rgb[0] = (int)((BYTE *)&light)[0] << 16;
         rgb[1] = (int)((BYTE *)&light)[1] << 16;
         rgb[2] = (int)((BYTE *)&light)[2] << 16;
@@ -6537,8 +6526,7 @@ void StageObject_RebuildViewWeatherLighting(int index)
 {
     ViewWeatherState *pView;
     ViewLightingRamp *pObject;
-    // PORT: AMIGA: view records are allocated per player; a stale view index
-    // or partial allocation must not index the weather/ramp arrays.
+    // PORT: AMIGA: a stale view index or partial allocation must not index the arrays.
     if (g_viewWeather == NULL || g_viewLightingRamps == NULL ||
             index < 0 || index >= (int)g_stageObjectCount.value)
         return;
@@ -11956,10 +11944,7 @@ int Replay_SelectAndInitializeLane(ReplayStream *p, short lane, short start, BYT
     p->playing = 1;
     p->lane = lane;
     p->playStarted = 1;
-    // PORT: AMIGA benchmark window: the attract demo is the fixed A/B workload,
-    // so the player-car replay start opens the measured section. Replay frame
-    // playback already has playStarted set here, so this is the only place a
-    // demo run begins.
+    // PORT: AMIGA benchmark window: the player-car replay start opens the measured section.
     if (car == 0)
         Gfx_BenchmarkBegin();
     if (start == 0)
@@ -14031,8 +14016,7 @@ BYTE *AI_LoadStageRouteTables(void)
     if (pData != files[level])
         memcpy(pData, files[level], sizes[level]);
     else if (files[level] != NULL) {
-        // PORT: AMIGA: never normalise the archive member in place; the stage
-        // buffer is unavailable, so give the AI tables their own copy.
+        // PORT: AMIGA: never normalise the archive member in place; use an own copy.
         BYTE *pNative = (BYTE *)CFileBuffer::AllocateLockedBuffer(sizes[level]);
         if (pNative != NULL) {
             memcpy(pNative, files[level], sizes[level]);
@@ -14043,8 +14027,7 @@ BYTE *AI_LoadStageRouteTables(void)
     pEnd = pData + sizes[level];
     if (pData == NULL)
         return pEnd;
-    // PORT: AMIGA: the AI tables are little-endian; normalise the private
-    // copy before the parser walks it.
+    // PORT: AMIGA: the AI tables are little-endian; normalise the private copy.
     if (pData != files[level])
         AiDisk_Decode(pData, sizes[level], pData, sizes[level]);
     g_stageAiData = pData;
@@ -14199,8 +14182,7 @@ void Replay_PlayStreamFrame(ReplayStream *pState)
             p->lane++;
             if (p->lane == p->laneCount) {
                 Replay_ResetBufferIfActive(pState);
-                // PORT: AMIGA benchmark window: the attract demo is the fixed
-                // A/B workload, so its end delimits the measured section.
+                // PORT: AMIGA benchmark window: the attract demo's end closes the measured section.
                 if (p->car == 0)
                     Gfx_BenchmarkEnd();
             }
@@ -15433,14 +15415,10 @@ void Fireworks_Update(void)
                 if (pRocket->sound != -1 && Sound_IsPlaying(pRocket->sound))
                     Sound_Free(pRocket->sound);
                 pRocket->state = 2;
-                // The ambient flash is added to the whole scene; keep it below
-                // the original full scale so a burst does not wash out the
-                // stage and car. 0x10000 is the original maximum.
+                // Keep the ambient flash below full scale (0x10000) so it does not wash out the scene.
                 g_stageAmbientFlashLevel = 0x2000;
                 {
-                    // PORT: AMIGA: the table is 0xAARRGGBB; the ambient fade
-                    // reads R,G,B,A bytes. Unpack the channels explicitly so
-                    // the flash does not take alpha as red on 68k.
+                    // PORT: AMIGA: unpack 0xAARRGGBB into R,G,B,A bytes; alpha must not become red.
                     DWORD firework = g_fireworkFlashColours[pRocket->colour];
                     g_stageAmbientFlashColour[0] = (BYTE)(firework >> 16);
                     g_stageAmbientFlashColour[1] = (BYTE)(firework >> 8);

@@ -125,12 +125,7 @@ void Sprite_DrawLayer(int layer)
         w = (float)(unsigned int)pSprite->pTexture->width;
         h = (float)(unsigned int)pSprite->pTexture->height;
         inset = Gfx_GetSpriteTexelInset(pSprite->pTexture->pSurface);
-        // PORT: AMIGA: sample half a texel inside both UV edges so a sprite
-        // (a font glyph or a menu dot) never reads the neighbouring cell of
-        // its atlas, at every size. The inset is applied to the UVs only and
-        // the destination keeps its full size; this replaces the old
-        // half-screen-pixel adjustment, which the original applied only at
-        // native scale and then discarded when the sprite was enlarged.
+        // PORT: AMIGA: inset the UVs half a texel so sprites never sample a neighbouring cell.
         if (pSprite->src.w > 0) {
             u0 = X87S_DIV(X87S_ADD(X87S_LOAD(pSprite->src.x), inset), w);
             u1 = X87S_DIV(X87S_SUB(X87S_LOAD(pSprite->src.x + pSprite->src.w), inset), w);
@@ -435,9 +430,7 @@ int Sprite_FillRect(BYTE *unused, short *pRect, BYTE *pColour, int layer)
             c[0] = a[0];
             a[1] = (int)FTOI(__int64, X87S_MUL((double)y0, CGraphics::m_65536));
             x1 = 0x8000 - (int)FTOI(__int64, X87S_MUL((double)(w - 1 + x0), g_minus65536));
-            // PORT: AMIGA: Direct3D still fills a one-pixel rect after the
-            // half-pixel offset; GL sees a 0.5px edge and drops it. Widen the
-            // far edge to a full pixel so the option separators survive.
+            // PORT: AMIGA: widen the far edge to a full pixel; GL drops a 0.5px edge.
             if (w == 1)
                 x1 += 0x8000;
             b[0] = x1;

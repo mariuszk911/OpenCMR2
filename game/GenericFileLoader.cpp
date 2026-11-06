@@ -63,15 +63,13 @@ void *CGenericFileLoader::FindFileInArchive(GenericFile *pFile, char *name, DWOR
     unsigned int pad;
     char entryName[260];
 
-    // PORT: AMIGA: a malformed or truncated archive must not read outside the
-    // file buffer.
+    // PORT: AMIGA: a truncated archive must not read outside the buffer.
     if (pFile == NULL || pFile->buffer == NULL || pFile->fileSize < 4)
         return NULL;
     _strlwr(name);
     pBuffer = (BYTE *)pFile->buffer;
     pDirectoryEnd = pBuffer + pFile->fileSize - 4;
-    // PORT: AMIGA: the directory offset and ArchiveEntry fields are
-    // little-endian on disk. Read them without casting the entry.
+    // PORT: AMIGA: directory and entry fields are little-endian; read without casting.
     directoryOffset = ReadLE32(pDirectoryEnd);
     if (directoryOffset > (DWORD)(pDirectoryEnd - pBuffer))
         return NULL;

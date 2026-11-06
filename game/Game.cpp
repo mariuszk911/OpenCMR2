@@ -304,9 +304,7 @@ void Game_DrawBootCameraAndFPS(CallbackStateMachine *p1, BYTE p2)
         Font_DrawText(0, CFrontend::m_stringDest, 0, 0, g_fpsTextColours, 9);
     }
     Game_DrawSceneViewport(g_splashSceneRoot, g_splashCamera, rect, 0, 1);
-    // PORT: AMIGA: the port has no separate frontend present path. Without
-    // this the menu draws into the back buffer, GetFrameDelta stays 0 and the
-    // matrix/flag animation never advances.
+    // PORT: AMIGA: present every frame so GetFrameDelta advances menu animation.
     Graphics_PresentFrameAndResetCounters();
 }
 
@@ -1449,11 +1447,7 @@ BOOL CGame::UpdateInRaceCallbackMachine(void)
         {
             extern BYTE g_unk0x0053810d;
             if (g_unk0x0053810d != 0) {
-                // PORT: AMIGA: the pause-menu exit sets this flag from any race
-                // state, but its handler lives in state 11. During the countdown
-                // and other pre-race states the normal promotion does not reach
-                // state 11, so the closed menu left the game paused on the fade.
-                // Force the exit state so the next dispatch tears the race down.
+                // PORT: AMIGA: force the exit state; the pause-menu exit is not reached before state 11.
                 for (i = 0; i < g_raceCallbackStorage.machine.count; i++) {
                     g_raceCallbackStorage.machine.records[i].bits.state = 11;
                     g_raceCallbackStorage.machine.records[i].bits.level = 1;
@@ -2155,8 +2149,7 @@ static int s_viewMaskDepth;
 
 void Game_DrawViewMaskNodes(SceneNode *pNode, int bit)
 {
-    // PORT: AMIGA: a malformed/cyclic scene tree must not recurse until the
-    // 68k stack faults; the normal scene depth is far below this.
+    // PORT: AMIGA: bound scene recursion; a cyclic tree would fault the 68k stack.
     if (pNode == NULL || s_viewMaskDepth >= 64)
         return;
     s_viewMaskDepth++;
@@ -2203,8 +2196,7 @@ void Game_DrawViewMaskNode(SceneNode *pNode, int bit)
 // FUNCTION: CMR2 0x0049cb50
 void CGame::QueuePrimaryDrawObject(void *param1)
 {
-    // PORT: AMIGA: the queue is a fixed 4096-entry array; an overfull stage
-    // object set must not write past it (and later past `sorted[4096]`).
+    // PORT: AMIGA: the queue is a fixed 4096 entries; do not write past it.
     if (param1 != NULL && m_deferredDrawCount >= 0 && m_deferredDrawCount < 4096)
         m_deferredDrawObjects[m_deferredDrawCount++] = param1;
 }
@@ -2212,8 +2204,7 @@ void CGame::QueuePrimaryDrawObject(void *param1)
 // FUNCTION: CMR2 0x0049cb70
 void CGame::QueueSecondaryDrawObject(void *param1)
 {
-    // PORT: AMIGA: fixed 4096-entry array; drop excess nodes instead of
-    // smashing the globals that follow it.
+    // PORT: AMIGA: fixed 4096-entry array; drop excess nodes.
     if (param1 != NULL && m_transparentDrawCount >= 0 && m_transparentDrawCount < 4096)
         m_transparentDrawNodes[m_transparentDrawCount++] = param1;
 }

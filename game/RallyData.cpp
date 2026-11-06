@@ -1739,8 +1739,7 @@ void RallyData_MarkAllDriverRecordsUnassigned(void)
     } while (i < 16);
 }
 
-// Fills the weather-select rows of the single-stage setup menu: "Random" plus
-// the distinct weather values of the selected rally (Bright, Dry, Cloudy, ...).
+// Fills the weather-select rows: "Random" plus the rally's distinct weather values.
 // match 69%: the original keeps the split list in EDI and the row index in ESI
 // (we get them swapped), so every register in the marker loop differs.
 // FUNCTION: CMR2 0x004efe60
@@ -1755,8 +1754,7 @@ void RallyData_FillStageSplitEditorRows(Menu *param_1, int param_2, char param_3
 
     RallyData_RebuildDistinctValueList();
     count = RallyData_GetDistinctValueCount();
-    // PORT: AMIGA: the list is int[9]. Viewing it as short read the high half
-    // on big-endian 68k, so every weather entry became value 0 ("Bright").
+    // PORT: AMIGA: the list is int[9]; the short view read the high half on 68k.
     pSplits = (int *)RallyData_GetDistinctValueList();
     RallyData_SetDriverPairingStateValues(0, 0);
     pMenu = FrontendMenu_GetAlternateRallyStageSelection();
@@ -3952,13 +3950,7 @@ char *g_unk0x00527128[9] = {
     (char *)(g_unk0x0051682c + 0x70), g_str0x00527280, (char *)(g_unk0x0051682c + 0x68), (char *)(g_unk0x0051682c + 0x60), (char *)(g_unk0x0051682c + 0x58), (char *)(g_unk0x0051682c + 0x50), g_str0x00527278, (char *)(g_unk0x0051682c + 0x48), (char *)(g_unk0x0051682c + 0x78)
 };
 
-// Weather map textures of the current rally. One block in the original: the
-// clear loop in RallyData_LoadCurrentRallyWeatherTextures runs five times and
-// spills into the next fields, and RallyData_SetupWeatherTextureEntries
-// indexed past maps[3] (now clamped by WeatherMap_Index). As separate globals
-// the clear loop overran into unrelated data (it zeroed g_selectedRallyData:
-// France asked for the CD because the weather textures were looked up under
-// FINLAND).
+// Weather map textures of the current rally, one block as in the original (see AMIGA_PORT.md).
 struct WeatherMapSet {
     unsigned int count; // 0x00, number of maps loaded for this rally group
     void *mainMap;      // 0x04
@@ -4031,13 +4023,9 @@ void RallyData_LoadCurrentRallyWeatherTextures(void)
     int stage;
     int index;
 
-    // PORT: AMIGA: assign the count directly. The original wrote only its low
-    // byte, which on 68k is the most significant byte (0x04000000) and leaves
-    // `count & 0xff` zero, so no map is loaded.
+    // PORT: AMIGA: assign the count; the byte write hit the MSB on 68k and no map loaded.
     g_weatherMaps.count = 0;
-    // PORT: AMIGA: the original cleared five entries, writing maps[4] (the
-    // storage of rects[0..1]) and rects[8..9] (slots[0..3]). Clear the same
-    // bytes within each array's bounds.
+    // PORT: AMIGA: clear the five entries within each array's bounds.
     for (i = 0; i < 4; i++) {
         g_weatherMaps.maps[i] = NULL;
         g_weatherMaps.rects[i * 2] = 0;
@@ -4091,8 +4079,7 @@ void RallyData_SetupWeatherTextureEntries(void)
     int index;
     int i;
 
-    // PORT: AMIGA: the weather atlas can fail to load; do not read its
-    // dimensions through a NULL texture.
+    // PORT: AMIGA: a failed weather atlas has no dimensions; do not read through NULL.
     if (g_weatherMaps.mainMap == NULL) {
         g_unk0x0082c9e8 = NULL;
         g_optionPreviewPanelCount = 0;
@@ -4103,8 +4090,7 @@ void RallyData_SetupWeatherTextureEntries(void)
     g_optionPreviewExpandedRect[1] = 0x72;
     g_optionPreviewExpandedRect[2] = 0x100;
     g_optionPreviewExpandedRect[3] = 0xf6;
-    // PORT: AMIGA: copy the short fields one by one; the original read two
-    // shorts at a time through an int pointer.
+    // PORT: AMIGA: copy the short fields one by one; no int read of two shorts.
     {
         Texture *pMain = (Texture *)g_weatherMaps.mainMap;
         g_mapSrcRect[0] = pMain->field_0x11c;
@@ -4129,9 +4115,7 @@ void RallyData_SetupWeatherTextureEntries(void)
         pEntry->startTime3 = 0;
         pEntry->startTime2 = 0;
         pEntry->startTime = 0;
-        // PORT: AMIGA: the original adds the panel index to stage % 4, which
-        // reads maps[4] past the four-entry array on residue 3 with a second
-        // panel. Clamp to the maps loaded for this rally group.
+        // PORT: AMIGA: clamp to the maps loaded for this group; stage % 4 + panel reaches maps[4].
         index = WeatherMap_Index(RallyDataStageIndex(), i,
                                  (int)(g_weatherMaps.count & 0xff));
         if (g_weatherMaps.maps[index] == NULL) {
@@ -4442,8 +4426,7 @@ int RallyData_GetRouteStateValue(void)
 // FUNCTION: CMR2 0x00421440
 RallyRouteNode *RallyData_GetAvailableRouteNodeRecord(int index)
 {
-    // PORT: AMIGA: callers walk node +/- 1; an index outside the decoded
-    // route must return NULL rather than a pointer past the array.
+    // PORT: AMIGA: return NULL for an index outside the decoded route.
     if (g_routeNodeCount == 0 || g_routeNodes == NULL ||
             index < 0 || index >= g_routeNodeCount)
         return NULL;
@@ -6773,8 +6756,7 @@ void RallyData_QueueSelectedCarSplitPanel(void)
         rect[1] = (short)((pEntry->v0 - FixMul(first, scale)) >> 16);
         rect[3] = (short)(scale >> 16);
     } else {
-        // PORT: AMIGA: copy the four coordinates instead of an int-sized read
-        // of the short array.
+        // PORT: AMIGA: copy the four coordinates; no int read of the short array.
         rect[0] = g_mapSrcRect[0];
         rect[1] = g_mapSrcRect[1];
         rect[2] = g_mapSrcRect[2];
@@ -7513,8 +7495,7 @@ void RallyData_RebuildSectorStaticObjectTables(void)
                             pEntry = g_sectorListEntriesB[listIndexB] + offsetB;
                     }
                     if (pEntry == NULL) {
-                        // PORT: AMIGA: object was not assigned to either list;
-                        // do not write through an uninitialised entry pointer.
+                        // PORT: AMIGA: object not assigned to either list; no write through an unset pointer.
                         pRecord = pRecord->pNext;
                         continue;
                     }
@@ -7535,8 +7516,7 @@ void RallyData_RebuildSectorStaticObjectTables(void)
                     hy = pRecord->length;
                     hz = pRecord->height;
                     if (pRecord->type == 0) {
-                        // PORT: AMIGA: the point-bounds table is allocated only
-                        // when a type-0 record exists; do not add to NULL.
+                        // PORT: AMIGA: the point-bounds table exists only with a type-0 record.
                         if (g_objectPointBounds == NULL) {
                             Sys_Log("stage: object point bounds missing");
                             break;
@@ -8574,9 +8554,7 @@ void RallyData_LoadSelectedRouteNodes(void)
         unsigned int decoded = 0;
         RallyRouteNode *pNative;
 
-        // PORT: AMIGA: an empty .cat used to fall through to node -1. A decode
-        // failure must also fail closed: the raw member is little-endian and
-        // potentially unaligned, so it cannot be used as native records.
+        // PORT: AMIGA: empty .cat or decode failure fails closed; the raw member is little-endian.
         if (nodeCount == 0) {
             Sys_Log("route: empty .cat");
             g_routeNodes = NULL;

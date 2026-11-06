@@ -1722,9 +1722,7 @@ BYTE StageTiming_NoOpLightRelease(void)
 // FUNCTION: CMR2 0x00490d50
 void StageTiming_IndexSerializedStageTables(BYTE *pData, DWORD size)
 {
-    // PORT: AMIGA: the serialized collision block is little-endian and can be
-    // unaligned. Build one aligned native block, attach it to the archive
-    // buffer, and point the runtime views at the native records and arrays.
+    // PORT: AMIGA: the block is little-endian and may be unaligned; build an aligned native copy.
     g_trackVertexCountRecord = NULL;
     g_trackCollisionHeader = NULL;
     g_trackTriangles = NULL;
@@ -1736,9 +1734,7 @@ void StageTiming_IndexSerializedStageTables(BYTE *pData, DWORD size)
     const BYTE *pFile = pData;
     int levelCounts[5];
 
-    // PORT: AMIGA: the serialized block is a BFL member with no trustable
-    // self-describing length; every count is validated against `size` before
-    // it is used to advance the cursor.
+    // PORT: AMIGA: no trustable length; validate every count against `size`.
     if (size < 0x14)
         return;
     unsigned int vertexCount;
@@ -1966,8 +1962,7 @@ void StageTiming_LoadCspData(void)
         sprintf(CFrontend::m_stringDest, g_strCspFormat, GameMenu_GetChampionshipTransitionState());
         g_unk0x00542608 = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
                                                                CFrontend::m_stringDest, 0, &cspSize, 0);
-        // PORT: AMIGA: the .csp start table is little-endian; decode a copy
-        // owned by the stage archive and point the start data into it.
+        // PORT: AMIGA: the .csp start table is little-endian; decode an archive-owned copy.
         if (g_unk0x00542608 != NULL && cspSize != 0)
             pNativeCsp = (BYTE *)CFileBuffer::AllocateLockedBuffer(cspSize);
         if (cspSize < 0x18) {
@@ -1982,8 +1977,7 @@ void StageTiming_LoadCspData(void)
         } else {
             if (pNativeCsp != NULL)
                 CFileBuffer::FreeGenericFileBuffer(pNativeCsp);
-            // PORT: AMIGA: do not expose the raw little-endian/un-aligned
-            // member as native start data.
+            // PORT: AMIGA: never expose the raw member as native start data.
             Sys_Log("start table: .csp decode failed");
             g_unk0x00542608 = NULL;
         }
@@ -2658,8 +2652,7 @@ void *g_carAuxiliaryBuffers[16];
 SceneNode *g_carAlternateBodyScenes[16];
 // GLOBAL: CMR2 0x00542904
 void *g_carWheelModelBuffers[16];
-// PORT: AMIGA: member extent captured when the C3D buffer is loaded; the C3D
-// relocator uses it to reject counts that walk past the buffer.
+// PORT: AMIGA: member extent captured at C3D load; bounds the relocator.
 static DWORD g_carModelC3dSizes[16];
 static DWORD g_carWheelC3dSizes[16];
 static DWORD g_carAlternateBodyC3dSizes[16];
@@ -4407,8 +4400,7 @@ void Stage_GetCarStartXZ(int car, int *pStarts, int *pOut);
 // FUNCTION: CMR2 0x00456c70
 int *StageTiming_GetCarStartPosition(int car)
 {
-    // PORT: AMIGA: a missing/short .csp leaves this pointer NULL; return a
-    // neutral start instead of dereferencing file data that is not there.
+    // PORT: AMIGA: a missing .csp leaves this NULL; return a neutral start.
     if (g_carStartData == NULL) {
         g_carStartPosition.x = 0;
         g_carStartPosition.y = 0;
@@ -4531,8 +4523,7 @@ void CarDamage_CaptureStageSnapshot(int car)
     int i;
     int value;
 
-    // PORT: AMIGA: car index comes from the spawned Car record; reject an
-    // unspawned/invalid car before indexing the fixed part/damage tables.
+    // PORT: AMIGA: reject an unspawned or invalid car before indexing the tables.
     if (pCar == NULL || pCar->index < 0 || pCar->index >= 16)
         return;
     pSource = g_carPartSets + pCar->index;
@@ -4627,8 +4618,7 @@ void StageTiming_BlendCarPaintDecalRows(StageTimingSpread *pCar, int *pOut)
     int i;
 
     v = (unsigned int)RallyData_GetRouteAvailabilityState();
-    // PORT: AMIGA: GCC 6.5 ICEs on the 64-bit float-to-int conversion with
-    // -malign-int; the helper keeps it in Domain B and returns the low 32 bits.
+    // PORT: AMIGA: GCC 6.5 ICEs on 64-bit float-to-int with -malign-int; use the Domain B helper.
     t = Port_DoubleToInt64Low(X87S_MUL((double)v, CGraphics::m_65536));
     // The original computes this and discards it (inline __asm FixMul is opaque
     // to MSVC6, so it cannot be eliminated); reproduced to match the codegen.
@@ -5820,10 +5810,7 @@ void StageTiming_LoadSelectedTeamArchive(void)
         }
         if (dest != NULL && bufs[index] != NULL && sizes[index] != 0)
             memcpy(dest, bufs[index], sizes[index]);
-        // PORT: AMIGA: the .tm? table keeps its signed-byte prefix and stores
-        // the split samples/weights as little-endian 32-bit words. The AI
-        // tables are staged after dest, so decode a separate owned copy here
-        // instead of normalising an archive member in place.
+        // PORT: AMIGA: decode the little-endian .tm? table into an owned copy, not in place.
         BYTE *splitTable = (BYTE *)dest;
         int tableOk = 0;
         if (dest != NULL && dest != bufs[0] && dest != bufs[1] && dest != bufs[2]) {
@@ -5926,8 +5913,7 @@ void StageTiming_BuildCheckpointSplitPositions(void)
         if (pNode == NULL)
             continue;
         if ((pNode->flags & 1) != 0) {
-            // PORT: AMIGA: the game has 12 split slots; an anomalous route
-            // must not write past g_splitPositions[12].
+            // PORT: AMIGA: 12 split slots; an anomalous route must not overrun g_splitPositions.
             if (count >= 12)
                 break;
             g_splitPositions[count] = (int)FTOI(__int64, X87S_MUL((double)i, CGraphics::m_65536));
@@ -6963,9 +6949,7 @@ void CarPart_IntegrateDetachedMotion(void);
 int StageTiming_PlaceCarViewNodesAndBody(SceneNode *pNodeA, SceneNode *pNodeB, int carIndex, int param_4,
                   FixAngles *pAngles, FixVector *pPosition, int param_7)
 {
-    // PORT: AMIGA: Car_Spawn dereferences both the body node and the car's
-    // body pointer. A car model with a missing type-5 node must fail here
-    // rather than fault on the 68060.
+    // PORT: AMIGA: fail here on a missing body node rather than fault in Car_Spawn.
     if (pNodeA == NULL || pNodeB == NULL || pAngles == NULL || pPosition == NULL)
         return 0;
     SceneNode_SetRotation(pNodeA, pAngles);
@@ -8124,8 +8108,7 @@ int StageTiming_LoadStageCarsAndEffects(void)
     SceneNode *pNode;
 
     count = StageTiming_GetTotalCarCount();
-    // PORT: AMIGA: a zero car count makes Car_Get(count - 1) read before the
-    // table; fail the stage instead.
+    // PORT: AMIGA: a zero car count would read Car_Get(-1); fail the stage.
     if (count <= 0) {
         Sys_Log("stage: invalid car count %d", count);
         return 0;
@@ -8512,11 +8495,7 @@ classes:
         BYTE *pCin = (BYTE *)CFileBuffer::GetGenericFileBuffer(CFrontend::m_stringDest, FALSE);
         DWORD cinSize = pCin != NULL ? (DWORD)CGenericFileLoader::GetGenericFileSize() : 0;
 
-        // PORT: AMIGA: .cin sections are little-endian and subsystems cache
-        // pointers into them. Decode in the file buffer, so the sections and
-        // the buffer that owns them keep exactly one lifetime. A missing or
-        // rejected section table would leave raw LE data active, so fail the
-        // car instead.
+        // PORT: AMIGA: .cin sections are little-endian; decode in the file buffer, fail the car if rejected.
         if (pCin == NULL || cinSize == 0 ||
                 !CarInfoDisk_Decode(pCin, cinSize, pCin, cinSize)) {
             Sys_Log("car %d: .cin missing or invalid", car);
@@ -8536,8 +8515,7 @@ classes:
     CGenericFileLoader::LoadIntoFileRecord(pArchive, CFrontend::m_stringDest);
     if (pData == NULL)
         return 0;
-    // PORT: AMIGA: fail cleanly if the car's texture archive is missing; the
-    // scene builder below still needs its archive for texture records.
+    // PORT: AMIGA: fail cleanly if the car's texture archive is missing.
     if (pArchive->buffer == NULL) {
         Sys_Log("car %d: model archive missing", car);
         return 0;
@@ -8545,16 +8523,14 @@ classes:
     pScene = Sector_BuildC3DModelScene(pData, RallyData_GetChallengeRenderState(), pArchive,
                                        g_carModelC3dSizes[car]);
     pBody = SceneNode_FindByType(pScene, 5);
-    // PORT: AMIGA: Car_Spawn dereferences the body node; a malformed or
-    // unsupported C3D must not reach it with a NULL scene/body.
+    // PORT: AMIGA: a bad C3D must not reach Car_Spawn with a NULL scene/body.
     if (pScene == NULL || pBody == NULL) {
         Sys_Log("car %d: C3D has no scene/body node", car);
         return 0;
     }
     {
         int wheel;
-        // PORT: AMIGA: Car_Spawn dereferences pWheelNodes[0..3] and their
-        // local matrices; a car model without those nodes must fail here.
+        // PORT: AMIGA: Car_Spawn needs pWheelNodes[0..3]; fail here without them.
         for (wheel = 1; wheel <= 4; wheel++) {
             if (SceneNode_FindByType(pScene, wheel) == NULL) {
                 Sys_Log("car %d: C3D has no wheel node %d", car, wheel);
@@ -8593,8 +8569,7 @@ classes:
             int wheelOk = 1;
             int wheel;
 
-            // PORT: AMIGA: every wheel lookup used to be dereferenced without
-            // a check; a model that lacks one wheel node faulted here.
+            // PORT: AMIGA: a model lacking a wheel node faulted on the unchecked lookup.
             for (wheel = 0; wheel < 4; wheel++) {
                 pWheelNodes[wheel] = SceneNode_FindByType(pScene, wheel + 1);
                 if (pWheelNodes[wheel] == NULL)

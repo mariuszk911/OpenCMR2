@@ -13,9 +13,7 @@ char g_tgaSuffix[] = ".tga";
 // FUNCTION: CMR2 0x004a9f50
 void Texture_GetPathStem(char *pOut, char *path)
 {
-    // PORT: AMIGA: accept both separators and truncate the extension directly.
-    // GCC 6.5 -O2 miscompiled the old sprintf(dot, "") and left ".tga" on the
-    // stem, so the archive was queried as "cmr2.tga.dds" and never found.
+    // PORT: AMIGA: accept both separators; GCC 6.5 -O2 miscompiled sprintf(dot, "").
     const char *back = strrchr(path, '\\');
     const char *forward = strrchr(path, '/');
     const char *base = path;
@@ -56,8 +54,7 @@ Texture* CTexture::FindLoadTexture(GenericFile* pFile, char* textureName, bool *
             if (didLoadTexture != NULL)
                 *didLoadTexture = true;
             pTexture = CGraphics::CreateTextureFromImageData(textureName, pData, flag);
-            // PORT: AMIGA: the loader can reject a staging texture; return
-            // the failure instead of dereferencing the NULL result.
+            // PORT: AMIGA: the loader can reject a staging texture; return the failure.
             if (pTexture == NULL) {
                 if (didLoadTexture != NULL)
                     *didLoadTexture = false;

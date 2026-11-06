@@ -68,7 +68,6 @@ void Font_Release(BYTE index)
     }
 }
 
-// Binds a loaded .pcf buffer and its texture to a font slot.
 // FUNCTION: CMR2 0x0040b350
 void Font_Setup(void *pData, Texture *pTexture, unsigned int index, char bInArchive, DWORD dataSize)
 {
@@ -81,8 +80,7 @@ void Font_Setup(void *pData, Texture *pTexture, unsigned int index, char bInArch
     font->pData = pData;
     font->pTexture = pTexture;
     font->ownsData = bInArchive == 0;
-    // PORT: AMIGA: the .pcf tables are little-endian and may sit in the
-    // read-only archive, so the fork-owned parser builds native copies.
+    // PORT: AMIGA: the fork-owned parser builds native copies of the little-endian .pcf tables.
     if (!FontPcf_Setup(font, index, pData, dataSize))
         return;
     font->loaded = 1;
@@ -262,9 +260,7 @@ int Font_GetLineHeight(BYTE index)
     return 0;
 }
 
-// PORT: AMIGA: the frontend and option-menu font tables map slots in opposite
-// order, and one of them can fail to load. Pick the larger loaded font for a
-// row title and the other loaded font for its subtitle.
+// PORT: AMIGA: pick the larger loaded font for a row title, the other for its subtitle.
 BYTE Font_GetTitleSlot(void)
 {
     int h0 = Font_GetLineHeight(0);

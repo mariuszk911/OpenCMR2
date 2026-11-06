@@ -1100,8 +1100,7 @@ extern Graphics *g_pGraphics;
 
 class CGraphics {
 public:
-    // PORT: AMIGA: read-only view of the resident-texture count used when
-    // rebasing C3D texture indices from other translation units.
+    // PORT: AMIGA: read-only resident-texture count for rebasing C3D texture indices.
     static unsigned int TextureCount(void) { return m_textureCount; }
     static bool InitializeDirectX(void);
     static void SetDefaults(void);

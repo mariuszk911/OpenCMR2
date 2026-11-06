@@ -2747,10 +2747,7 @@ char g_strCreditsEnglish[16] = "credits_english";
 
 bool FrontendCredits_ReleaseText(void);
 
-// Loads the credits text of the current language. The previous tables are
-// released first; the quoted "role", "name" pairs are parsed in place by the
-// fork-owned, bounds-checked CreditsText_Parse. Optionally registers the
-// release callback.
+// Loads the credits text of the current language via CreditsText_Parse.
 // FUNCTION: CMR2 0x004f4910
 void FrontendCredits_LoadText(char registerRelease)
 {
@@ -2791,12 +2788,10 @@ void FrontendCredits_LoadText(char registerRelease)
 
     sprintf(CFrontend::m_stringDest, g_strCreditsPathFormat, CInstallInfo::GetCountrySpecificDir(),
             CGameInfo::GetGameRegionDirectory(), names[CGameInfo::GetGameLanguage()]);
-    // PORT: AMIGA: make the load idempotent; the original overwrote the tables
-    // and leaked them when it was called again without a release.
+    // PORT: AMIGA: idempotent load; the original leaked the tables on a second call.
     FrontendCredits_ReleaseText();
     g_creditsFileBuffer = CFileBuffer::GetGenericFileBuffer(CFrontend::m_stringDest, TRUE);
-    // PORT: AMIGA: a failed load leaves GetGenericFileSize() stale; the old
-    // scan then read through NULL.
+    // PORT: AMIGA: a failed load leaves GetGenericFileSize() stale.
     if (g_creditsFileBuffer == NULL)
         return;
 
@@ -3151,8 +3146,7 @@ static int SavedGames_AddListedFile(const char *name, void *pDir)
 
     sprintf(path, "%s%s", (const char *)pDir, name);
     pRecord = CFileBuffer::GetGenericFileBuffer(path, TRUE);
-    // PORT: AMIGA: the .rcs image is little-endian; convert the loaded buffer
-    // before the game validates and copies it.
+    // PORT: AMIGA: the .rcs image is little-endian; convert before validating.
     if (pRecord != NULL && !SavedImageDisk_Unpack(pRecord, CGenericFileLoader::m_fileSize)) {
         Sys_Log("save: ignoring invalid session %s", name);
         CFileBuffer::FreeGenericFileBuffer(pRecord);
@@ -3475,8 +3469,7 @@ BYTE g_unk0x0082b1b8[4];
 
 
 // GLOBAL: CMR2 0x00511cd8
-// PORT: AMIGA: GCC 6.5 rejects the final GUID word narrowing from unsigned to
-// int in a braced initializer; the cast keeps MSVC's bit pattern.
+// PORT: AMIGA: GCC 6.5 rejects narrowing the last GUID word; the cast keeps MSVC's bits.
 int g_unk0x00511cd8[4] = {
     0x1bff2d87, 0x11d24cb7, 0x60004cb1, (int)0xe0014e08,
 };
@@ -4160,8 +4153,7 @@ void InRaceMenu_AdvanceCascade(CallbackStateMachine *param1, int param2)
     }
     if (g_unk0x005298f4 <= 0) {
         if ((BYTE)CGameInfo::GetGameInfoSessionFlag() != 0) {
-            // Original attract transition: rule value 6 advances to state 0xD,
-            // the recorded DemoRuns replay, instead of starting a normal race.
+            // Attract transition: rule value 6 starts the DemoRuns replay (state 0xD).
             CGame::PromoteCallbackEntryByRule(param1, param2, 6, 2);
             return;
         }
@@ -4662,10 +4654,7 @@ void InRaceMenu_AdvanceScreenEntries(CallbackStateMachine *param1)
     i = 0;
     if (param1->count > 0) {
         do {
-            // PORT: AMIGA: the original passed the byte counter as a dword read
-            // through its address. On big-endian 68k that puts `i` in the high
-            // byte, so the callee's `param2 & 0xff` read stack garbage and the
-            // last screen entry never drew the pause page. Pass the value.
+            // PORT: AMIGA: pass the byte value; the dword read through its address broke on 68k.
             RallyData_GrowEntryAndNotifyCompletion(param1, i);
             i++;
         } while (i < param1->count);
@@ -7525,8 +7514,7 @@ void OptionPreview_AllocateConvertedWheelVertices(int param1, INT_PTR param2, Op
         {
             (*ppBlock)[i] = (DeformVertex *)CFileBuffer::AllocateLockedBuffer((unsigned int)*pCounts << 5);
             totalSize += (unsigned int)*pCounts * 0x20;
-            // PORT: AMIGA: node type is the low byte of the value. The first object
-            // byte is the MSB on 68k, so the original form never matched a body mesh.
+            // PORT: AMIGA: node type is the low byte; the first object byte is the MSB on 68k.
             (*ppFlags)[i] = (BYTE)(param3->geometry.nodes[i]->flags & 0xff);
             destOff = 0;
             srcOff = 0;
@@ -7555,8 +7543,7 @@ void OptionPreview_AllocateConvertedWheelVertices(int param1, INT_PTR param2, Op
                 pNormal = (BYTE *)&((DeformFloatVertex *)((BYTE *)param3->geometry.meshes[i]->pVertexData + srcOff))->colour;
                 n = *(unsigned int *)pNormal;
                 nb[0] = (BYTE)(n >> 16);
-                // PORT: AMIGA: the vertex colour word is already native; the first
-                // object byte is alpha on 68k, not blue.
+                // PORT: AMIGA: the colour word is native; the first object byte is alpha on 68k.
                 nb[2] = (BYTE)n;
                 nb[1] = (BYTE)(n >> 8);
                 v = (nb[0] & 0xff) - 0x80;
@@ -9301,8 +9288,7 @@ void OptionMenu_AnimateSelectedPanel(void)
 // FUNCTION: CMR2 0x005059d0
 void OptionMenu_SelectDisplaySlot(int param_1)
 {
-    // PORT: AMIGA: do not index panel -1 or divide by zero when the preview
-    // has no usable weather maps.
+    // PORT: AMIGA: no usable weather maps: do not index panel -1 or divide by zero.
     if (g_optionPreviewPanelCount <= 0 ||
         (signed char)g_selectedOptionPreviewPanel < 0 ||
         (signed char)g_selectedOptionPreviewPanel >= g_optionPreviewPanelCount)
@@ -10520,8 +10506,7 @@ BYTE SavedGames_WriteSessionImage(int index, const char *name)
     }
     if (!SavedGames_IsValidSessionImage(&image, sizeof(image)))
         return 0;
-    // PORT: AMIGA: write the little-endian .rcs image; the codec keeps the
-    // bitfield words in the original LSB-first order.
+    // PORT: AMIGA: write the little-endian .rcs image; bitfield words stay LSB-first.
     BYTE packed[sizeof(SavedGameImage)];
     if (!SavedImageDisk_Pack(&image, packed, sizeof(packed)))
         return 0;

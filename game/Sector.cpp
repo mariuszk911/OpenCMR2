@@ -136,19 +136,11 @@ static_assert(offsetof(MeshTriangle, vertexIndex) == 0x40, "C3D triangle layout 
 // object and sector records into pointers, registers them in the scene node,
 // mesh, stage object and sector tables, loads the textures and re-uploads the
 // vertex buffers of every mesh.
-// PORT: the original relocates the records in place. Nodes, meshes, stage
-// objects, sectors and collision records hold pointers, which do not fit the
-// file's 32-bit offsets on 64-bit targets, so they are copied to native
-// storage (port/disk.h) that lives as long as the file buffer, on every
-// target. The pointer-free arrays (triangles, vertices, light levels, vertex
-// flags) are also copied to native storage because they contain little-endian
-// scalars. Registration order and the -1 = none rule are the original's.
+// PORT: nodes, meshes, objects, sectors, collision records and the scalar arrays are copied to native storage (port/disk.h).
 // FUNCTION: CMR2 0x004b93c0
 void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *archive, DWORD size)
 {
-    // PORT: AMIGA: the C3D header is little-endian and can be unaligned inside
-    // the BFL member. Decode it before using any count or offset; reading the
-    // struct in place crashes on the 68060.
+    // PORT: AMIGA: the C3D header is little-endian and can be unaligned; decode it first.
     C3DHeaderValues header;
     if (!C3DHeader_Decode(pData, &header)) {
         Sys_Log("stage: invalid C3D header");
@@ -170,9 +162,7 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
         Sys_Log("stage: C3D array size overflows");
         return NULL;
     }
-    // PORT: AMIGA: the registration tables are fixed-size; a corrupt count
-    // must not walk past g_sceneNodes/g_meshes/g_stageObjects/g_meshesBySize
-    // or the 14096-entry sector table.
+    // PORT: AMIGA: fixed-size registration tables; a corrupt count must not overrun them.
     if (nodeCount > 4096u - (unsigned int)g_sceneNodeCount ||
             meshCount > 4096u - (unsigned int)g_meshCount ||
             objectCount > 6000u - (unsigned int)g_unk0x0067f228 ||
@@ -193,8 +183,7 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
     BYTE *pEnd = pRecordFile + recordCount * g_diskLayout_MeshCollisionRecord.diskSize;
     char *textureRecords = (char *)pData + header.textureNamesOffset;
     if (size != 0) {
-        // PORT: AMIGA: reject a member whose counts walk past the BFL/file
-        // extent before any pointer is dereferenced.
+        // PORT: AMIGA: reject counts that walk past the member before any dereference.
         if ((uint64_t)(pEnd - pData) > (uint64_t)size ||
                 header.textureNamesOffset >= size ||
                 (uint64_t)header.textureNamesOffset +
@@ -252,9 +241,7 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
     pSectors = (Sector *)(pNative + nodeBytes + meshBytes + objectBytes);
     pRecords = (MeshCollisionRecord *)(pNative + nodeBytes + meshBytes + objectBytes + sectorBytes);
 
-    // Ten texture indices per triangle are moved past the textures already
-    // loaded. Decode the file records first; the native copies are aligned
-    // and host-endian.
+    // Texture indices are moved past the textures already loaded; decode the records first.
     for (i = 0; i < triangleCount; i++) {
         const BYTE *pFile = pTrianglesFile + i * sizeof(MeshTriangle);
         C3D_DecodeTriangle(&pTriangles[i], pFile);
@@ -312,9 +299,7 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
             pMesh->pVertexData = (DWORD *)DISK_DATA(pFile, DISK_Mesh_pVertexData, pVertexData);
             pMesh->pLightLevels = (int *)DISK_DATA(pFile, DISK_Mesh_pLightLevels, pLightLevels);
             pMesh->pField20 = DISK_DATA(pFile, DISK_Mesh_pField20, pVertexFlags);
-            // PORT: AMIGA: the lighting path and the GPU consume these as
-            // 32-bit arrays; a non-4-aligned file offset would fault on
-            // 040/060 even though the native payload base is aligned.
+            // PORT: AMIGA: 32-bit arrays need 4-aligned file offsets on 040/060.
             {
                 uintptr_t triBytes = (uintptr_t)pMesh->pTriangles - (uintptr_t)pTriangles;
                 uintptr_t vertexBytes = (uintptr_t)pMesh->pVertexData - (uintptr_t)pVertexData;
@@ -971,9 +956,7 @@ void Sector_RebuildStageGrid(void)
     Sector **ppSector;
 
     CGraphics::m_unk0x0072d56c = 1;
-    // PORT: AMIGA: a truncated or empty C3D leaves fewer than two sectors.
-    // The original reads g_sectors[1] unconditionally; reject the stage here
-    // instead of faulting while a stage is entering.
+    // PORT: AMIGA: fewer than two sectors: reject here; the original reads g_sectors[1].
     if (g_sectorCount < 2) {
         Sys_Log("stage: %lu sectors, cannot build the sector grid",
                 (unsigned long)g_sectorCount);
@@ -1030,9 +1013,7 @@ void Sector_RebuildStageGrid(void)
     g_sectorRows = (unsigned int)g_sectorCount / (unsigned int)g_sectorsPerRow;
     for (i = 0; i < (unsigned int)g_unk0x0067f228; i++) {
         int index = Sector_FromPosition((FixVector *)g_stageObjects[i]);
-        // PORT: AMIGA: offset object data or a bad sector grid can index
-        // outside the loaded sector array; skip the object instead of
-        // corrupting memory through g_sectors[index].
+        // PORT: AMIGA: a bad sector index skips the object instead of corrupting memory.
         if (index < 0 || index >= g_sectorCount) {
             Sys_Log("stage: object %ld maps to invalid sector %ld",
                     (long)i, (long)index);
@@ -1075,9 +1056,7 @@ void Sector_RebuildNodeLists(void)
     FixVector pos = { 0, 0, 0 };
     int index;
 
-    // PORT: AMIGA: Sector_FromPosition clamps to 0, so a stage that failed to
-    // load any sector would still dereference g_sectors[0]. Reject that case
-    // before the node walk.
+    // PORT: AMIGA: Sector_FromPosition clamps to 0; reject a stage with no sectors.
     if (g_sectorCount <= 0 || g_sectors[0] == NULL)
         return;
     if (CGraphics::m_pTextureManager == NULL ||
