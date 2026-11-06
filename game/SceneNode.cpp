@@ -1710,7 +1710,6 @@ void Scene_InitLighting(int *pData, int *pHeights, DWORD pDataSize)
             g_sceneLightTable == NULL || g_sceneLightTableD3D == NULL ||
             g_sceneShadowTable == NULL || g_sceneShadowTableD3D == NULL ||
             g_sceneSectorFlags == NULL) {
-        Sys_Log("lighting: allocation failed");
         Scene_FreeLighting();
         return;
     }

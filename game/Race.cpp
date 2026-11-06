@@ -362,8 +362,7 @@ void Race_LoadStageModel(void)
     pBuffer = CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(), g_strTempC3D, NULL, &c3dSize, 0);
     if (pBuffer != NULL) {
         pFile = Race_GetLoadedStageFile();
-        if (Sector_BuildC3DModelScene(pBuffer, RallyData_GetChallengeRenderState(), pFile, c3dSize) == NULL)
-            Sys_Log("stage: TEMP.C3D did not produce a scene");
+        Sector_BuildC3DModelScene(pBuffer, RallyData_GetChallengeRenderState(), pFile, c3dSize);
     }
 }
 
@@ -722,10 +721,8 @@ BYTE Race_LoadSelectedStage(void)
     // PORT: AMIGA: the suffix rewrite assumes at least four characters after
     // the drive/name prefix; reject a truncated selection instead of writing
     // before the buffer.
-    if (strlen(CFrontend::m_stringDest) < 5) {
-        Sys_Log("stage: stage path too short: \"%s\"", CFrontend::m_stringDest);
+    if (strlen(CFrontend::m_stringDest) < 5)
         return 0;
-    }
     CFrontend::m_stringDest[strlen(CFrontend::m_stringDest) - 4] =
         CFrontend::m_stringDest[strlen(CFrontend::m_stringDest) - 2];
     CFrontend::m_stringDest[strlen(CFrontend::m_stringDest) - 3] =

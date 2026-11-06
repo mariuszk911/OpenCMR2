@@ -3696,10 +3696,9 @@ void Car_ReloadModels(int first, int count, int param_3)
         g_carBuffer[i].field_0xb58 = g_unk0x0053ab88[i];
     }
     for (i = first; i < end; i++) {
-        if (StageTiming_PlaceCarViewNodesAndBody(g_savedCarSceneRoots[i], g_savedCarBodyNodes[i], i,
+        StageTiming_PlaceCarViewNodesAndBody(g_savedCarSceneRoots[i], g_savedCarBodyNodes[i], i,
                      g_unk0x0053a398[i], StageTiming_GetStartTableField244(i),
-                     (FixVector *)StageTiming_GetCarStartPosition(i), 1) == 0)
-            Sys_Log("car reload: placement failed for car %d", i);
+                     (FixVector *)StageTiming_GetCarStartPosition(i), 1);
     }
     StageTiming_ClearCarReplayRecordRange(first, count);
     CarDamage_SetupOrderedCarParts(1, param_3, g_unk0x0053a300, count);

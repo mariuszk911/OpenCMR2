@@ -196,7 +196,6 @@ void Mesh_BuildParts(Mesh *pMesh)
         for (i = count; i != 0; i--) {
             (*ppPart)->pData = (unsigned short *)CFileBuffer::AllocateLockedBuffer((*ppPart)->indexCount << 1);
             if ((*ppPart)->pData == NULL) {
-                Sys_Log("mesh: part index allocation failed");
                 pMesh->partCount = 0;
                 return;
             }
@@ -266,10 +265,8 @@ void Mesh_UploadVertices(Mesh *pMesh)
             break;
         if ((unsigned int)(CGraphics::m_pTextureManager->vertexBufferFill[i] + pMesh->field_0x10) < 2000) {
             pVertices = Gfx_LockVertexBuffer(CGraphics::m_pTextureManager->pVertexBuffers[i]);
-            if (pVertices == NULL) {
-                Sys_Log("mesh: vertex buffer %d could not be locked", i);
+            if (pVertices == NULL)
                 break;
-            }
             memcpy((BYTE *)pVertices + CGraphics::m_pTextureManager->vertexBufferFill[i] * 0x30, pMesh->pVertexData,
                    pMesh->field_0x10 * 0x30);
             Gfx_UnlockVertexBuffer(CGraphics::m_pTextureManager->pVertexBuffers[i]);

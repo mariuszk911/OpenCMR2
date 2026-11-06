@@ -6966,10 +6966,8 @@ int StageTiming_PlaceCarViewNodesAndBody(SceneNode *pNodeA, SceneNode *pNodeB, i
     // PORT: AMIGA: Car_Spawn dereferences both the body node and the car's
     // body pointer. A car model with a missing type-5 node must fail here
     // rather than fault on the 68060.
-    if (pNodeA == NULL || pNodeB == NULL || pAngles == NULL || pPosition == NULL) {
-        Sys_Log("car %d: missing scene/body/start data, not spawning", carIndex);
+    if (pNodeA == NULL || pNodeB == NULL || pAngles == NULL || pPosition == NULL)
         return 0;
-    }
     SceneNode_SetRotation(pNodeA, pAngles);
     SceneNode_SetRotation(pNodeB, pAngles);
     SceneNode_SetPosition(pNodeA, pPosition);
@@ -8191,10 +8189,8 @@ int StageTiming_LoadStageCarsAndEffects(void)
         CarEffects_MakeGhost(Car_Get(count - 1));
     for (i = 0; i < count; i++) {
         Car *pCar = Car_Get(i);
-        if (pCar->pSceneRoot == NULL || pCar->pBodyNode == NULL) {
-            Sys_Log("car %d: scene/body node missing after load", i);
+        if (pCar->pSceneRoot == NULL || pCar->pBodyNode == NULL)
             return 0;
-        }
         StageTiming_SetNodeVertexGrey(pCar->pSceneRoot, 0);
         StageTiming_SetNodeVertexGrey(pCar->pBodyNode, 0);
         StageTiming_SetNodeTreeVertexGrey(pCar->pSceneRoot->pFirstChild, 0);
@@ -8623,7 +8619,6 @@ classes:
                 }
                 goto wheelsDone;
             }
-            Sys_Log("car %d: wheel model or wheel node missing", car);
         }
     }
     pRecord->alternateWheelScene = 0;

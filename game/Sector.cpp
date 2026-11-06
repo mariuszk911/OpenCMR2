@@ -233,11 +233,8 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
         return NULL;
     }
     pPayload = (BYTE *)CFileBuffer::AllocateLockedBuffer((size_t)payloadBytes);
-    if (pPayload == NULL) {
-        Sys_Log("stage: cannot allocate %lu bytes for the C3D payload",
-                (unsigned long)payloadBytes);
+    if (pPayload == NULL)
         return NULL;
-    }
     Disk_AttachToBuffer(pData, pPayload);
     pTriangles = (MeshTriangle *)pPayload;
     pVertexData = pPayload + (size_t)triangleBytes;
@@ -246,10 +243,8 @@ void *Sector_RelocateStageMeshFile(BYTE *pData, SceneNode *parent, GenericFile *
 
     pNative = (BYTE *)CFileBuffer::AllocateLockedBuffer(
         nodeBytes + meshBytes + objectBytes + sectorBytes + recordCount * sizeof(MeshCollisionRecord) + 8);
-    if (pNative == NULL) {
-        Sys_Log("stage: cannot allocate native record storage");
+    if (pNative == NULL)
         return NULL;
-    }
     Disk_AttachToBuffer(pData, pNative);
     pNodes = (SceneNode *)pNative;
     pMeshes = (Mesh *)(pNative + nodeBytes);
@@ -1083,15 +1078,11 @@ void Sector_RebuildNodeLists(void)
     // PORT: AMIGA: Sector_FromPosition clamps to 0, so a stage that failed to
     // load any sector would still dereference g_sectors[0]. Reject that case
     // before the node walk.
-    if (g_sectorCount <= 0 || g_sectors[0] == NULL) {
-        Sys_Log("stage: cannot rebuild node lists without sectors");
+    if (g_sectorCount <= 0 || g_sectors[0] == NULL)
         return;
-    }
     if (CGraphics::m_pTextureManager == NULL ||
-        CGraphics::m_pTextureManager->pRootNode == NULL) {
-        Sys_Log("stage: cannot rebuild node lists without a scene root");
+        CGraphics::m_pTextureManager->pRootNode == NULL)
         return;
-    }
     for (i = 0; i < (unsigned int)g_sceneNodeCount; i++) {
         if (g_sceneNodes[i] != NULL)
             g_sceneNodes[i]->pNextInSector = NULL;

@@ -15167,11 +15167,8 @@ int AI_UpdateAttractDrivingControls(int car, int preview)
 
     pCar = Car_Get(car);
     node = (unsigned short)RallyData_GetActiveCarRaceRecordField14(pCar);
-    if (node + 5 > (unsigned int)RallyData_GetRouteStateValue()) {
-        Sys_Log("AI END car=%d node=%u route=%u spd=%d", car, node,
-                (unsigned int)RallyData_GetRouteStateValue(), pCar->speed);
+    if (node + 5 > (unsigned int)RallyData_GetRouteStateValue())
         return 0;
-    }
     state[0x15] = node;
     StageTiming_RecomputeCarSplitBarSamples(pCar, 0x342, state, 0);
     handbrake = 0;
