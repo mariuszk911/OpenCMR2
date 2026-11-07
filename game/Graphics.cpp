@@ -7049,8 +7049,7 @@ void Graphics_DrawMeshPartsByTexture(Mesh *pMesh)
     MeshPart *pPart;
 
     i = 0;
-    if (pMesh != NULL && pMesh->partCount > 0 && pMesh->partCount <= 50 &&
-            pMesh->pParts[0] != NULL) {
+    if (pMesh != NULL && pMesh->partCount > 0 && pMesh->partCount <= 50) {
         ppPart = pMesh->pParts;
         do {
             pPart = *ppPart;
@@ -7080,8 +7079,7 @@ void Graphics_MarkTexturesAndDrawMeshParts(Mesh *pMesh)
     MeshPart *pPart;
 
     i = 0;
-    if (pMesh != NULL && pMesh->partCount > 0 && pMesh->partCount <= 50 &&
-            pMesh->pParts[0] != NULL) {
+    if (pMesh != NULL && pMesh->partCount > 0 && pMesh->partCount <= 50) {
         ppPart = pMesh->pParts;
         do {
             pPart = *ppPart;
