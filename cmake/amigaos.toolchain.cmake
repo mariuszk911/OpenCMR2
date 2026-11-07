@@ -22,6 +22,11 @@ set(OPENCMR2_AMIGA_STACK "2097152" CACHE STRING "Amiga stack size swapped in by 
 # target. Match the working reVC AmigaOS port: plain hard-float, no
 # -ffloat-store/-fexcess-precision; only suppress the builtin *f math names so
 # the libnix *f overrides are not rewritten.
-set(OPENCMR2_AMIGA_COMMON_FLAGS "-m${OPENCMR2_AMIGA_CPU} -m${OPENCMR2_AMIGA_FPU} -mhard-float -mcrt=nix20 -fno-omit-frame-pointer")
+# -fno-ivopts: GCC 6.5's induction-variable optimisation miscompiles some
+# loops on 68k. In StageObject_InterpolateSecondaryRampRecords it loaded a
+# field with (a0)+ and addressed the next one from the incremented register
+# with the pre-increment offset, reading drawBlend (0x1c) for previousBlend
+# (0x18); the weather lighting blend then diverged (TODO.md, Kenya stage 3).
+set(OPENCMR2_AMIGA_COMMON_FLAGS "-m${OPENCMR2_AMIGA_CPU} -m${OPENCMR2_AMIGA_FPU} -mhard-float -mcrt=nix20 -fno-omit-frame-pointer -fno-ivopts")
 set(CMAKE_C_FLAGS_INIT "${OPENCMR2_AMIGA_COMMON_FLAGS} -fno-builtin-sin -fno-builtin-cos -fno-builtin-sinf -fno-builtin-cosf ${OPENCMR2_AMIGA_OPT}")
 set(CMAKE_CXX_FLAGS_INIT "${OPENCMR2_AMIGA_COMMON_FLAGS} -fno-builtin-sin -fno-builtin-cos -fno-builtin-sinf -fno-builtin-cosf ${OPENCMR2_AMIGA_OPT}")

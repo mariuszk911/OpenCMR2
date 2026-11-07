@@ -80,6 +80,28 @@ static inline float SwapFloat(float value)
     return value;
 }
 
+/*
+ * Big-endian access for formats that are big-endian on disk by design (the
+ * Amiga-native saved games). They shift bytes explicitly, so unlike ReadLE*
+ * they do not depend on the host byte order or on OPENCMR2_TEST_FORCE_BIG_ENDIAN
+ * and give the same result everywhere.
+ */
+static inline uint32_t ReadBE32(const void *source)
+{
+    const unsigned char *bytes = (const unsigned char *)source;
+    return (uint32_t)bytes[0] << 24 | (uint32_t)bytes[1] << 16 |
+           (uint32_t)bytes[2] << 8 | (uint32_t)bytes[3];
+}
+
+static inline void WriteBE32(void *destination, uint32_t value)
+{
+    unsigned char *bytes = (unsigned char *)destination;
+    bytes[0] = (unsigned char)(value >> 24);
+    bytes[1] = (unsigned char)(value >> 16);
+    bytes[2] = (unsigned char)(value >> 8);
+    bytes[3] = (unsigned char)value;
+}
+
 static inline uint16_t ReadLE16(const void *source)
 {
     uint16_t value;

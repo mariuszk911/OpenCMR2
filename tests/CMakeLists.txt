@@ -109,6 +109,25 @@ target_compile_options(save_image_disk_be_test PRIVATE
 target_compile_definitions(save_image_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 add_test(NAME save_image_disk_be COMMAND save_image_disk_be_test)
 
+# Amiga-native saved-game image: big-endian words, signature, version and
+# checksum. The first target uses the explicit-format API as any host build
+# sees it; the second compiles the codec as the Amiga build does (native
+# format = Amiga) to cover the native entry points and the reject handler.
+foreach(variant IN ITEMS "" "_native")
+    add_executable(save_image_amiga${variant}_test save_image_amiga.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/save_image_disk.cpp)
+    target_include_directories(save_image_amiga${variant}_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/game
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/port/compat)
+    target_compile_options(save_image_amiga${variant}_test PRIVATE
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+        -fms-extensions)
+    add_test(NAME save_image_amiga${variant} COMMAND save_image_amiga${variant}_test)
+endforeach()
+target_compile_definitions(save_image_amiga_native_test PRIVATE OPENCMR2_TEST_FORCE_AMIGA_SAVES)
+
 # Controller.rcf: six little-endian ControllerData records and the slot
 # mappings. The forced variant proves the swap path on the little-endian host.
 foreach(controller_variant controller_disk controller_disk_be)
@@ -281,6 +300,12 @@ add_executable(backdrop_fog_test backdrop_fog.cpp)
 target_include_directories(backdrop_fog_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME backdrop_fog COMMAND backdrop_fog_test)
 
+# MiniGL has no light range: a ranged light is switched off for a draw wholly
+# beyond it, from the draw's bounding sphere in world space.
+add_executable(light_range_test light_range.cpp)
+target_include_directories(light_range_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME light_range COMMAND light_range_test)
+
 # M0.7 core-slice fixture: WAV fmt fields are little-endian on disk.
 add_executable(wave_format_test wave_format.cpp)
 target_include_directories(wave_format_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
@@ -343,6 +368,10 @@ target_include_directories(amiga_paths_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_paths COMMAND amiga_paths_test)
 
 # opencmr2.ini parsing and line-preserving rewriting for the Amiga Sys layer.
+add_executable(amiga_save_notice_test amiga_save_notice.cpp)
+target_include_directories(amiga_save_notice_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME amiga_save_notice COMMAND amiga_save_notice_test)
+
 add_executable(amiga_settings_test amiga_settings.cpp)
 target_include_directories(amiga_settings_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_settings COMMAND amiga_settings_test)

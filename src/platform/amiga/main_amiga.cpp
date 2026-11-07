@@ -5,9 +5,22 @@
  * The OS work is behind AmigaPlatform_* and the port/Sys calls.
  */
 #include "platform/amiga/amiga_platform.h"
+#include "platform/amiga/amiga_save_notice.h"
+#include "port/save_image_disk.h"
 #include "port/sys.h"
 #include "diagnostics/timing.h"
 #include "main.h"
+
+// A refused saved game (a PC save, a damaged or newer file): the game logs the
+// name of every ignored file; the player is told once per kind of refusal.
+static void ReportRefusedSave(SavedImageStatus status)
+{
+    static unsigned announced;
+
+    Sys_Log("save: refused a saved game (status %d)", (int)status);
+    if (AmigaSaveNotice_ShouldShow(status, &announced))
+        Sys_MessageBox("OpenCMR2", AmigaSaveNotice_Text(status), SYS_MESSAGEBOX_OK);
+}
 
 int main(int argc, char **argv)
 {
@@ -16,6 +29,7 @@ int main(int argc, char **argv)
         Sys_Log("platform: initialization failed");
         Sys_Exit(1);
     }
+    SavedImageDisk_SetRejectHandler(ReportRefusedSave);
     Diagnostics::StartProfileFromEnvironment();
     const unsigned int code = CMain::Initialize(Sys_GetCommandLine());
     Diagnostics::StopProfile();

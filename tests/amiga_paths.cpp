@@ -81,6 +81,37 @@ int main()
     Check(!AmigaPath_Match("ab", "abc*"), "short prefix does not match");
     Check(!AmigaPath_Match("x", "*.sav"), "empty head does not match a short name");
 
+    // The saved-game drawer is the only transactional directory.
+    Check(AmigaPath_Split(".\\gamesave\\game00001.rcs", &path) == 1 &&
+              AmigaPath_InTransactionalDir(&path) && AmigaPath_CanStage(&path),
+          "a saved game is staged");
+    Check(AmigaPath_Split("GameSave/Game00001.RCS", &path) == 1 && AmigaPath_InTransactionalDir(&path),
+          "the drawer name ignores case");
+    Check(AmigaPath_Split(".\\gamesave\\", &path) == 1 && AmigaPath_InTransactionalDir(&path) &&
+              !AmigaPath_CanStage(&path),
+          "the drawer itself is transactional but is not a file to stage");
+    Check(AmigaPath_Split(".\\pps\\abcd.pps", &path) == 1 && !AmigaPath_InTransactionalDir(&path),
+          "profiles keep plain writes");
+    Check(AmigaPath_Split("gamesaves/a.rcs", &path) == 1 && !AmigaPath_InTransactionalDir(&path),
+          "a longer drawer name is not the drawer");
+    Check(AmigaPath_Split("gamesav/a.rcs", &path) == 1 && !AmigaPath_InTransactionalDir(&path),
+          "a shorter drawer name is not the drawer");
+    Check(AmigaPath_Split("a/gamesave/b.rcs", &path) == 1 && !AmigaPath_InTransactionalDir(&path),
+          "only the top-level drawer counts");
+    Check(AmigaPath_Split("gamesave/123456789012345678901234.rcs", &path) == 1 &&
+              !AmigaPath_CanStage(&path),
+          "a name whose staging name would not fit a path component is not stageable");
+    Check(AmigaPath_Split("gamesave/12345678901234567890123.rcs", &path) == 1 &&
+              AmigaPath_CanStage(&path),
+          "the longest stageable name fits with its suffix");
+    Check(std::strlen(AMIGA_STAGING_SUFFIX) <= AMIGA_SUFFIX_MAX &&
+              std::strlen(AMIGA_BACKUP_SUFFIX) <= AMIGA_SUFFIX_MAX,
+          "suffix reserve covers both names");
+    // The pattern the drawer listing uses must never match a staged name.
+    Check(!AmigaPath_Match("game00001.rcs" AMIGA_STAGING_SUFFIX, "*.rcs") &&
+              !AmigaPath_Match("game00001.rcs" AMIGA_BACKUP_SUFFIX, "*.rcs"),
+          "staging and backup files are not listed as saves");
+
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

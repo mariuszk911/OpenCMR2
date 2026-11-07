@@ -146,7 +146,7 @@ if [ "$info" = 1 ]; then
     printf 'jobs:       %s\n' "$JOBS"
     printf 'build:      %s\n' "$REPO/build/amiga"
     printf 'dist:       %s\n' "$REPO/dist/amiga"
-    printf 'flags:      -m%s -m%s -mhard-float -mcrt=nix20 -fno-omit-frame-pointer\n' "$CPU" "$FPU"
+    printf 'flags:      -m%s -m%s -mhard-float -mcrt=nix20 -fno-omit-frame-pointer -fno-ivopts\n' "$CPU" "$FPU"
     printf '            C: -fexcess-precision=standard; C++: -ffloat-store\n'
     printf '            -fno-builtin-sin -fno-builtin-cos %s\n' "$OPT"
     exit 0

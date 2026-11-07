@@ -139,4 +139,41 @@ static inline int AmigaPath_Match(const char *name, const char *pattern)
     return 1;
 }
 
+/*
+ * Transactional directories. A file written below one of them is first
+ * written to "<name>.tmp" and only replaces the real file once it was closed
+ * without a write error, so an interrupted or failed save never damages the
+ * previous one. An interrupted commit leaves "<name>.bak" (the previous file)
+ * and/or "<name>.tmp" behind; Sys_ListFiles repairs the directory.
+ * Only the saved-game drawer qualifies: other writers (the log, replays,
+ * configuration) keep the plain create-and-truncate semantics.
+ */
+#define AMIGA_STAGING_SUFFIX ".tmp"
+#define AMIGA_BACKUP_SUFFIX ".bak"
+#define AMIGA_SUFFIX_MAX 4
+
+/* Returns 1 when path (a file or a directory) lies in the saved-game drawer. */
+static inline int AmigaPath_InTransactionalDir(const AmigaGamePath *path)
+{
+    static const char drawer[] = "gamesave";
+    size_t i;
+
+    if (path->count < 1)
+        return 0;
+    for (i = 0; drawer[i] != '\0'; ++i) {
+        if (AmigaPath_Lower(path->parts[0][i]) != drawer[i])
+            return 0;
+    }
+    return path->parts[0][i] == '\0';
+}
+
+/* The staging and backup names must still be single path components, which
+   is also what the directory listing used for repairs can see. */
+static inline int AmigaPath_CanStage(const AmigaGamePath *path)
+{
+    if (path->count < 2)
+        return 0;
+    return strlen(path->parts[path->count - 1]) + AMIGA_SUFFIX_MAX < AMIGA_PATH_PART_MAX;
+}
+
 #endif

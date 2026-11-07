@@ -595,6 +595,53 @@ const char *GetSettingText(const char *name)
     return s_settingCache[i].value;
 }
 
+bool AppendSuffix(char *out, size_t size, const char *path, const char *suffix)
+{
+    const int length = snprintf(out, size, "%s%s", path, suffix);
+    return length >= 0 && (size_t)length < size;
+}
+
+// Puts the complete file `temporary` in place of `path`, keeping the previous
+// file until the new one is in place: AmigaDOS Rename refuses an existing
+// target, so the old file is parked as "<path>.bak" first and restored if the
+// second rename fails. A crash between the two renames leaves the backup
+// behind (RepairStagedFiles restores it). On failure `temporary` is deleted
+// and `path` is the previous file; the IoErr of the failure is logged.
+bool ReplaceFile(const char *temporary, const char *path)
+{
+    char backup[kNativePathSize];
+
+    if (Rename((STRPTR)temporary, (STRPTR)path))
+        return true;
+    const LONG error = IoErr();
+    if (error != ERROR_OBJECT_EXISTS) {
+        Sys_Log("replace: cannot rename %s (IoErr %ld)", temporary, (long)error);
+        DeleteFile((STRPTR)temporary);
+        return false;
+    }
+    if (!AppendSuffix(backup, sizeof(backup), path, AMIGA_BACKUP_SUFFIX)) {
+        Sys_Log("replace: path too long: %s", path);
+        DeleteFile((STRPTR)temporary);
+        return false;
+    }
+    DeleteFile((STRPTR)backup);
+    if (!Rename((STRPTR)path, (STRPTR)backup)) {
+        Sys_Log("replace: cannot back up %s (IoErr %ld)", path, (long)IoErr());
+        DeleteFile((STRPTR)temporary);
+        return false;
+    }
+    if (!Rename((STRPTR)temporary, (STRPTR)path)) {
+        const LONG replaceError = IoErr();
+        Sys_Log("replace: cannot rename %s (IoErr %ld)", temporary, (long)replaceError);
+        if (!Rename((STRPTR)backup, (STRPTR)path))
+            Sys_Log("replace: cannot restore %s (IoErr %ld)", path, (long)IoErr());
+        DeleteFile((STRPTR)temporary);
+        return false;
+    }
+    DeleteFile((STRPTR)backup);
+    return true;
+}
+
 bool SaveSetting(const std::string &section, const std::string &key, const std::string &value)
 {
     std::string path;
@@ -610,37 +657,13 @@ bool SaveSetting(const std::string &section, const std::string &key, const std::
         Sys_Log("settings: value contains a line break");
         return false;
     }
-    const std::string temporary = path + ".tmp";
+    const std::string temporary = path + AMIGA_STAGING_SUFFIX;
     if (!WriteTextFile(temporary, output)) {
         Sys_Log("settings: cannot write %s (IoErr %ld)", temporary.c_str(), (long)IoErr());
         DeleteFile((STRPTR)temporary.c_str());
         return false;
     }
-    if (!Rename((STRPTR)temporary.c_str(), (STRPTR)path.c_str())) {
-        const LONG error = IoErr();
-        if (error != ERROR_OBJECT_EXISTS) {
-            Sys_Log("settings: cannot rename %s (IoErr %ld)", temporary.c_str(), (long)error);
-            DeleteFile((STRPTR)temporary.c_str());
-            return false;
-        }
-        const std::string backup = path + ".bak";
-        DeleteFile((STRPTR)backup.c_str());
-        if (!Rename((STRPTR)path.c_str(), (STRPTR)backup.c_str())) {
-            Sys_Log("settings: cannot back up %s (IoErr %ld)", path.c_str(), (long)IoErr());
-            DeleteFile((STRPTR)temporary.c_str());
-            return false;
-        }
-        if (!Rename((STRPTR)temporary.c_str(), (STRPTR)path.c_str())) {
-            const LONG replaceError = IoErr();
-            Sys_Log("settings: cannot rename %s (IoErr %ld)", temporary.c_str(), (long)replaceError);
-            if (!Rename((STRPTR)backup.c_str(), (STRPTR)path.c_str()))
-                Sys_Log("settings: cannot restore %s (IoErr %ld)", path.c_str(), (long)IoErr());
-            DeleteFile((STRPTR)temporary.c_str());
-            return false;
-        }
-        DeleteFile((STRPTR)backup.c_str());
-    }
-    return true;
+    return ReplaceFile(temporary.c_str(), path.c_str());
 }
 
 int EnsureIntuition(void)
@@ -680,7 +703,9 @@ int BuildBodyText(char *body, struct IntuiText *lines, int maxLines)
 
 struct SysFile {
     BPTR handle;
-    char path[kNativePathSize];
+    char path[kNativePathSize];     // the file that is open (the staging file when staged)
+    char livePath[kNativePathSize]; // staged writes: the file the staging file replaces
+    int failed;                     // staged writes: a write came up short
 };
 
 extern "C" void AmigaSys_SetCommandLine(const char *line)
@@ -992,18 +1017,59 @@ static void LogConfigFile(const char *native, BPTR handle)
     }
 }
 
+namespace {
+
+// Staged writes apply to game paths in the saved-game drawer. Returns 1 when
+// `path` is one, 0 when it is not, -1 when it is but cannot be staged.
+int StagedWriteKind(const char *path)
+{
+    AmigaGamePath parts;
+
+    if (IsNativePath(path) || !AmigaPath_Split(path, &parts) || !AmigaPath_InTransactionalDir(&parts))
+        return 0;
+    if (!AmigaPath_CanStage(&parts)) {
+        Sys_Log("Open %s failed: the name is too long to stage", path);
+        return -1;
+    }
+    return 1;
+}
+
+// Closes a staged write: a complete file replaces the live one, anything
+// else is dropped and the live file stays as it was.
+void CommitStagedFile(SysFile *file, bool closed)
+{
+    if (file->failed || !closed) {
+        Sys_Log("save: %s was not written completely, %s is unchanged", file->path, file->livePath);
+        DeleteFile((STRPTR)file->path);
+        return;
+    }
+    if (!ReplaceFile(file->path, file->livePath))
+        Sys_Log("save: cannot replace %s", file->livePath);
+}
+
+} // namespace
+
 extern "C" SysFile *Sys_OpenFile(const char *path, int mode)
 {
     char native[kNativePathSize];
+    char staging[kNativePathSize];
     const int writing = mode == SYS_FILE_WRITE;
+    const int staged = writing ? StagedWriteKind(path) : 0;
 
+    if (staged < 0)
+        return NULL;
     if (!Sys_ResolvePath(path, writing, native, sizeof(native)))
         return NULL;
-    BPTR handle = Open((STRPTR)native, writing ? MODE_NEWFILE : MODE_OLDFILE);
+    if (staged && !AppendSuffix(staging, sizeof(staging), native, AMIGA_STAGING_SUFFIX)) {
+        Sys_Log("Open %s failed: path too long", native);
+        return NULL;
+    }
+    const char *target = staged ? staging : native;
+    BPTR handle = Open((STRPTR)target, writing ? MODE_NEWFILE : MODE_OLDFILE);
     if (handle == 0) {
         if (!writing)
             RememberMissing(path);
-        Sys_Log("Open %s failed (IoErr %ld)", native, (long)IoErr());
+        Sys_Log("Open %s failed (IoErr %ld)", target, (long)IoErr());
         return NULL;
     }
     if (!writing)
@@ -1011,11 +1077,15 @@ extern "C" SysFile *Sys_OpenFile(const char *path, int mode)
     SysFile *file = new (std::nothrow) SysFile;
     if (file == NULL) {
         Close(handle);
+        if (staged)
+            DeleteFile((STRPTR)staging);
         Sys_Log("Sys_OpenFile: out of memory");
         return NULL;
     }
     file->handle = handle;
-    CopyPath(file->path, sizeof(file->path), native);
+    file->failed = 0;
+    CopyPath(file->path, sizeof(file->path), target);
+    CopyPath(file->livePath, sizeof(file->livePath), staged ? native : "");
     return file;
 }
 
@@ -1023,8 +1093,11 @@ extern "C" void Sys_CloseFile(SysFile *file)
 {
     if (file == NULL)
         return;
-    if (!Close(file->handle))
+    const bool closed = Close(file->handle) != 0;
+    if (!closed)
         Sys_Log("Close %s failed (IoErr %ld)", file->path, (long)IoErr());
+    if (file->livePath[0] != '\0')
+        CommitStagedFile(file, closed);
     delete file;
 }
 
@@ -1047,7 +1120,12 @@ extern "C" uint32_t Sys_WriteFile(SysFile *file, const void *buffer, uint32_t si
     const LONG written = Write(file->handle, (APTR)buffer, (LONG)size);
     if (written < 0) {
         Sys_Log("Write %s failed (IoErr %ld)", file->path, (long)IoErr());
+        file->failed = 1;
         return 0;
+    }
+    if ((uint32_t)written != size) {
+        Sys_Log("Write %s came up short (%ld of %lu bytes)", file->path, (long)written, (unsigned long)size);
+        file->failed = 1;
     }
     return (uint32_t)written;
 }
@@ -1123,6 +1201,54 @@ extern "C" int Sys_DeleteFile(const char *path)
     return 0;
 }
 
+namespace {
+
+int NativeFileExists(const char *path)
+{
+    BPTR lock = Lock((STRPTR)path, SHARED_LOCK);
+    if (lock == 0)
+        return 0;
+    UnLock(lock);
+    return 1;
+}
+
+// Repairs what an interrupted staged write left in a transactional directory.
+// A staging file is never trusted (it may be incomplete), so it is deleted.
+// A backup is the previous file of a commit that stopped between its two
+// renames: it is put back when the live file is missing and is stale otherwise.
+void RepairStagedFiles(const char *directory, char names[][kListedNameSize])
+{
+    char backup[kNativePathSize];
+    char live[kNativePathSize];
+    int count = 0;
+
+    CollectDir(directory, "*" AMIGA_BACKUP_SUFFIX, names, &count);
+    for (int i = 0; i < count; ++i) {
+        if (!RootFile(backup, sizeof(backup), directory, names[i]))
+            continue;
+        // The listing matched the suffix, so cutting it off leaves the live name.
+        CopyPath(live, sizeof(live), backup);
+        live[strlen(live) - strlen(AMIGA_BACKUP_SUFFIX)] = '\0';
+        if (NativeFileExists(live)) {
+            DeleteFile((STRPTR)backup);
+        } else if (Rename((STRPTR)backup, (STRPTR)live)) {
+            Sys_Log("save: restored %s from its backup", live);
+        } else {
+            Sys_Log("save: cannot restore %s (IoErr %ld)", live, (long)IoErr());
+        }
+    }
+    count = 0;
+    CollectDir(directory, "*" AMIGA_STAGING_SUFFIX, names, &count);
+    for (int i = 0; i < count; ++i) {
+        if (RootFile(live, sizeof(live), directory, names[i])) {
+            Sys_Log("save: removing the unfinished %s", live);
+            DeleteFile((STRPTR)live);
+        }
+    }
+}
+
+} // namespace
+
 extern "C" void Sys_ListFiles(const char *directory, const char *pattern,
                               SysListCallback callback, void *context)
 {
@@ -1162,6 +1288,10 @@ extern "C" void Sys_ListFiles(const char *directory, const char *pattern,
                 continue;
         } else {
             CopyPath(rootPath, sizeof(rootPath), root);
+        }
+        // Only the user directory is written to, so only it can need repairs.
+        if (pass == 0 && hasParts && AmigaPath_InTransactionalDir(&parts)) {
+            RepairStagedFiles(rootPath, names);
         }
         CollectDir(rootPath, match, names, &count);
     }

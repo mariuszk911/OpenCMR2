@@ -154,6 +154,12 @@ add_executable(amiga_sys_file_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_file_te
 target_include_directories(amiga_sys_file_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_sys_file_test)
 
+# Atomic saved-game writes and the repair of an interrupted commit (RAM: only).
+add_executable(amiga_save_file_test ${PROJECT_SOURCE_DIR}/tests/amiga/save_file_test.c
+    platform/amiga/amiga_sys.cpp)
+target_include_directories(amiga_save_file_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_save_file_test)
+
 # Saved-controller path: the game's ".\Configuration\Controller.rcf" must
 # resolve under the user directory and the 0x11a4-byte file must open.
 add_executable(amiga_controller_path_test ${PROJECT_SOURCE_DIR}/tests/amiga/controller_path_test.c

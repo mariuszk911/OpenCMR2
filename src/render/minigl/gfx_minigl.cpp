@@ -3,6 +3,7 @@
 // Owns the MiniGL context/window, frame lifecycle, 2D TL rendering, and the
 // capability-tiered 3D fixed-function pipeline.
 #include "port/backdrop_fog.h"
+#include "port/light_range.h"
 #include "port/gfx.h"
 #include "port/sys.h"
 #include "platform/amiga/amiga_sys.h"
@@ -131,6 +132,8 @@ struct GlStateCache {
     // glEnableClientState bits kept across draws so a draw that needs the same
     // arrays costs no dispatch calls (bit values: kClientArray* below).
     uint32_t clientArrayMask;
+    // GL_LIGHT0..7 enabled for the last lit draw; ~0 forces every light to be set.
+    uint32_t lightMask;
 };
 
 // Lighting state is uploaded only when a writer invalidates it. Every setter
@@ -277,6 +280,24 @@ int s_ambientSource = GFX_MCS_MATERIAL;
 int s_emissiveSource = GFX_MCS_MATERIAL;
 
 int s_colourLogEnabled;     // video.colour_log, see ColourLogEndFrame
+// Set while a draw comes from a GfxVertexBuffer, whose positions are stable
+// across frames, so its bounding sphere can be cached (see DrawWorldSphere).
+int s_drawFromVertexBuffer;
+// Model-space bounding spheres of vertex-buffer draws, direct mapped.
+enum { kBoundsCacheSize = 1024 };
+struct BoundsCacheEntry {
+    const GfxVertex *vertices;
+    const uint16_t *indices;
+    uint32_t count;
+    int valid;
+    LightRangeSphere model;
+};
+BoundsCacheEntry s_boundsCache[kBoundsCacheSize];
+// Direct3D attenuation applied to each ranged light's GL colour, per light;
+// < 0 forces the colour to be sent again.
+float s_lightFactorApplied[8];
+// video.light_mask: diagnostic, GL lights allowed on (bit i = GL_LIGHT0 + i).
+uint32_t s_debugLightMask = 0xffu;
 void ColourLogEndFrame(void);
 
 uint32_t s_fogColor;
@@ -425,6 +446,7 @@ void InvalidateGlCache(void)
     s_glCache.loadedWorldViewGen = ~0u;
     s_glCache.loadedProjectionGen = ~0u;
     s_glCache.clientArrayMask = 0;
+    s_glCache.lightMask = ~0u;
     InvalidateLightingCache();
 }
 
@@ -804,6 +826,9 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
     // path keeps librw's 4096.
     s_clientArraysRequested = Sys_GetOption("video.client_arrays", 0) != 0;
     s_colourLogEnabled = Sys_GetOption("video.colour_log", 0) != 0;
+    s_debugLightMask = (uint32_t)Sys_GetOption("video.light_mask", 0xff) & 0xffu;
+    if (s_debugLightMask != 0xffu)
+        Sys_Log("AMIGA: diagnostic: video.light_mask=%02lx", (unsigned long)s_debugLightMask);
     mglChooseVertexBufferSize(s_clientArraysRequested ? 32768 : 4096);
     // PORT: AMIGA: the default texture-object table is 2048 entries; the game
     // reuses one table across stage reloads, so keep headroom and avoid
@@ -1691,6 +1716,8 @@ extern "C" void Gfx_SetStageBumpEnvLOffset(int stage, float value)
 
 extern "C" GfxVertexBuffer *Gfx_CreateVertexBuffer(uint32_t vertexCount)
 {
+    // A new buffer can reuse a freed one's memory: forget cached bounds.
+    memset(s_boundsCache, 0, sizeof(s_boundsCache));
     GfxVertexBuffer *buffer = new (std::nothrow) GfxVertexBuffer;
     if (buffer == NULL)
         return NULL;
@@ -1709,6 +1736,7 @@ extern "C" GfxVertexBuffer *Gfx_CreateVertexBuffer(uint32_t vertexCount)
 
 extern "C" void Gfx_DestroyVertexBuffer(GfxVertexBuffer *buffer)
 {
+    memset(s_boundsCache, 0, sizeof(s_boundsCache));
     if (buffer == NULL)
         return;
     delete[] buffer->vertices;
@@ -1804,7 +1832,11 @@ int BackdropFogAlpha(const GfxVertex *vertices, uint32_t vertexCount)
 // game/ because the backend sees the same values and needs no divergence.
 enum {
     kColourLogBackdropDraws = 6,
-    kColourLogMaxLines = 4000   // caps the file: weather blends change every frame
+    kColourLogMaxLines = 4000,  // caps the file
+    // Weather and time-of-day blends change the colours on every frame, so a
+    // line is written at most this often; one stage then stays well under the
+    // cap. A change shorter than this (one lightning frame) can be missed.
+    kColourLogMinFrames = 10
 };
 
 // Compared with memcmp, so uint32_t only and no padding.
@@ -1820,7 +1852,17 @@ struct ColourLogState {
 };
 
 int s_colourLogLines;
+// Lights of the first lit draw of the frame, logged when they change.
+struct ColourLogLights {
+    uint32_t sampled;
+    uint32_t glMask;            // lights switched on for that draw
+    int32_t value[8][12];       // type, range, ambient, diffuse, att0..2 x1000, phi x1000, x, y, z, enabled
+};
+ColourLogLights s_colourLogLightsNow;
+ColourLogLights s_colourLogLightsLast;
+uint32_t s_colourLogLightsFrame;
 uint32_t s_colourLogFrame;
+uint32_t s_colourLogLastLineFrame;
 int s_colourLogSampled;
 uint32_t s_colourLogWorldDiffuse;   // baked world colour; varies with the mesh, so not compared
 ColourLogState s_colourLogNow;
@@ -1831,8 +1873,43 @@ uint32_t ColourLogChannel(float value)
     return value <= 0.0f ? 0u : (value >= 1.0f ? 255u : (uint32_t)(value * 255.0f));
 }
 
+int32_t ColourLogFixed(float value)
+{
+    return (int32_t)(value * 1000.0f);
+}
+
+int32_t ColourLogRgb(const GfxColorValue &c)
+{
+    return (int32_t)(ColourLogChannel(c.r) << 16 | ColourLogChannel(c.g) << 8 | ColourLogChannel(c.b));
+}
+
+void ColourLogSampleLights(void)
+{
+    ColourLogLights &n = s_colourLogLightsNow;
+    n.sampled = 1;
+    n.glMask = s_glCache.lightMask;
+    for (int i = 0; i < 8; ++i) {
+        const GfxLight &l = s_lights[i];
+        int32_t *v = n.value[i];
+        v[0] = l.type;
+        v[1] = ColourLogFixed(l.range);
+        v[2] = ColourLogRgb(l.ambient);
+        v[3] = ColourLogRgb(l.diffuse);
+        v[4] = ColourLogFixed(l.attenuation0);
+        v[5] = ColourLogFixed(l.attenuation1);
+        v[6] = ColourLogFixed(l.attenuation2);
+        v[7] = ColourLogFixed(l.phi);
+        v[8] = (int32_t)l.position.x;
+        v[9] = (int32_t)l.position.y;
+        v[10] = (int32_t)l.position.z;
+        v[11] = (s_lightEnabled[i] && s_lightSet[i]) ? 1 : 0;
+    }
+}
+
 void ColourLogSample(const GfxVertex *vertices, int backdropFogAlpha, bool prelit)
 {
+    if (!prelit && !s_colourLogLightsNow.sampled)
+        ColourLogSampleLights();
     if (!s_colourLogSampled) {
         s_colourLogSampled = 1;
         const GfxLight &light = s_lights[0];
@@ -1859,9 +1936,11 @@ void ColourLogEndFrame(void)
 {
     s_colourLogFrame++;
     if (s_colourLogSampled && s_colourLogLines < kColourLogMaxLines &&
+        (s_colourLogLines == 0 || s_colourLogFrame - s_colourLogLastLineFrame >= kColourLogMinFrames) &&
         memcmp(&s_colourLogNow, &s_colourLogLast, sizeof(s_colourLogNow)) != 0) {
         const ColourLogState &c = s_colourLogNow;
         s_colourLogLast = c;
+        s_colourLogLastLineFrame = s_colourLogFrame;
         if (++s_colourLogLines == kColourLogMaxLines)
             Sys_Log("AMIGA: colour log: line limit reached");
         Sys_Log("AMIGA: colour f=%lu fog=%lu/%lu/%08lx amb=%08lx light=%06lx world=%08lx "
@@ -1877,6 +1956,25 @@ void ColourLogEndFrame(void)
                 (unsigned long)c.backdropDiffuse[4], (unsigned long)(c.backdropSpecular[4] >> 24),
                 (unsigned long)c.backdropDiffuse[5], (unsigned long)(c.backdropSpecular[5] >> 24));
     }
+    if (s_colourLogLightsNow.sampled && s_colourLogLines < kColourLogMaxLines &&
+        s_colourLogFrame - s_colourLogLightsFrame >= kColourLogMinFrames &&
+        memcmp(&s_colourLogLightsNow, &s_colourLogLightsLast, sizeof(s_colourLogLightsNow)) != 0) {
+        s_colourLogLightsLast = s_colourLogLightsNow;
+        s_colourLogLightsFrame = s_colourLogFrame;
+        s_colourLogLines++;
+        Sys_Log("AMIGA: lights f=%lu on=%02lx global_amb=%08lx", (unsigned long)s_colourLogFrame,
+                (unsigned long)s_colourLogLightsNow.glMask, (unsigned long)s_ambient);
+        for (int i = 0; i < 8; ++i) {
+            const int32_t *v = s_colourLogLightsNow.value[i];
+            if (v[11] == 0)
+                continue;
+            s_colourLogLines++;
+            Sys_Log("AMIGA: light%d type=%ld range=%ld amb=%06lx dif=%06lx att=%ld/%ld/%ld phi=%ld pos=%ld,%ld,%ld",
+                    i, (long)v[0], (long)v[1], (unsigned long)v[2], (unsigned long)v[3], (long)v[4],
+                    (long)v[5], (long)v[6], (long)v[7], (long)v[8], (long)v[9], (long)v[10]);
+        }
+    }
+    memset(&s_colourLogLightsNow, 0, sizeof(s_colourLogLightsNow));
     memset(&s_colourLogNow, 0, sizeof(s_colourLogNow));
     s_colourLogSampled = 0;
     s_colourLogWorldDiffuse = 0;
@@ -2067,7 +2165,90 @@ void Apply3DRasterState(void)
 //   world meshes (modes 0/1) and diffuse=COLOR1 for mode 3.
 //
 // backdropFogAlpha is BackdropFogAlpha()'s result for the draw.
-bool Apply3DLightingAndFog(int backdropFogAlpha)
+//
+// Light attenuation and range: MiniGL does not apply GL attenuation and GL
+// has no range, so for a Direct3D point or spot light the backend computes the
+// Direct3D attenuation once per draw, at the draw's nearest point to the light
+// (port/light_range.h), and sends the light colour scaled by it with GL
+// attenuation 1/0/0. The upload below sets position and cone only; colours and
+// which lights are on are decided per draw after it.
+struct DrawGeometry {
+    const GfxVertex *vertices;
+    const uint16_t *indices;    // NULL: the first `count` vertices
+    uint32_t count;
+    int state;                  // 0 not computed, 1 world sphere ready, -1 empty
+    LightRangeSphere world;
+};
+
+const LightRangeSphere *DrawWorldSphere(DrawGeometry *geometry)
+{
+    if (geometry->state == 0) {
+        LightRangeSphere model;
+        int haveModel;
+        geometry->state = -1;
+        if (s_drawFromVertexBuffer) {
+            // Vertex-buffer positions are written when a mesh is uploaded and
+            // only move with damage deformation, so the sphere is cached.
+            const uint32_t hash = (uint32_t)(((uintptr_t)geometry->vertices >> 4) ^
+                                             ((uintptr_t)geometry->indices >> 1) ^
+                                             (geometry->count * 2654435761u));
+            BoundsCacheEntry &e = s_boundsCache[(hash ^ (hash >> 16)) & (kBoundsCacheSize - 1)];
+            if (!e.valid || e.vertices != geometry->vertices || e.indices != geometry->indices ||
+                e.count != geometry->count) {
+                e.vertices = geometry->vertices;
+                e.indices = geometry->indices;
+                e.count = geometry->count;
+                e.valid = LightRange_Bounds(&geometry->vertices[0].x, sizeof(GfxVertex), geometry->indices,
+                                            geometry->count, &e.model);
+            }
+            haveModel = e.valid;
+            model = e.model;
+        } else {
+            haveModel = LightRange_Bounds(&geometry->vertices[0].x, sizeof(GfxVertex), geometry->indices,
+                                          geometry->count, &model);
+        }
+        if (haveModel) {
+            GfxMatrix world;
+            if (s_transformSet[GFX_TRANSFORM_WORLD])
+                world = s_transforms[GFX_TRANSFORM_WORLD];
+            else
+                Identity(&world);
+            geometry->world = LightRange_ToWorld(model, &world._11);
+            geometry->state = 1;
+        }
+    }
+    return geometry->state == 1 ? &geometry->world : NULL;
+}
+
+bool LightIsPositional(const GfxLight &light)
+{
+    return light.type == GFX_LIGHT_POINT || light.type == GFX_LIGHT_SPOT;
+}
+
+// Direct3D attenuation of a positional light for this draw (1 for others).
+float LightDrawFactor(const GfxLight &light, DrawGeometry *geometry)
+{
+    if (!LightIsPositional(light))
+        return 1.0f;
+    const LightRangeSphere *sphere = DrawWorldSphere(geometry);
+    const float d = sphere != NULL
+        ? LightRange_NearestDistance(light.position.x, light.position.y, light.position.z, *sphere)
+        : 0.0f;
+    return LightRange_Attenuation(light.attenuation0, light.attenuation1, light.attenuation2, light.range, d);
+}
+
+void SendLightColours(int index, const GfxLight &l, float factor)
+{
+    const GLenum lightEnum = (GLenum)(GL_LIGHT0 + index);
+    const float lDiff[4] = { l.diffuse.r * factor, l.diffuse.g * factor, l.diffuse.b * factor, l.diffuse.a };
+    const float lAmb[4] = { l.ambient.r * factor, l.ambient.g * factor, l.ambient.b * factor, l.ambient.a };
+    const float lSpec[4] = { l.specular.r * factor, l.specular.g * factor, l.specular.b * factor, l.specular.a };
+    glLightfv(lightEnum, GL_DIFFUSE, lDiff);
+    glLightfv(lightEnum, GL_AMBIENT, lAmb);
+    glLightfv(lightEnum, GL_SPECULAR, lSpec);
+}
+
+bool Apply3DLightingAndFog(int backdropFogAlpha, DrawGeometry *geometry)
 {
     const bool usePrelitPath = !s_lightingEnabled;
     const int wantGlLighting = usePrelitPath ? 0 : 1;
@@ -2184,18 +2365,13 @@ bool Apply3DLightingAndFog(int backdropFogAlpha)
 
             for (int i = 0; i < 8; ++i) {
                 const GLenum lightEnum = (GLenum)(GL_LIGHT0 + i);
-                if (!s_lightEnabled[i] || !s_lightSet[i]) {
-                    glDisable(lightEnum);
+                if (!s_lightEnabled[i] || !s_lightSet[i])
                     continue;
-                }
                 const GfxLight &l = s_lights[i];
-                glEnable(lightEnum);
-                const float lDiff[4] = { l.diffuse.r, l.diffuse.g, l.diffuse.b, l.diffuse.a };
-                const float lAmb[4] = { l.ambient.r, l.ambient.g, l.ambient.b, l.ambient.a };
-                const float lSpec[4] = { l.specular.r, l.specular.g, l.specular.b, l.specular.a };
-                glLightfv(lightEnum, GL_DIFFUSE, lDiff);
-                glLightfv(lightEnum, GL_AMBIENT, lAmb);
-                glLightfv(lightEnum, GL_SPECULAR, lSpec);
+                // Positional lights get their attenuated colour per draw below.
+                s_lightFactorApplied[i] = -1.0f;
+                if (!LightIsPositional(l))
+                    SendLightColours(i, l, 1.0f);
 
                 if (l.type == GFX_LIGHT_DIRECTIONAL) {
                     const float pos[4] = { -l.direction.x, -l.direction.y, -l.direction.z, 0.0f };
@@ -2204,9 +2380,10 @@ bool Apply3DLightingAndFog(int backdropFogAlpha)
                 } else {
                     const float pos[4] = { l.position.x, l.position.y, l.position.z, 1.0f };
                     glLightfv(lightEnum, GL_POSITION, pos);
-                    glLightf(lightEnum, GL_CONSTANT_ATTENUATION, l.attenuation0 > 0.0f ? l.attenuation0 : 1.0f);
-                    glLightf(lightEnum, GL_LINEAR_ATTENUATION, l.attenuation1 >= 0.0f ? l.attenuation1 : 0.0f);
-                    glLightf(lightEnum, GL_QUADRATIC_ATTENUATION, l.attenuation2 >= 0.0f ? l.attenuation2 : 0.0f);
+                    // Attenuation is applied to the colour per draw (see above).
+                    glLightf(lightEnum, GL_CONSTANT_ATTENUATION, 1.0f);
+                    glLightf(lightEnum, GL_LINEAR_ATTENUATION, 0.0f);
+                    glLightf(lightEnum, GL_QUADRATIC_ATTENUATION, 0.0f);
                     if (l.type == GFX_LIGHT_SPOT) {
                         const float dir[3] = { l.direction.x, l.direction.y, l.direction.z };
                         glLightfv(lightEnum, GL_SPOT_DIRECTION, dir);
@@ -2226,6 +2403,38 @@ bool Apply3DLightingAndFog(int backdropFogAlpha)
             s_lightingCache.valid = 1;
         } else {
             s_diag.lightingSkips++;
+        }
+
+        uint32_t lightMask = 0;
+        for (int i = 0; i < 8; ++i) {
+            if (!s_lightEnabled[i] || !s_lightSet[i] || (s_debugLightMask & (1u << i)) == 0)
+                continue;
+            const GfxLight &l = s_lights[i];
+            if (LightIsPositional(l)) {
+                // Below half an 8-bit step the light adds nothing visible.
+                const float factor = LightDrawFactor(l, geometry);
+                if (factor < 1.0f / 512.0f)
+                    continue;
+                // Resend only when the factor moved by a visible amount.
+                const float applied = s_lightFactorApplied[i];
+                if (applied < 0.0f || fabsf(factor - applied) > 1.0f / 1024.0f) {
+                    SendLightColours(i, l, factor);
+                    s_lightFactorApplied[i] = factor;
+                }
+            }
+            lightMask |= 1u << i;
+        }
+        if (lightMask != s_glCache.lightMask) {
+            for (int i = 0; i < 8; ++i) {
+                const uint32_t bit = 1u << i;
+                if ((lightMask & bit) == (s_glCache.lightMask & bit) && s_glCache.lightMask != ~0u)
+                    continue;
+                if ((lightMask & bit) != 0)
+                    glEnable((GLenum)(GL_LIGHT0 + i));
+                else
+                    glDisable((GLenum)(GL_LIGHT0 + i));
+            }
+            s_glCache.lightMask = lightMask;
         }
     }
 
@@ -2860,7 +3069,8 @@ void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexC
     Apply3DTransforms(&worldView);
     Apply3DRasterState();
     const int backdropFogAlpha = BackdropFogAlpha(vertices, vertexCount);
-    const bool prelit = Apply3DLightingAndFog(backdropFogAlpha);
+    DrawGeometry geometry = { vertices, indices, indices != NULL ? indexCount : vertexCount, 0, { 0, 0, 0, 0 } };
+    const bool prelit = Apply3DLightingAndFog(backdropFogAlpha, &geometry);
     if (s_colourLogEnabled)
         ColourLogSample(vertices, backdropFogAlpha, prelit);
     const int activeStages = Apply3DTextureStages();
@@ -2985,7 +3195,9 @@ extern "C" void Gfx_DrawPrimitiveVB(int primitive, GfxVertexBuffer *buffer, uint
         return;
     const uint32_t avail = buffer->count - firstVertex;
     const uint32_t clampedCount = vertexCount > avail ? avail : vertexCount;
+    s_drawFromVertexBuffer = 1;
     Submit3DDraw(primitive, buffer->vertices + firstVertex, clampedCount, NULL, 0);
+    s_drawFromVertexBuffer = 0;
 }
 
 extern "C" void Gfx_DrawIndexedPrimitiveVB(int primitive, GfxVertexBuffer *buffer, uint32_t firstVertex,
@@ -2999,7 +3211,9 @@ extern "C" void Gfx_DrawIndexedPrimitiveVB(int primitive, GfxVertexBuffer *buffe
         return;
     const uint32_t avail = buffer->count - firstVertex;
     const uint32_t clampedCount = (vertexCount == 0 || vertexCount > avail) ? avail : vertexCount;
+    s_drawFromVertexBuffer = 1;
     Submit3DDraw(primitive, buffer->vertices + firstVertex, clampedCount, indices, indexCount);
+    s_drawFromVertexBuffer = 0;
 }
 
 extern "C" void Gfx_DrawPrimitive(int primitive, const GfxVertex *vertices, uint32_t vertexCount)
