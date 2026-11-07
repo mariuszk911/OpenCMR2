@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include "LayoutChecks.h"
 #include "LightZone.h"
+#include "port/texture_disk.h"
 
 // Not declared in Mesh.h yet; the other two are not analysed yet.
 void Mesh_ReuploadAll(void);
@@ -2674,14 +2675,7 @@ Texture *CGraphics::LoadDDSTexture(DDSFile *pDDS, Texture *pTexture)
     int height;
 
     header = pDDS->desc;
-    // PORT: AMIGA: DDS header fields are little-endian; convert a local copy.
-    header.dwFlags = ReadLE32(&header.dwFlags);
-    header.dwWidth = ReadLE32(&header.dwWidth);
-    header.dwHeight = ReadLE32(&header.dwHeight);
-    header.dwLinearSize = ReadLE32(&header.dwLinearSize);
-    header.ddpfPixelFormat.dwFourCC = ReadLE32(&header.ddpfPixelFormat.dwFourCC);
-    header.ddpfPixelFormat.dwRGBBitCount = ReadLE32(&header.ddpfPixelFormat.dwRGBBitCount);
-    header.ddpfPixelFormat.dwRGBAlphaBitMask = ReadLE32(&header.ddpfPixelFormat.dwRGBAlphaBitMask);
+    DdsDisk_Decode(&header); // PORT: AMIGA: header fields are little-endian; convert the local copy
 
     width = header.dwWidth;
     height = header.dwHeight;
@@ -3800,33 +3794,19 @@ void Graphics_LoadTextureRecordList(BYTE *param1, char *param2, unsigned int par
     if (param3 != 0) {
         remaining = param3;
         do {
-            // PORT: AMIGA: the record table ends at the texture-name block; never read past it.
-            if (limit != NULL &&
-                    (param1 >= limit || (size_t)(limit - param1) < 0x10)) {
-                Sys_Log("graphics: texture record table overruns the C3D");
-                return;
-            }
-            // PORT: AMIGA: count and name indices are little-endian, possibly unaligned (0x10 header, 8-byte slots).
-            const unsigned int count = ReadLE16(param1 + 0xc);
-            if (count > 0x1000 ||
-                    (limit != NULL && (size_t)(limit - param1) < 0x10u + (size_t)count * 8u)) {
-                Sys_Log("graphics: invalid texture record count %lu",
-                        (unsigned long)count);
+            unsigned int count;
+            unsigned int nameIndex;
+            const char *pBaseName;
+            // PORT: AMIGA: the table ends at the name block; the file data is little-endian and bounded.
+            int status = TextureRecord_Open(param1, limit, &count);
+            if (status != TEXTURE_RECORD_OK) {
+                Sys_Log("graphics: texture %s (%lu)", TextureRecord_StatusText(status), (unsigned long)count);
                 return;
             }
             for (i = 0; i < count; i++) {
-                const unsigned int nameIndex = ReadLE16(param1 + 0x14 + i * 8);
-                const char *pBaseName;
-                // PORT: AMIGA: a corrupt record must not become a wild name pointer.
-                if (nameIndex >= param3) {
-                    Sys_Log("graphics: texture name index %lu >= %lu",
-                            (unsigned long)nameIndex, (unsigned long)param3);
-                    continue;
-                }
-                pName = param2 + nameIndex * 0x104;
-                // PORT: AMIGA: the slot has no guaranteed terminator; reject before StrUpperPolish.
-                if (memchr(pName, '\0', 0x104) == NULL) {
-                    Sys_Log("graphics: unterminated texture name %lu",
+                status = TextureRecord_Name(param1, i, param2, param3, &pName, &nameIndex);
+                if (status != TEXTURE_RECORD_OK) {
+                    Sys_Log("graphics: texture %s (%lu)", TextureRecord_StatusText(status),
                             (unsigned long)nameIndex);
                     continue;
                 }
@@ -3852,7 +3832,7 @@ void Graphics_LoadTextureRecordList(BYTE *param1, char *param2, unsigned int par
                 }
                 CTexture::FindLoadTexture(archive, fileName, 0, 0, 0, flags);
             }
-            param1 = param1 + 0x10 + count * 8;
+            param1 = (BYTE *)TextureRecord_Next(param1, count);
             remaining--;
         } while (remaining != 0);
     }

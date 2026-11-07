@@ -452,6 +452,23 @@ target_compile_options(font_pcf_be_test PRIVATE
 target_compile_definitions(font_pcf_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 add_test(NAME font_pcf_be COMMAND font_pcf_be_test)
 
+# .dds header words and C3D texture records. The forced variant proves the
+# swap path on the little-endian host.
+foreach(texture_disk_variant texture_disk texture_disk_be)
+    add_executable(${texture_disk_variant}_test texture_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/texture_disk.cpp)
+    target_include_directories(${texture_disk_variant}_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/game
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/port/compat)
+    target_compile_options(${texture_disk_variant}_test PRIVATE
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+        -fms-extensions)
+    add_test(NAME ${texture_disk_variant} COMMAND ${texture_disk_variant}_test)
+endforeach()
+target_compile_definitions(texture_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 add_executable(saved_game_test saved_game.cpp)
 target_link_libraries(saved_game_test PRIVATE opencmr2_platform)
 add_test(NAME saved_game COMMAND saved_game_test)
