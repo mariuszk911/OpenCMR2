@@ -149,6 +149,17 @@ add_executable(amiga_sys_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_time_test.c
 target_include_directories(amiga_sys_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_sys_test)
 
+# Bink decoder (Domain B, no NDK): built for the target but not yet linked into
+# opencmr2. The benchmark is the Phase 2 gate of docs/BINK_AMIGA_PLAN.md.
+add_library(opencmr2_bink STATIC video/bink_decoder.cpp)
+target_include_directories(opencmr2_bink PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_executable(amiga_bink_bench ${PROJECT_SOURCE_DIR}/tests/amiga/bink_bench.cpp
+    platform/amiga/amiga_sys.cpp)
+target_include_directories(amiga_bink_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(amiga_bink_bench PRIVATE opencmr2_bink)
+opencmr2_amiga_stack(amiga_bink_bench)
+
 add_executable(amiga_sys_file_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_file_test.c
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_sys_file_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
