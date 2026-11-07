@@ -392,6 +392,10 @@ add_executable(bink_decoder_test bink_decoder.cpp)
 target_link_libraries(bink_decoder_test PRIVATE opencmr2_bink)
 add_test(NAME bink_decoder COMMAND bink_decoder_test)
 
+add_executable(yuv_rgba_test yuv_rgba.cpp)
+target_link_libraries(yuv_rgba_test PRIVATE opencmr2_bink)
+add_test(NAME yuv_rgba COMMAND yuv_rgba_test)
+
 add_executable(movie_playback_test movie_playback.cpp ${PROJECT_SOURCE_DIR}/src/video/movie.cpp)
 target_link_libraries(movie_playback_test PRIVATE opencmr2_bink)
 add_test(NAME movie_playback COMMAND movie_playback_test)
@@ -611,7 +615,7 @@ if(OPENCMR2_BINK_TEST_DATA_DIR)
         set_tests_properties(stage_entry_boundary PROPERTIES TIMEOUT 120)
     endif()
     # bink_decoder also checks the changed-macroblock map against cm.bik.
-    set_tests_properties(bink_decoder PROPERTIES
+    set_tests_properties(bink_decoder yuv_rgba PROPERTIES
         ENVIRONMENT "OPENCMR2_BINK_TEST_DATA_DIR=${OPENCMR2_BINK_TEST_DATA_DIR}")
     file(GLOB_RECURSE BINK_TEST_FILES "${OPENCMR2_BINK_TEST_DATA_DIR}/*.bik" "${OPENCMR2_BINK_TEST_DATA_DIR}/*.BIK")
     foreach(movie IN LISTS BINK_TEST_FILES)

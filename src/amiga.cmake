@@ -151,7 +151,7 @@ opencmr2_amiga_stack(amiga_sys_test)
 
 # Bink decoder (Domain B, no NDK): built for the target but not yet linked into
 # opencmr2. The benchmark is the Phase 2 gate of docs/BINK_AMIGA_PLAN.md.
-add_library(opencmr2_bink STATIC video/bink_decoder.cpp)
+add_library(opencmr2_bink STATIC video/bink_decoder.cpp video/yuv_rgba.cpp)
 target_include_directories(opencmr2_bink PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(amiga_bink_bench ${PROJECT_SOURCE_DIR}/tests/amiga/bink_bench.cpp

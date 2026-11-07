@@ -10,7 +10,9 @@
  *
  * Pass 1 decodes with the silent track (-1): packet read + video + BGRX
  * conversion. Pass 2 uses TRACK (default 0): the same plus audio, so
- * pass 2 - pass 1 is the audio cost. File read time is measured inside the
+ * pass 2 - pass 1 is the audio cost. Pass 3 is the movie path: planes decode
+ * (no conversion) then YuvRgba::Convert of the changed macroblocks only, timed
+ * separately; its hash is taken over the converted RGBA as BGRX. File read time is measured inside the
  * reader callback. The BGRX conversion is still inside Decoder::Decode until
  * the plane API exists, so it is also timed on its own over synthetic planes
  * with the decoder's exact formula (a cost estimate, not a measurement of the
@@ -22,6 +24,7 @@
 #include "platform/amiga/amiga_sys.h"
 #include "port/sys.h"
 #include "video/bink_decoder.h"
+#include "video/yuv_rgba.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -119,6 +122,81 @@ PassResult RunPass(const char *path, int track, unsigned limit, bool hash)
     return result;
 }
 
+struct PlanesResult {
+    bool ok = false;
+    unsigned frames = 0;
+    uint64_t videoHash = kFnvBasis;
+    double decodeMs = 0, convertMs = 0, maxDecodeMs = 0, maxConvertMs = 0;
+    unsigned long changedMb = 0, totalMb = 0;
+};
+
+PlanesResult RunPlanesPass(const char *path, unsigned limit)
+{
+    PlanesResult result;
+    FileReader reader = {fopen(path, "rb"), 0};
+    if (!reader.file) {
+        printf("bink_bench: FAIL cannot open %s\n", path);
+        return result;
+    }
+    long size = fseek(reader.file, 0, SEEK_END) == 0 ? ftell(reader.file) : -1;
+    Bink::Decoder decoder;
+    if (size < 0 || size > 0x7fffffff ||
+        !decoder.Open({&reader, uint32_t(size), ReadAt}, -1)) {
+        printf("bink_bench: FAIL open: %s\n", decoder.Error().c_str());
+        fclose(reader.file);
+        return result;
+    }
+    const Bink::Info info = decoder.GetInfo();
+    const unsigned count = limit && limit < info.frames ? limit : info.frames;
+    YuvRgba::Tables *tables = new YuvRgba::Tables;
+    YuvRgba::InitTables(tables);
+    std::vector<uint8_t> rgba(size_t(info.width) * info.height * 4, 0);
+    std::vector<YuvRgba::RowRun> runs((info.height + 15) / 16);
+    Bink::Frame frame;
+    Bink::Planes planes = {};
+    for (unsigned i = 0; i < count; ++i) {
+        double start = Sys_GetTicksPrecise();
+        if (!decoder.Decode(frame, &planes)) {
+            printf("bink_bench: FAIL frame %u: %s\n", i + 1, decoder.Error().c_str());
+            delete tables;
+            fclose(reader.file);
+            return result;
+        }
+        double decodeMs = Sys_GetTicksPrecise() - start;
+        start = Sys_GetTicksPrecise();
+        YuvRgba::Convert(*tables, planes, planes.changed, info.width, info.height, rgba.data(),
+                         size_t(info.width) * 4, runs.data());
+        double convertMs = Sys_GetTicksPrecise() - start;
+        result.decodeMs += decodeMs;
+        result.convertMs += convertMs;
+        if (decodeMs > result.maxDecodeMs) result.maxDecodeMs = decodeMs;
+        if (convertMs > result.maxConvertMs) result.maxConvertMs = convertMs;
+        for (unsigned m = 0; m < planes.mbColumns * planes.mbRows; ++m)
+            result.changedMb += planes.changed[m] != 0;
+        result.totalMb += planes.mbColumns * planes.mbRows;
+        for (size_t p = 0; p < rgba.size(); p += 4) { // BGRX order, as tests/bink_decode
+            const uint8_t bgrx[4] = {rgba[p + 2], rgba[p + 1], rgba[p], rgba[p + 3]};
+            for (int b = 0; b < 4; ++b) { result.videoHash ^= bgrx[b]; result.videoHash *= kFnvPrime; }
+        }
+    }
+    result.frames = count;
+    result.ok = true;
+    delete tables;
+    fclose(reader.file);
+    return result;
+}
+
+void PrintPlanesPass(const PlanesResult &r)
+{
+    const unsigned f = r.frames ? r.frames : 1;
+    printf("bink_bench: pass 3 (planes decode + changed-MB convert): %u frames, decode avg %lu us max %lu us, "
+           "convert avg %lu us max %lu us, changed MB %lu%%, video FNV64 %08lx%08lx\n",
+           r.frames, (unsigned long)(r.decodeMs * 1000.0 / f), (unsigned long)(r.maxDecodeMs * 1000.0),
+           (unsigned long)(r.convertMs * 1000.0 / f), (unsigned long)(r.maxConvertMs * 1000.0),
+           r.totalMb ? r.changedMb * 100 / r.totalMb : 0ul,
+           (unsigned long)(r.videoHash >> 32), (unsigned long)(r.videoHash & 0xffffffffu));
+}
+
 void PrintPass(const char *label, const PassResult &r)
 {
     const unsigned long avgUs = r.frames ? (unsigned long)(r.wallMs * 1000.0 / r.frames) : 0;
@@ -199,6 +277,10 @@ int main(int argc, char **argv)
         const double audioMs = audio.wallMs - silent.wallMs;
         printf("bink_bench: audio cost %ld ms over %u frames\n", (long)audioMs, audio.frames);
     }
+    PlanesResult planes = RunPlanesPass(argv[1], limit);
+    if (!planes.ok)
+        return 10;
+    PrintPlanesPass(planes);
     BenchConversion();
     printf("bink_bench: done (compare hashes with docs/VIDEO.md)\n");
     return status;

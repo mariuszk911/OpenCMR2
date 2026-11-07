@@ -26,7 +26,7 @@ if(AMIGAOS)
 endif()
 
 # Small standalone decoder, also usable by tests without SDL or game data.
-add_library(opencmr2_bink STATIC video/bink_decoder.cpp)
+add_library(opencmr2_bink STATIC video/bink_decoder.cpp video/yuv_rgba.cpp)
 target_include_directories(opencmr2_bink PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Built as objects: the game and the platform layer call each other, so both
