@@ -953,6 +953,7 @@ void ConvertBgrx(const VideoState &s, Frame &frame) {
 const char *DecodeVideo(VideoState &s, const uint8_t *data, size_t bytes, Frame &frame,
                         Planes *planes) {
     Bits bits(data, bytes);
+    if (planes) frame.bgrx.clear(); // before the plane calls: no scratch register is held across them
     std::fill(s.changed.begin(), s.changed.end(), s.first ? 1 : 0);
     s.first = false;
     if (s.alpha) {
@@ -963,7 +964,7 @@ const char *DecodeVideo(VideoState &s, const uint8_t *data, size_t bytes, Frame 
     if (!DecodePlane(s, bits, 0, false)) return bits.Failure();
     if (!DecodePlane(s, bits, 2, true)) return bits.Failure(); // BIKi stores V before U.
     if (!DecodePlane(s, bits, 1, true)) return bits.Failure();
-    if (planes) frame.bgrx.clear(); else ConvertBgrx(s, frame);
+    if (!planes) ConvertBgrx(s, frame);
     for (Plane &plane : s.planes) plane.previous.swap(plane.current);
     if (planes) {
         // After the swap `previous` holds the frame just decoded.

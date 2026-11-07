@@ -160,6 +160,12 @@ target_include_directories(amiga_bink_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(amiga_bink_bench PRIVATE opencmr2_bink)
 opencmr2_amiga_stack(amiga_bink_bench)
 
+# Planes-path correctness check: decoder + converter, no Amiga calls. The
+# decoder keeps several KB of arrays on the stack, so it needs the swapped stack.
+add_executable(amiga_bink_planes_check ${PROJECT_SOURCE_DIR}/tests/amiga/bink_planes_check.cpp)
+target_link_libraries(amiga_bink_planes_check PRIVATE opencmr2_bink)
+opencmr2_amiga_stack(amiga_bink_planes_check)
+
 add_executable(amiga_sys_file_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_file_test.c
     platform/amiga/amiga_sys.cpp)
 target_include_directories(amiga_sys_file_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
