@@ -108,8 +108,13 @@ struct VideoState {
     std::vector<uint8_t> bundleStorage;
     Tree col_high[16];
     int col_lastval;
+    unsigned mbColumns = 0, mbRows = 0;
+    bool first = true;
+    std::vector<uint8_t> changed; // one byte per 16x16 macroblock
     void Init(unsigned w, unsigned h, bool hasAlpha) {
         width = w; height = h; alpha = hasAlpha;
+        mbColumns = (w + 15) / 16; mbRows = (h + 15) / 16;
+        changed.assign(size_t(mbColumns) * mbRows, 1);
         for (int i = 0; i < (alpha ? 4 : 3); ++i)
             planes[i].Init((i == 1 || i == 2) ? (w + 1) / 2 : w,
                            (i == 1 || i == 2) ? (h + 1) / 2 : h);
@@ -782,6 +787,20 @@ void CopyBlock(uint8_t *dst, const uint8_t *src, int stride) {
     for (int y = 0; y < 8; ++y) std::memcpy(dst + y * stride, src + y * stride, 8);
 }
 
+// Flags the macroblocks covered by a non-skip 8x8 block at (bx, by) of plane
+// `index`. A luma block lies in one macroblock; a chroma block is one
+// macroblock wide. A scaled block covers 16x16 plane pixels: one luma
+// macroblock, but 2x2 macroblocks of chroma. The alpha plane is not tracked.
+void MarkChanged(VideoState &s, int index, int bx, int by, bool scaled) {
+    if (index == 3) return;
+    const bool chroma = index != 0;
+    const int x0 = chroma ? bx : bx >> 1, y0 = chroma ? by : by >> 1;
+    const int span = chroma && scaled ? 2 : 1;
+    for (int y = y0; y < y0 + span && y < int(s.mbRows); ++y)
+        for (int x = x0; x < x0 + span && x < int(s.mbColumns); ++x)
+            s.changed[size_t(y) * s.mbColumns + x] = 1;
+}
+
 bool DecodePlane(VideoState &s, Bits &bits, int index, bool chroma) {
     Plane &plane = s.planes[index];
     int bw = (s.width + (chroma ? 15 : 7)) >> (chroma ? 4 : 3);
@@ -900,6 +919,7 @@ bool DecodePlane(VideoState &s, Bits &bits, int index, bool chroma) {
             default: return bits.Fail("unknown Bink block type");
             }
             if (bits.Failure()) return false;
+            if (type != SKIP_BLOCK) MarkChanged(s, index, bx, by, scaled);
             if (scaled) {
                 if (!(bx + 1 < bw && by + 1 < bh)) return bits.Fail("scaled block outside plane");
                 for (int y = 0; y < 16; ++y)
@@ -913,17 +933,7 @@ bool DecodePlane(VideoState &s, Bits &bits, int index, bool chroma) {
 }
 
 uint8_t Clamp(int value) { return uint8_t(value < 0 ? 0 : value > 255 ? 255 : value); }
-// Returns nullptr on success or the first failure message.
-const char *DecodeVideo(VideoState &s, const uint8_t *data, size_t bytes, Frame &frame) {
-    Bits bits(data, bytes);
-    if (s.alpha) {
-        bits.Read(32);
-        if (!DecodePlane(s, bits, 3, false)) return bits.Failure();
-    }
-    bits.Read(32); // BIKi luma plane size; planes are word aligned.
-    if (!DecodePlane(s, bits, 0, false)) return bits.Failure();
-    if (!DecodePlane(s, bits, 2, true)) return bits.Failure(); // BIKi stores V before U.
-    if (!DecodePlane(s, bits, 1, true)) return bits.Failure();
+void ConvertBgrx(const VideoState &s, Frame &frame) {
     frame.bgrx.resize(size_t(s.width) * s.height * 4);
     for (unsigned y = 0; y < s.height; ++y) {
         for (unsigned x = 0; x < s.width; ++x) {
@@ -937,7 +947,35 @@ const char *DecodeVideo(VideoState &s, const uint8_t *data, size_t bytes, Frame 
             dst[3] = 255;
         }
     }
+}
+
+// Returns nullptr on success or the first failure message.
+const char *DecodeVideo(VideoState &s, const uint8_t *data, size_t bytes, Frame &frame,
+                        Planes *planes) {
+    Bits bits(data, bytes);
+    std::fill(s.changed.begin(), s.changed.end(), s.first ? 1 : 0);
+    s.first = false;
+    if (s.alpha) {
+        bits.Read(32);
+        if (!DecodePlane(s, bits, 3, false)) return bits.Failure();
+    }
+    bits.Read(32); // BIKi luma plane size; planes are word aligned.
+    if (!DecodePlane(s, bits, 0, false)) return bits.Failure();
+    if (!DecodePlane(s, bits, 2, true)) return bits.Failure(); // BIKi stores V before U.
+    if (!DecodePlane(s, bits, 1, true)) return bits.Failure();
+    if (planes) frame.bgrx.clear(); else ConvertBgrx(s, frame);
     for (Plane &plane : s.planes) plane.previous.swap(plane.current);
+    if (planes) {
+        // After the swap `previous` holds the frame just decoded.
+        planes->y = s.planes[0].previous.data();
+        planes->u = s.planes[1].previous.data();
+        planes->v = s.planes[2].previous.data();
+        planes->yStride = s.planes[0].stride;
+        planes->cStride = s.planes[1].stride;
+        planes->changed = s.changed.data();
+        planes->mbColumns = s.mbColumns;
+        planes->mbRows = s.mbRows;
+    }
     return nullptr;
 }
 
@@ -1148,7 +1186,7 @@ struct Decoder::Impl {
         ready = true;
         return nullptr;
     }
-    const char *Decode(Frame &output) {
+    const char *Decode(Frame &output, Planes *planes) {
         REQUIRE(ready && frame < info.frames, "end of Bink movie");
         packet.resize(offsets[frame + 1] - offsets[frame]);
         REQUIRE(ReadAt(offsets[frame], packet.data(), uint32_t(packet.size())), "truncated Bink file");
@@ -1164,7 +1202,7 @@ struct Decoder::Impl {
             }
             cursor += bytes;
         }
-        if (const char *failure = DecodeVideo(video, packet.data() + cursor, packet.size() - cursor, output))
+        if (const char *failure = DecodeVideo(video, packet.data() + cursor, packet.size() - cursor, output, planes))
             return failure;
         ++frame;
         return nullptr;
@@ -1182,9 +1220,11 @@ bool Decoder::Open(Reader reader, int track) {
     impl->ready = false;
     return false;
 }
-bool Decoder::Decode(Frame &frame) {
-    const char *failure = impl->Decode(frame);
+bool Decoder::Decode(Frame &frame) { return Decode(frame, nullptr); }
+bool Decoder::Decode(Frame &frame, Planes *planes) {
+    const char *failure = impl->Decode(frame, planes);
     if (!failure) return true;
+    if (planes) *planes = Planes();
     impl->error = failure;
     impl->ready = false;
     frame.audio.clear();

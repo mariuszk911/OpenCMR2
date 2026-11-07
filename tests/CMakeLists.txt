@@ -610,6 +610,9 @@ if(OPENCMR2_BINK_TEST_DATA_DIR)
             --data ${OPENCMR2_BINK_TEST_DATA_DIR})
         set_tests_properties(stage_entry_boundary PROPERTIES TIMEOUT 120)
     endif()
+    # bink_decoder also checks the changed-macroblock map against cm.bik.
+    set_tests_properties(bink_decoder PROPERTIES
+        ENVIRONMENT "OPENCMR2_BINK_TEST_DATA_DIR=${OPENCMR2_BINK_TEST_DATA_DIR}")
     file(GLOB_RECURSE BINK_TEST_FILES "${OPENCMR2_BINK_TEST_DATA_DIR}/*.bik" "${OPENCMR2_BINK_TEST_DATA_DIR}/*.BIK")
     foreach(movie IN LISTS BINK_TEST_FILES)
         get_filename_component(name "${movie}" NAME_WE)

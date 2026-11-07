@@ -1,6 +1,128 @@
 #include "bink_fixture.h"
 
+#include <string>
+
 using namespace BinkTest;
+
+namespace {
+// One plane with explicit block types, in decode order (a scaled block at
+// (even, even) consumes one entry; its right neighbour none; the row below
+// consumes one entry for the pair). `sub` holds the sub-block types of scaled
+// blocks and `fills` the number of colours the fill blocks read.
+struct PlaneSpec { std::vector<uint8_t> types, sub; unsigned fills; };
+void SpecPlane(Writer &bits, unsigned width, const PlaneSpec &spec) {
+    for (int source = 0; source < 9; ++source) {
+        if (source == 2) for (int i = 0; i < 16; ++i) bits.Write(0, 4);
+        if (source != 6 && source != 7) bits.Write(0, 4);
+    }
+    for (int source = 0; source < 9; ++source) {
+        // The decoder reads a new count whenever a bundle is fully consumed at the
+        // start of a block row, so the bundles used only in early rows carry one
+        // unused spare entry.
+        unsigned used = source == 0 ? spec.types.size() : source == 1 ? spec.sub.size()
+                      : source == 2 ? spec.fills : 0;
+        unsigned count = used && source ? used + 1 : used;
+        bits.Write(count, Length(width, source));
+        if (!count) continue;
+        if (source == 2) { bits.Write(1, 1); bits.Write(8, 4); bits.Write(0, 4); continue; }
+        bits.Write(0, 1); // explicit symbols through the identity tree
+        for (unsigned i = 0; i < count; ++i)
+            bits.Write(i < used ? (source ? spec.sub : spec.types)[i] : 0, 4);
+    }
+    bits.Align();
+}
+std::vector<uint8_t> SpecVideo(unsigned width, const PlaneSpec &luma, const PlaneSpec &v, const PlaneSpec &u) {
+    Writer bits;
+    bits.Write(0, 32);
+    SpecPlane(bits, width, luma);
+    SpecPlane(bits, width / 2, v);
+    SpecPlane(bits, width / 2, u);
+    return bits.data;
+}
+std::vector<uint8_t> Repeat(unsigned count, uint8_t value = 0) { return std::vector<uint8_t>(count, value); }
+
+uint8_t Clamp8(int value) { return uint8_t(value < 0 ? 0 : value > 255 ? 255 : value); }
+// The decoder's own YUV -> BGRX formula, for the macroblocks of one frame.
+void ConvertMacroblock(const Bink::Planes &planes, unsigned width, unsigned height,
+                       unsigned mbx, unsigned mby, std::vector<uint8_t> &bgrx) {
+    for (unsigned y = mby * 16; y < std::min(height, mby * 16 + 16); ++y)
+        for (unsigned x = mbx * 16; x < std::min(width, mbx * 16 + 16); ++x) {
+            int luma = std::max(int(planes.y[y * planes.yStride + x]) - 16, 0);
+            int u = int(planes.u[(y / 2) * planes.cStride + x / 2]) - 128;
+            int v = int(planes.v[(y / 2) * planes.cStride + x / 2]) - 128;
+            uint8_t *dst = &bgrx[(size_t(y) * width + x) * 4];
+            dst[0] = Clamp8((298 * luma + 516 * u + 128) >> 8);
+            dst[1] = Clamp8((298 * luma - 100 * u - 208 * v + 128) >> 8);
+            dst[2] = Clamp8((298 * luma + 409 * v + 128) >> 8);
+            dst[3] = 255;
+        }
+}
+
+void TestChangedMap() {
+    const PlaneSpec lumaSkip = {Repeat(16), {}, 0}, chromaSkip = {Repeat(4), {}, 0};
+    auto video = [&](PlaneSpec luma, PlaneSpec v, PlaneSpec u) { return SpecVideo(32, luma, v, u); };
+    PlaneSpec lumaFill = lumaSkip; lumaFill.types[2] = 6; lumaFill.fills = 1;          // block (2,0): MB 1
+    PlaneSpec lumaFill2 = lumaSkip; lumaFill2.types[13] = 6; lumaFill2.fills = 1;      // block (1,3): MB 2
+    PlaneSpec chromaFill = chromaSkip; chromaFill.types[3] = 6; chromaFill.fills = 1;  // block (1,1): MB 3
+    PlaneSpec lumaScaled = {{0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0}, {6}, 1};      // scaled at (2,0): MB 1
+    PlaneSpec chromaScaled = {{1, 1}, {6}, 1};                                         // scaled: all four MBs
+    auto data = Container(32, 32, {
+        video(lumaSkip, chromaSkip, chromaSkip), video(lumaSkip, chromaSkip, chromaSkip),
+        video(lumaFill, chromaSkip, chromaSkip), video(lumaFill2, chromaSkip, chromaSkip),
+        video(lumaSkip, chromaFill, chromaSkip), video(lumaScaled, chromaSkip, chromaSkip),
+        video(lumaSkip, chromaSkip, chromaScaled)});
+    const std::vector<std::vector<uint8_t>> expected = {
+        {1, 1, 1, 1}, {0, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}, {0, 1, 0, 0}, {1, 1, 1, 1}};
+    Bink::Decoder decoder;
+    Bink::Frame frame;
+    Bink::Planes planes = {};
+    Check(Open(decoder, data), "cannot open macroblock map movie");
+    for (size_t i = 0; i < expected.size(); ++i) {
+        const bool decoded = decoder.Decode(frame, &planes);
+        Check(decoded, decoder.Error().c_str());
+        Check(frame.bgrx.empty(), "plane decode must not convert");
+        Check(planes.mbColumns == 2 && planes.mbRows == 2 && planes.yStride == 32 && planes.cStride == 16,
+              "plane geometry");
+        Check(planes.y && planes.u && planes.v && planes.changed, "plane pointers");
+        Check(std::vector<uint8_t>(planes.changed, planes.changed + 4) == expected[i], "changed macroblock map");
+    }
+    Check(!decoder.Decode(frame, &planes) && !planes.y && !planes.changed, "planes must be cleared on failure");
+}
+
+// For every frame of a real movie, converting only the flagged macroblocks into
+// a persistent buffer must equal the full conversion: the map is conservative.
+void TestChangedMapAgainstMovie(const char *path) {
+    FILE *file = std::fopen(path, "rb");
+    if (!file) return;
+    std::fseek(file, 0, SEEK_END);
+    long size = std::ftell(file);
+    auto read = [](void *context, uint32_t offset, void *dst, uint32_t bytes) {
+        FILE *f = static_cast<FILE *>(context);
+        return std::fseek(f, offset, SEEK_SET) == 0 && std::fread(dst, 1, bytes, f) == bytes;
+    };
+    Bink::Decoder mapped, full;
+    Check(mapped.Open({file, uint32_t(size), read}, -1) && full.Open({file, uint32_t(size), read}, -1),
+          "cannot open movie for the macroblock map check");
+    const Bink::Info info = mapped.GetInfo();
+    std::vector<uint8_t> persistent(size_t(info.width) * info.height * 4, 0);
+    Bink::Frame a, b;
+    Bink::Planes planes = {};
+    size_t flagged = 0, total = 0;
+    for (unsigned i = 0; i < info.frames; ++i) {
+        Check(mapped.Decode(a, &planes) && full.Decode(b), "movie decode");
+        for (unsigned y = 0; y < planes.mbRows; ++y)
+            for (unsigned x = 0; x < planes.mbColumns; ++x) {
+                ++total;
+                if (!planes.changed[y * planes.mbColumns + x]) continue;
+                ++flagged;
+                ConvertMacroblock(planes, info.width, info.height, x, y, persistent);
+            }
+        Check(persistent == b.bgrx, "changed-macroblock conversion differs from full conversion");
+    }
+    Check(flagged < total, "movie never skips a macroblock");
+    std::fclose(file);
+}
+}
 
 int main() {
     Bink::Decoder decoder;
@@ -76,5 +198,8 @@ int main() {
         mutated[offset] ^= 1u << (random & 7);
         if (Open(decoder, mutated)) while (decoder.Decode(frame)) {}
     }
+    TestChangedMap();
+    if (const char *dir = std::getenv("OPENCMR2_BINK_TEST_DATA_DIR"))
+        TestChangedMapAgainstMovie((std::string(dir) + "/FrontEnd/Videos/cm.bik").c_str());
     std::puts("Bink container, video, audio, truncation and corruption tests passed");
 }
