@@ -68,9 +68,38 @@ ctest --test-dir build/linux-x86 --output-on-failure
 ```
 
 `build/linux-x86/tests/bink_decode FILE [TRACK_ID]` decodes a whole movie and
-reports frame/sample counts, audio peak and a video hash. For reference comparison,
+reports frame/sample counts, audio peak, a video hash and a PCM hash. For reference comparison,
 optional arguments `BGRX_FILE F32_FILE [FRAME_LIMIT]` dump raw pixels and audio;
 an empty filename suppresses that output. Test dumps are not game assets to ship.
+
+### Reference hashes
+
+Recorded 2026-11-07 with `bink_decode FILE TRACK` (x86-64, g++ -O2) on the ten
+original movies. Any decoder change, and the Amiga target bench, must reproduce
+them. BGRX FNV64 hashes every decoded frame's BGRX bytes; PCM FNV64 hashes the
+float samples as four little-endian bytes each (the byte order is explicit so a
+big-endian target can compare). The video is identical across audio tracks.
+
+| File | Track | BGRX FNV64 | PCM FNV64 | Samples | Peak |
+| --- | --- | --- | --- | --- | --- |
+| `intro.bik` | 0 | `8841f58a208e00fe` | `56d13894a6e4807a` | 8114400 | 1.307194 |
+| `cm.bik` | 0 | `8692c55c34574b5e` | `5d6c4ef1a582b2ce` | 968436 | 1.013416 |
+| `Aus.bik` | 0 | `8863741388b73c24` | `be9049ae2ea37d9f` | 1940400 | 0.976797 |
+| `Aus.bik` | 4 | `8863741388b73c24` | `6ab2cbb32a8d0c18` | 1940400 | 0.978715 |
+| `Fin.bik` | 0 | `9d52144c7041ae4c` | `a90b811f10cf203c` | 1940400 | 0.975660 |
+| `Fin.bik` | 4 | `9d52144c7041ae4c` | `9150241a3a995e6b` | 1940400 | 1.002528 |
+| `Fra.bik` | 0 | `6dd0d65def9f41ee` | `11ef7723991479b8` | 1940400 | 0.975660 |
+| `Fra.bik` | 4 | `6dd0d65def9f41ee` | `849d6cc1f9c6993f` | 1940400 | 0.913228 |
+| `Gre.bik` | 0 | `d3433a815fbce11f` | `3aa22d7f88c585b4` | 1940400 | 0.975660 |
+| `Gre.bik` | 4 | `d3433a815fbce11f` | `909146d72f8980b0` | 1940400 | 0.788243 |
+| `Ita.bik` | 0 | `57f09899940467d6` | `ee2b45ad07bc878d` | 1940400 | 0.958412 |
+| `Ita.bik` | 4 | `57f09899940467d6` | `f3978c83d750e89e` | 1940400 | 0.958412 |
+| `Ken.bik` | 0 | `b2c3edfdafe4cc7f` | `655dc3cebbf6d06a` | 1940400 | 0.958412 |
+| `Ken.bik` | 4 | `b2c3edfdafe4cc7f` | `0ee548d6f8bb3b54` | 1940400 | 0.798728 |
+| `Swe.bik` | 0 | `31e4a07778446361` | `d9a9d4425e9109f6` | 1940400 | 0.975660 |
+| `Swe.bik` | 4 | `31e4a07778446361` | `3d8cffd1bd6cbcf1` | 1940400 | 0.839344 |
+| `UK.bik` | 0 | `ccff8e99330a5ae2` | `538998dfcb5f2eb5` | 1940400 | 0.958412 |
+| `UK.bik` | 4 | `ccff8e99330a5ae2` | `c04e0d11f7e10b02` | 1940400 | 0.958412 |
 
 ## Source attribution
 

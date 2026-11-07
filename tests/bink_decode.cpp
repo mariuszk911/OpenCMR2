@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 static bool Read(void *context, uint32_t offset, void *dst, uint32_t bytes)
 {
@@ -43,7 +44,7 @@ int main(int argc, char **argv)
     Bink::Info info = decoder.GetInfo();
     unsigned count = argc > 5 ? std::min(unsigned(std::atoi(argv[5])), info.frames) : info.frames;
     Bink::Frame frame;
-    uint64_t hash = 14695981039346656037ull, samples = 0;
+    uint64_t hash = 14695981039346656037ull, audioHash = 14695981039346656037ull, samples = 0;
     float peak = 0;
     bool ok = true;
     for (unsigned i = 0; i < count; ++i) {
@@ -54,14 +55,21 @@ int main(int argc, char **argv)
         }
         for (uint8_t byte : frame.bgrx) { hash ^= byte; hash *= 1099511628211ull; }
         samples += frame.audio.size();
-        for (float sample : frame.audio) peak = std::max(peak, std::abs(sample));
+        for (float sample : frame.audio) {
+            peak = std::max(peak, std::abs(sample));
+            // PCM oracle: the IEEE-754 bit pattern as four little-endian bytes.
+            uint32_t bits;
+            static_assert(sizeof(bits) == sizeof(sample), "float must be 32 bits");
+            std::memcpy(&bits, &sample, sizeof(bits));
+            for (int shift = 0; shift < 32; shift += 8) { audioHash ^= (bits >> shift) & 0xff; audioHash *= 1099511628211ull; }
+        }
         if (video && std::fwrite(frame.bgrx.data(), 1, frame.bgrx.size(), video) != frame.bgrx.size()) ok = false;
         if (audio && std::fwrite(frame.audio.data(), sizeof(float), frame.audio.size(), audio) != frame.audio.size()) ok = false;
         if (!ok) break;
     }
-    std::printf("%ux%u, %u frames, %u/%u fps, %u Hz/%u channels: %llu samples, peak %.6f, BGRX FNV64 %016llx\n",
+    std::printf("%ux%u, %u frames, %u/%u fps, %u Hz/%u channels: %llu samples, peak %.6f, BGRX FNV64 %016llx, PCM FNV64 %016llx\n",
                 info.width, info.height, count, info.fpsNumerator, info.fpsDenominator,
-                info.sampleRate, info.channels, (unsigned long long)samples, peak, (unsigned long long)hash);
+                info.sampleRate, info.channels, (unsigned long long)samples, peak, (unsigned long long)hash, (unsigned long long)audioHash);
     if (video && std::fclose(video)) ok = false;
     if (audio && std::fclose(audio)) ok = false;
     std::fclose(file);
