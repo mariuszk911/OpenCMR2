@@ -1,14 +1,10 @@
 /*
- * Direct3D light range for renderers without one.
+ * Whether a Direct3D point or spot light reaches a draw.
  *
- * A Direct3D point or spot light lights nothing farther than its range. GL
- * fixed-function lights have no range, so a light that the game relies on the
- * range to confine (the car's front light: no attenuation, range 100) would
- * light the whole visible world; MiniGL also appears not to apply GL
- * attenuation. The MiniGL backend therefore applies Direct3D's attenuation
- * itself, once per draw, at the draw's nearest point to the light, and hands
- * GL the scaled light colour with no attenuation. A large draw is lit evenly
- * at that value rather than per vertex.
+ * A Direct3D point or spot light lights nothing farther than its range. The
+ * MiniGL backend lights a draw on the CPU (port/d3d_light.h) only when such a
+ * light can reach it: the draw's world-space bounding sphere comes within the
+ * range. These helpers compute that sphere and its distance to the light.
  */
 #ifndef OPENCMR2_PORT_LIGHT_RANGE_H
 #define OPENCMR2_PORT_LIGHT_RANGE_H
@@ -84,18 +80,6 @@ static inline float LightRange_NearestDistance(float lightX, float lightY, float
     const float d = sqrtf(dx * dx + dy * dy + dz * dz) - s.radius;
 
     return d > 0.0f ? d : 0.0f;
-}
-
-/* Direct3D's point/spot light attenuation at distance d: 1 / (a0 + a1 d + a2 d^2),
-   0 beyond the range, and 1 when all three terms are 0 (as the host shader). */
-static inline float LightRange_Attenuation(float a0, float a1, float a2, float range, float d)
-{
-    float denom;
-
-    if (range > 0.0f && d > range)
-        return 0.0f;
-    denom = a0 + a1 * d + a2 * d * d;
-    return denom > 0.0f ? 1.0f / denom : 1.0f;
 }
 
 #endif

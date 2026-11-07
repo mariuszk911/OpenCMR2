@@ -53,15 +53,5 @@ int main()
     const LightRangeSphere around = { 0, 0, 5, 10 };
     REQUIRE(LightRange_NearestDistance(0, 0, 0, around) == 0.0f);
 
-    // The logged car light: a0 about 30, a2 0.1, range 60. Faint at the
-    // light, smaller with distance, 0 past the range.
-    const float atLight = LightRange_Attenuation(30, 0, 0.1f, 60, 0);
-    REQUIRE(Near(atLight, 1.0f / 30.0f));
-    REQUIRE(LightRange_Attenuation(30, 0, 0.1f, 60, 20) < atLight);
-    REQUIRE(Near(LightRange_Attenuation(30, 0, 0.1f, 60, 20), 1.0f / 70.0f));
-    REQUIRE(LightRange_Attenuation(30, 0, 0.1f, 60, 61) == 0.0f);
-    // No attenuation terms: full strength inside the range (the front spot).
-    REQUIRE(LightRange_Attenuation(0, 0, 0, 100, 99) == 1.0f);
-    REQUIRE(LightRange_Attenuation(0, 0, 0, 100, 101) == 0.0f);
     return 0;
 }

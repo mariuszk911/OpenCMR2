@@ -4,6 +4,7 @@
 // capability-tiered 3D fixed-function pipeline.
 #include "port/backdrop_fog.h"
 #include "port/light_range.h"
+#include "port/d3d_light.h"
 #include "port/gfx.h"
 #include "port/sys.h"
 #include "platform/amiga/amiga_sys.h"
@@ -293,9 +294,15 @@ struct BoundsCacheEntry {
     LightRangeSphere model;
 };
 BoundsCacheEntry s_boundsCache[kBoundsCacheSize];
-// Direct3D attenuation applied to each ranged light's GL colour, per light;
-// < 0 forces the colour to be sent again.
-float s_lightFactorApplied[8];
+// video.cpu_lights (default 1): light draws that a point or spot light
+// reaches on the CPU. 0 drops point and spot lights instead (GL keeps only the
+// directional lights), which saves the CPU time.
+int s_cpuLightsEnabled = 1;
+// Set while a draw is drawn with CPU-lit vertex colours (see CpuLightDraw).
+int s_cpuLitDraw;
+// Grow-only scratch vertices for CPU-lit draws.
+GfxVertex *s_cpuLitVertices;
+uint32_t s_cpuLitCapacity;
 // video.light_mask: diagnostic, GL lights allowed on (bit i = GL_LIGHT0 + i).
 uint32_t s_debugLightMask = 0xffu;
 void ColourLogEndFrame(void);
@@ -827,6 +834,9 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
     s_clientArraysRequested = Sys_GetOption("video.client_arrays", 0) != 0;
     s_colourLogEnabled = Sys_GetOption("video.colour_log", 0) != 0;
     s_debugLightMask = (uint32_t)Sys_GetOption("video.light_mask", 0xff) & 0xffu;
+    s_cpuLightsEnabled = Sys_GetOption("video.cpu_lights", 1) != 0;
+    if (!s_cpuLightsEnabled)
+        Sys_Log("AMIGA: video.cpu_lights=0: point and spot lights are not drawn");
     if (s_debugLightMask != 0xffu)
         Sys_Log("AMIGA: diagnostic: video.light_mask=%02lx", (unsigned long)s_debugLightMask);
     mglChooseVertexBufferSize(s_clientArraysRequested ? 32768 : 4096);
@@ -2166,12 +2176,12 @@ void Apply3DRasterState(void)
 //
 // backdropFogAlpha is BackdropFogAlpha()'s result for the draw.
 //
-// Light attenuation and range: MiniGL does not apply GL attenuation and GL
-// has no range, so for a Direct3D point or spot light the backend computes the
-// Direct3D attenuation once per draw, at the draw's nearest point to the light
-// (port/light_range.h), and sends the light colour scaled by it with GL
-// attenuation 1/0/0. The upload below sets position and cone only; colours and
-// which lights are on are decided per draw after it.
+// Positional lights: minigl.library 29.x applies only one directional light
+// and treats a point or spot light as a direction, so GL is given directional
+// lights only. A draw that a point or spot light reaches (its bounding sphere
+// within the light's range) is lit on the CPU instead (CpuLightDraw,
+// port/d3d_light.h) and drawn unlit. The upload below sets the light
+// parameters; which lights are on is decided per draw after it.
 struct DrawGeometry {
     const GfxVertex *vertices;
     const uint16_t *indices;    // NULL: the first `count` vertices
@@ -2225,32 +2235,131 @@ bool LightIsPositional(const GfxLight &light)
     return light.type == GFX_LIGHT_POINT || light.type == GFX_LIGHT_SPOT;
 }
 
-// Direct3D attenuation of a positional light for this draw (1 for others).
-float LightDrawFactor(const GfxLight &light, DrawGeometry *geometry)
+bool LightOn(int i)
 {
-    if (!LightIsPositional(light))
-        return 1.0f;
-    const LightRangeSphere *sphere = DrawWorldSphere(geometry);
-    const float d = sphere != NULL
-        ? LightRange_NearestDistance(light.position.x, light.position.y, light.position.z, *sphere)
-        : 0.0f;
-    return LightRange_Attenuation(light.attenuation0, light.attenuation1, light.attenuation2, light.range, d);
+    return s_lightEnabled[i] && s_lightSet[i] && (s_debugLightMask & (1u << i)) != 0;
 }
 
-void SendLightColours(int index, const GfxLight &l, float factor)
+// Whether any enabled point or spot light can reach the draw.
+bool PositionalLightReachesDraw(DrawGeometry *geometry)
 {
-    const GLenum lightEnum = (GLenum)(GL_LIGHT0 + index);
-    const float lDiff[4] = { l.diffuse.r * factor, l.diffuse.g * factor, l.diffuse.b * factor, l.diffuse.a };
-    const float lAmb[4] = { l.ambient.r * factor, l.ambient.g * factor, l.ambient.b * factor, l.ambient.a };
-    const float lSpec[4] = { l.specular.r * factor, l.specular.g * factor, l.specular.b * factor, l.specular.a };
-    glLightfv(lightEnum, GL_DIFFUSE, lDiff);
-    glLightfv(lightEnum, GL_AMBIENT, lAmb);
-    glLightfv(lightEnum, GL_SPECULAR, lSpec);
+    for (int i = 0; i < 8; ++i) {
+        if (!LightOn(i) || !LightIsPositional(s_lights[i]))
+            continue;
+        const GfxLight &l = s_lights[i];
+        if (l.range <= 0.0f)
+            return true;
+        const LightRangeSphere *sphere = DrawWorldSphere(geometry);
+        if (sphere == NULL ||
+            LightRange_NearestDistance(l.position.x, l.position.y, l.position.z, *sphere) <= l.range)
+            return true;
+    }
+    return false;
 }
 
-bool Apply3DLightingAndFog(int backdropFogAlpha, DrawGeometry *geometry)
+GfxColorValue UnpackColorValue(uint32_t argb)
 {
-    const bool usePrelitPath = !s_lightingEnabled;
+    float f[4];
+    UnpackColorFloats(argb, f);
+    const GfxColorValue c = { f[0], f[1], f[2], f[3] };
+    return c;
+}
+
+// The material colour a D3D material source selects for this vertex.
+GfxColorValue MaterialSourceColor(int source, const GfxColorValue &material, const GfxVertex &v)
+{
+    if (s_colorVertex) {
+        if (source == GFX_MCS_COLOR1)
+            return UnpackColorValue(v.diffuse);
+        if (source == GFX_MCS_COLOR2)
+            return UnpackColorValue(v.specular);
+    }
+    return material;
+}
+
+uint32_t PackColorValue(const GfxColorValue &c)
+{
+    return (uint32_t)(c.a * 255.0f + 0.5f) << 24 | (uint32_t)(c.r * 255.0f + 0.5f) << 16 |
+           (uint32_t)(c.g * 255.0f + 0.5f) << 8 | (uint32_t)(c.b * 255.0f + 0.5f);
+}
+
+// Lights the vertices a draw uses with Direct3D's vertex lighting and returns
+// a copy (same indexing) whose diffuse colour is the lit colour, for the
+// unlit path; NULL when the scratch buffer cannot grow.
+const GfxVertex *CpuLightDraw(const GfxVertex *vertices, uint32_t vertexCount, const uint16_t *indices,
+                              uint32_t indexCount)
+{
+    uint32_t lo = 0;
+    uint32_t hi = vertexCount - 1;
+    if (indices != NULL) {
+        lo = 0xffffu;
+        hi = 0;
+        for (uint32_t i = 0; i < indexCount; ++i) {
+            if (indices[i] < lo)
+                lo = indices[i];
+            if (indices[i] > hi)
+                hi = indices[i];
+        }
+    }
+    if (hi + 1 > s_cpuLitCapacity) {
+        GfxVertex *grown = new (std::nothrow) GfxVertex[hi + 1];
+        if (grown == NULL) {
+            Sys_Log("AMIGA: CPU lighting: cannot grow scratch to %lu vertices", (unsigned long)(hi + 1));
+            return NULL;
+        }
+        delete[] s_cpuLitVertices;
+        s_cpuLitVertices = grown;
+        s_cpuLitCapacity = hi + 1;
+    }
+    if (s_specularEnabled) {
+        LogDegradationOnce(DEGRADE_LOG_COLOR_SOURCE,
+                           "AMIGA: CPU vertex lighting does not light specular");
+    }
+
+    GfxMatrix world;
+    if (s_transformSet[GFX_TRANSFORM_WORLD])
+        world = s_transforms[GFX_TRANSFORM_WORLD];
+    else
+        Identity(&world);
+    int on[8];
+    for (int i = 0; i < 8; ++i)
+        on[i] = LightOn(i) ? 1 : 0;
+    const GfxColorValue globalAmbient = UnpackColorValue(s_ambient);
+
+    for (uint32_t i = lo; i <= hi; ++i) {
+        const GfxVertex &v = vertices[i];
+        GfxVertex &out = s_cpuLitVertices[i];
+        out = v;
+        const float pos[3] = {
+            v.x * world._11 + v.y * world._21 + v.z * world._31 + world._41,
+            v.x * world._12 + v.y * world._22 + v.z * world._32 + world._42,
+            v.x * world._13 + v.y * world._23 + v.z * world._33 + world._43
+        };
+        float n[3] = {
+            v.nx * world._11 + v.ny * world._21 + v.nz * world._31,
+            v.nx * world._12 + v.ny * world._22 + v.nz * world._32,
+            v.nx * world._13 + v.ny * world._23 + v.nz * world._33
+        };
+        if (s_normalizeNormals) {
+            const float len = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            if (len > 0.0f) {
+                n[0] /= len;
+                n[1] /= len;
+                n[2] /= len;
+            }
+        }
+        D3DLightMaterial m;
+        m.diffuse = MaterialSourceColor(s_diffuseSource, s_material.diffuse, v);
+        m.ambient = MaterialSourceColor(s_ambientSource, s_material.ambient, v);
+        m.emissive = MaterialSourceColor(s_emissiveSource, s_material.emissive, v);
+        out.diffuse = PackColorValue(D3DLight_Vertex(s_lights, on, 8, &globalAmbient, &m, pos, n));
+    }
+    return s_cpuLitVertices;
+}
+
+bool Apply3DLightingAndFog(int backdropFogAlpha)
+{
+    const bool usePrelitPath = !s_lightingEnabled || s_cpuLitDraw;
     const int wantGlLighting = usePrelitPath ? 0 : 1;
 
     if (s_glCache.lighting != wantGlLighting) {
@@ -2368,10 +2477,12 @@ bool Apply3DLightingAndFog(int backdropFogAlpha, DrawGeometry *geometry)
                 if (!s_lightEnabled[i] || !s_lightSet[i])
                     continue;
                 const GfxLight &l = s_lights[i];
-                // Positional lights get their attenuated colour per draw below.
-                s_lightFactorApplied[i] = -1.0f;
-                if (!LightIsPositional(l))
-                    SendLightColours(i, l, 1.0f);
+                const float lDiff[4] = { l.diffuse.r, l.diffuse.g, l.diffuse.b, l.diffuse.a };
+                const float lAmb[4] = { l.ambient.r, l.ambient.g, l.ambient.b, l.ambient.a };
+                const float lSpec[4] = { l.specular.r, l.specular.g, l.specular.b, l.specular.a };
+                glLightfv(lightEnum, GL_DIFFUSE, lDiff);
+                glLightfv(lightEnum, GL_AMBIENT, lAmb);
+                glLightfv(lightEnum, GL_SPECULAR, lSpec);
 
                 if (l.type == GFX_LIGHT_DIRECTIONAL) {
                     const float pos[4] = { -l.direction.x, -l.direction.y, -l.direction.z, 0.0f };
@@ -2380,10 +2491,9 @@ bool Apply3DLightingAndFog(int backdropFogAlpha, DrawGeometry *geometry)
                 } else {
                     const float pos[4] = { l.position.x, l.position.y, l.position.z, 1.0f };
                     glLightfv(lightEnum, GL_POSITION, pos);
-                    // Attenuation is applied to the colour per draw (see above).
-                    glLightf(lightEnum, GL_CONSTANT_ATTENUATION, 1.0f);
-                    glLightf(lightEnum, GL_LINEAR_ATTENUATION, 0.0f);
-                    glLightf(lightEnum, GL_QUADRATIC_ATTENUATION, 0.0f);
+                    glLightf(lightEnum, GL_CONSTANT_ATTENUATION, l.attenuation0 > 0.0f ? l.attenuation0 : 1.0f);
+                    glLightf(lightEnum, GL_LINEAR_ATTENUATION, l.attenuation1 >= 0.0f ? l.attenuation1 : 0.0f);
+                    glLightf(lightEnum, GL_QUADRATIC_ATTENUATION, l.attenuation2 >= 0.0f ? l.attenuation2 : 0.0f);
                     if (l.type == GFX_LIGHT_SPOT) {
                         const float dir[3] = { l.direction.x, l.direction.y, l.direction.z };
                         glLightfv(lightEnum, GL_SPOT_DIRECTION, dir);
@@ -2405,24 +2515,13 @@ bool Apply3DLightingAndFog(int backdropFogAlpha, DrawGeometry *geometry)
             s_diag.lightingSkips++;
         }
 
+        // GL gets the directional lights only. A draw a positional light
+        // reaches is CPU-lit and drawn on the prelit path; one it does not
+        // reach gets nothing from that light.
         uint32_t lightMask = 0;
         for (int i = 0; i < 8; ++i) {
-            if (!s_lightEnabled[i] || !s_lightSet[i] || (s_debugLightMask & (1u << i)) == 0)
-                continue;
-            const GfxLight &l = s_lights[i];
-            if (LightIsPositional(l)) {
-                // Below half an 8-bit step the light adds nothing visible.
-                const float factor = LightDrawFactor(l, geometry);
-                if (factor < 1.0f / 512.0f)
-                    continue;
-                // Resend only when the factor moved by a visible amount.
-                const float applied = s_lightFactorApplied[i];
-                if (applied < 0.0f || fabsf(factor - applied) > 1.0f / 1024.0f) {
-                    SendLightColours(i, l, factor);
-                    s_lightFactorApplied[i] = factor;
-                }
-            }
-            lightMask |= 1u << i;
+            if (LightOn(i) && !LightIsPositional(s_lights[i]))
+                lightMask |= 1u << i;
         }
         if (lightMask != s_glCache.lightMask) {
             for (int i = 0; i < 8; ++i) {
@@ -3069,8 +3168,18 @@ void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexC
     Apply3DTransforms(&worldView);
     Apply3DRasterState();
     const int backdropFogAlpha = BackdropFogAlpha(vertices, vertexCount);
+    // Draws a point or spot light reaches are lit on the CPU (see above).
     DrawGeometry geometry = { vertices, indices, indices != NULL ? indexCount : vertexCount, 0, { 0, 0, 0, 0 } };
-    const bool prelit = Apply3DLightingAndFog(backdropFogAlpha, &geometry);
+    const GfxVertex *drawVertices = vertices;
+    s_cpuLitDraw = 0;
+    if (s_cpuLightsEnabled && s_lightingEnabled && PositionalLightReachesDraw(&geometry)) {
+        const GfxVertex *lit = CpuLightDraw(vertices, vertexCount, indices, indexCount);
+        if (lit != NULL) {
+            drawVertices = lit;
+            s_cpuLitDraw = 1;
+        }
+    }
+    const bool prelit = Apply3DLightingAndFog(backdropFogAlpha);
     if (s_colourLogEnabled)
         ColourLogSample(vertices, backdropFogAlpha, prelit);
     const int activeStages = Apply3DTextureStages();
@@ -3086,7 +3195,7 @@ void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexC
     }
 
     const EmitPlan plan = BuildEmitPlan(prelit, mode, activeStages);
-    Submit3DBlocks(mode, vertices, indices, indices != NULL ? indexCount : vertexCount,
+    Submit3DBlocks(mode, drawVertices, indices, indices != NULL ? indexCount : vertexCount,
                    plan, emitNormals, activeStages, worldView);
 }
 

@@ -306,6 +306,12 @@ add_executable(light_range_test light_range.cpp)
 target_include_directories(light_range_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME light_range COMMAND light_range_test)
 
+# MiniGL applies only one directional light, so draws that a point or spot
+# light reaches are lit on the CPU with Direct3D's vertex lighting.
+add_executable(d3d_light_test d3d_light.cpp)
+target_include_directories(d3d_light_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME d3d_light COMMAND d3d_light_test)
+
 # M0.7 core-slice fixture: WAV fmt fields are little-endian on disk.
 add_executable(wave_format_test wave_format.cpp)
 target_include_directories(wave_format_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
