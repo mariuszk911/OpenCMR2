@@ -29,7 +29,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <complex>
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -980,37 +979,29 @@ const char *DecodeVideo(VideoState &s, const uint8_t *data, size_t bytes, Frame 
     return nullptr;
 }
 
-// Radix-2 complex FFT, unnormalised inverse. Bink uses only small fixed powers of two.
 constexpr double Pi = 3.14159265358979323846;
-void InverseFFT(std::vector<std::complex<double>> &a) {
-    size_t n = a.size();
-    for (size_t i = 1, j = 0; i < n; ++i) {
-        size_t bit = n >> 1;
-        for (; j & bit; bit >>= 1) j ^= bit;
-        j ^= bit;
-        if (i < j) std::swap(a[i], a[j]);
-    }
-    for (size_t length = 2; length <= n; length <<= 1) {
-        double angle = 2 * Pi / length;
-        std::complex<double> step(std::cos(angle), std::sin(angle));
-        for (size_t start = 0; start < n; start += length) {
-            std::complex<double> w(1, 0);
-            for (size_t j = 0; j < length / 2; ++j) {
-                auto even = a[start + j], odd = a[start + j + length / 2] * w;
-                a[start + j] = even + odd; a[start + j + length / 2] = even - odd;
-                w *= step;
-            }
-        }
-    }
-}
 
+// Audio decoding keeps every table and scratch buffer in AudioState, sized once
+// in Init: no allocation and no cos/sin/exp/ldexp per block (on a 68040/060 the
+// transcendental functions trap to the FPSP). The arithmetic is the same
+// operations in the same order as the earlier std::complex code (the FFT
+// twiddles are the same w *= step recurrence, only stored), so the output is
+// bit-identical; docs/VIDEO.md holds the hashes.
 struct AudioState {
     unsigned channels = 0, codedChannels = 0, length = 0, overlap = 0;
     bool dct = false, first = true;
     float root = 0;
     std::vector<unsigned> bands;
     std::vector<float> previous[2];
-    std::vector<std::complex<double>> transform;
+    std::vector<float> block[2];             // decoded blocks, one per coded channel
+    std::vector<float> quant;                // per-band quantisers of the block being read
+    std::vector<double> re, im;              // transform input/output, fftSize entries
+    std::vector<double> twRe, twIm;          // FFT twiddles, stage after stage (fftSize - 1)
+    std::vector<uint16_t> bitReverse;        // fftSize entries
+    std::vector<double> dctRe, dctIm;        // DCT phase factors, length entries
+    float quantTable[96];                    // exp(q * 0.15289...) for q < 96
+    float scaleTable[32];                    // 2^(e - 23), the Float() exponent scale
+    unsigned fftSize = 0;
     void Init(unsigned rate, unsigned count, bool useDct) {
         channels = count; dct = useDct; first = true;
         length = rate < 22050 ? 512 : (rate < 44100 ? 1024 : 2048);
@@ -1028,19 +1019,82 @@ struct AudioState {
         bands.resize(countBands + 1); bands[0] = 2;
         for (unsigned i = 1; i < countBands; ++i) bands[i] = (frequencies[i - 1] * length / half) & ~1u;
         bands[countBands] = length;
-        for (unsigned i = 0; i < codedChannels; ++i) previous[i].assign(overlap, 0);
-        transform.resize(dct ? length * 2 : length);
+        for (unsigned i = 0; i < codedChannels; ++i) {
+            previous[i].assign(overlap, 0);
+            block[i].assign(length, 0);
+        }
+        quant.assign(bands.size() - 1, 0);
+        fftSize = dct ? length * 2 : length;
+        re.assign(fftSize, 0); im.assign(fftSize, 0);
+        // Bit-reversal permutation, as the in-place loop computed it per call.
+        bitReverse.assign(fftSize, 0);
+        for (size_t i = 1, j = 0; i < fftSize; ++i) {
+            size_t bit = fftSize >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            bitReverse[i] = uint16_t(j);
+        }
+        // Twiddles: per stage the recurrence w = w * step, starting at 1.
+        twRe.assign(fftSize, 0); twIm.assign(fftSize, 0);
+        size_t entry = 0;
+        for (size_t stage = 2; stage <= fftSize; stage <<= 1) {
+            double angle = 2 * Pi / stage;
+            double stepRe = std::cos(angle), stepIm = std::sin(angle);
+            double wRe = 1, wIm = 0;
+            for (size_t j = 0; j < stage / 2; ++j) {
+                twRe[entry] = wRe; twIm[entry] = wIm; ++entry;
+                double nextRe = wRe * stepRe - wIm * stepIm;
+                double nextIm = wRe * stepIm + wIm * stepRe;
+                wRe = nextRe; wIm = nextIm;
+            }
+        }
+        if (dct) {
+            dctRe.assign(length, 0); dctIm.assign(length, 0);
+            for (unsigned k = 1; k < length; ++k) {
+                double angle = Pi * k / (2 * length);
+                dctRe[k] = std::cos(angle); dctIm[k] = std::sin(angle);
+            }
+        }
+        for (unsigned q = 0; q < 96; ++q) quantTable[q] = std::exp(q * 0.15289164787221953823f);
+        // 2^(e - 23), exactly and without libm: a power of two or its reciprocal.
+        for (int e = 0; e < 32; ++e)
+            scaleTable[e] = e >= 23 ? float(1u << (e - 23)) : 1.0f / float(1u << (23 - e));
     }
     float Float(Bits &bits) {
-        int exponent = bits.Read(5);
-        float value = std::ldexp(float(bits.Read(23)), exponent - 23);
+        unsigned exponent = bits.Read(5);
+        float value = float(bits.Read(23)) * scaleTable[exponent]; // exact: a power-of-two scale
         return bits.Read(1) ? -value : value;
     }
-    std::vector<float> Coefficients(Bits &bits) {
-        std::vector<float> c(length);
+    // Radix-2 inverse FFT of (re, im), unnormalised, in place.
+    void InverseFFT() {
+        const size_t n = fftSize;
+        for (size_t i = 1; i < n; ++i) {
+            size_t j = bitReverse[i];
+            if (i < j) { std::swap(re[i], re[j]); std::swap(im[i], im[j]); }
+        }
+        size_t entry = 0;
+        for (size_t stage = 2; stage <= n; stage <<= 1) {
+            const size_t half = stage / 2;
+            for (size_t start = 0; start < n; start += stage) {
+                for (size_t j = 0; j < half; ++j) {
+                    const double wRe = twRe[entry + j], wIm = twIm[entry + j];
+                    const size_t lo = start + j, hi = lo + half;
+                    const double oddRe = re[hi] * wRe - im[hi] * wIm;
+                    const double oddIm = re[hi] * wIm + im[hi] * wRe;
+                    const double evenRe = re[lo], evenIm = im[lo];
+                    re[lo] = evenRe + oddRe; im[lo] = evenIm + oddIm;
+                    re[hi] = evenRe - oddRe; im[hi] = evenIm - oddIm;
+                }
+            }
+            entry += half;
+        }
+    }
+    // Reads one transform block for a coded channel into block[ch].
+    void Coefficients(Bits &bits, unsigned ch) {
+        std::vector<float> &c = block[ch];
+        std::fill(c.begin(), c.end(), 0.0f);
         c[0] = Float(bits) * root; c[1] = Float(bits) * root;
-        std::vector<float> quant(bands.size() - 1);
-        for (float &q : quant) q = std::exp(std::min(bits.Read(8), 95u) * 0.15289164787221953823f) * root;
+        for (float &q : quant) q = quantTable[std::min(bits.Read(8), 95u)] * root;
         unsigned band = 0, i = 2;
         float q = quant[0];
         static const unsigned runs[] = {2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 32, 64};
@@ -1058,26 +1112,25 @@ struct AudioState {
                 }
             }
         }
-        std::fill(transform.begin(), transform.end(), std::complex<double>(0, 0));
         if (dct) {
             // DCT III via the even, phase-shifted spectrum of a 2N-point FFT.
-            transform[0] = 2 * c[0];
+            std::fill(re.begin(), re.end(), 0.0); std::fill(im.begin(), im.end(), 0.0);
+            re[0] = 2 * c[0];
             for (unsigned k = 1; k < length; ++k) {
-                double angle = Pi * k / (2 * length);
-                transform[k] = double(c[k]) * std::complex<double>(std::cos(angle), std::sin(angle));
-                transform[2 * length - k] = std::conj(transform[k]);
+                re[k] = double(c[k]) * dctRe[k]; im[k] = double(c[k]) * dctIm[k];
+                re[2 * length - k] = re[k]; im[2 * length - k] = -im[k];
             }
         } else {
-            transform[0] = c[0]; transform[length / 2] = c[1];
+            re[0] = c[0]; im[0] = 0;
+            re[length / 2] = c[1]; im[length / 2] = 0;
             for (unsigned k = 1; k < length / 2; ++k) {
-                transform[k] = {c[2 * k], -c[2 * k + 1]};
-                transform[length - k] = std::conj(transform[k]);
+                re[k] = c[2 * k]; im[k] = -double(c[2 * k + 1]);
+                re[length - k] = re[k]; im[length - k] = -im[k];
             }
         }
-        InverseFFT(transform);
+        InverseFFT();
         float scale = dct ? 1.0f / length : 0.5f;
-        for (unsigned i = 0; i < length; ++i) c[i] = transform[i].real() * scale;
-        return c;
+        for (unsigned n = 0; n < length; ++n) c[n] = re[n] * scale;
     }
     // Returns nullptr on success or the first failure message.
     const char *Decode(const uint8_t *data, size_t bytes, std::vector<float> &pcm) {
@@ -1087,29 +1140,30 @@ struct AudioState {
             return "invalid Bink audio output size";
         Bits bits(data + 4, bytes - 4);
         pcm.clear();
+        pcm.reserve(reported / 2 + size_t(length - overlap) * codedChannels);
         while (bits.Left()) {
             if (pcm.size() >= 8 * 1024 * 1024) return "Bink audio packet too large";
             if (dct) bits.Read(2);
-            std::vector<float> samples[2];
             for (unsigned ch = 0; ch < codedChannels; ++ch) {
-                samples[ch] = Coefficients(bits);
+                Coefficients(bits, ch);
                 if (bits.Failure()) return bits.Failure();
+                std::vector<float> &samples = block[ch];
                 if (!first) {
                     unsigned total = overlap * codedChannels;
                     for (unsigned i = 0; i < overlap; ++i) {
                         unsigned weight = i * codedChannels + ch;
-                        samples[ch][i] = (previous[ch][i] * (total - weight) + samples[ch][i] * weight) / total;
+                        samples[i] = (previous[ch][i] * (total - weight) + samples[i] * weight) / total;
                     }
                 }
-                std::copy(samples[ch].end() - overlap, samples[ch].end(), previous[ch].begin());
+                std::copy(samples.end() - overlap, samples.end(), previous[ch].begin());
             }
             first = false;
             bits.Align();
             if (bits.Failure()) return bits.Failure();
             for (unsigned i = 0; i < length - overlap; ++i)
                 for (unsigned ch = 0; ch < codedChannels; ++ch) {
-                    if (!std::isfinite(samples[ch][i])) return "invalid Bink audio sample";
-                    pcm.push_back(samples[ch][i]);
+                    if (!std::isfinite(block[ch][i])) return "invalid Bink audio sample";
+                    pcm.push_back(block[ch][i]);
                 }
         }
         // Last packets can carry fewer valid samples than a complete transform block.

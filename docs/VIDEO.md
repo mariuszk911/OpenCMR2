@@ -72,6 +72,14 @@ reports frame/sample counts, audio peak, a video hash and a PCM hash. For refere
 optional arguments `BGRX_FILE F32_FILE [FRAME_LIMIT]` dump raw pixels and audio;
 an empty filename suppresses that output. Test dumps are not game assets to ship.
 
+On the 68k target the float math differs from the host in the last bits, so
+audio is checked by tolerance, not by hash: dump a host reference with
+`bink_decode FILE 0 "" REF.f32 FRAMES` and run
+`amiga_bink_audio_check FILE REF.f32 [FRAMES]` (maximum absolute difference and
+the number of samples over 1e-5). `amiga_bink_planes_check FILE [FRAMES]` does
+the same for the planes and the changed-macroblock conversion, against the
+decoder's own BGRX output.
+
 ### Reference hashes
 
 Recorded 2026-11-07 with `bink_decode FILE TRACK` (x86-64, g++ -O2) on the ten

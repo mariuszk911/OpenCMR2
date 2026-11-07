@@ -153,9 +153,16 @@ opencmr2_amiga_stack(amiga_sys_test)
 # opencmr2. The benchmark is the Phase 2 gate of docs/BINK_AMIGA_PLAN.md.
 add_library(opencmr2_bink STATIC video/bink_decoder.cpp video/yuv_rgba.cpp)
 target_include_directories(opencmr2_bink PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# GCC 6.5 for m68k keeps values in call-clobbered registers (a0/a1/d0/d1) across
+# calls when -fcaller-saves is on and does not save them, so the decoder's
+# changed-macroblock map was corrupted (a crash at frame 46 of cm.bik, or wrong
+# flags, depending on code layout). Approved for the Bink library only; see the
+# gotcha in docs/AMIGA_PORT.md for the evidence.
+set_source_files_properties(video/bink_decoder.cpp video/yuv_rgba.cpp
+    PROPERTIES COMPILE_OPTIONS -fno-caller-saves)
 
 add_executable(amiga_bink_bench ${PROJECT_SOURCE_DIR}/tests/amiga/bink_bench.cpp
-    platform/amiga/amiga_sys.cpp)
+    platform/amiga/amiga_sys.cpp platform/amiga/amiga_libfix.c)
 target_include_directories(amiga_bink_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(amiga_bink_bench PRIVATE opencmr2_bink)
 opencmr2_amiga_stack(amiga_bink_bench)
@@ -165,6 +172,14 @@ opencmr2_amiga_stack(amiga_bink_bench)
 add_executable(amiga_bink_planes_check ${PROJECT_SOURCE_DIR}/tests/amiga/bink_planes_check.cpp)
 target_link_libraries(amiga_bink_planes_check PRIVATE opencmr2_bink)
 opencmr2_amiga_stack(amiga_bink_planes_check)
+
+# Audio check against a host-made reference: the target's float math differs in the
+# last bits, so the comparison is by tolerance, not by hash.
+add_executable(amiga_bink_audio_check ${PROJECT_SOURCE_DIR}/tests/amiga/bink_audio_check.cpp
+    platform/amiga/amiga_sys.cpp platform/amiga/amiga_libfix.c)
+target_include_directories(amiga_bink_audio_check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(amiga_bink_audio_check PRIVATE opencmr2_bink)
+opencmr2_amiga_stack(amiga_bink_audio_check)
 
 add_executable(amiga_sys_file_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_file_test.c
     platform/amiga/amiga_sys.cpp)
