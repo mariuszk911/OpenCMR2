@@ -13,6 +13,7 @@
 #ifndef OPENCMR2_PORT_FONT_PCF_H
 #define OPENCMR2_PORT_FONT_PCF_H
 
+#include "port/outline_font.h"
 #include "port/types.h"
 
 struct FontSlot;
@@ -26,6 +27,10 @@ DWORD FontPcf_ArchiveExtent(struct GenericFile *file, const void *data, int inAr
  * slot at them. A previous load for index is released first. Returns 1 on
  * success; the caller owns the file buffer and sets slot->loaded. */
 int FontPcf_Setup(struct FontSlot *slot, unsigned int index, const void *data, DWORD dataSize);
+
+/* Fills cells (room for 256) with the texture cell of every mapped character
+ * of a loaded slot, in character order, and returns how many. */
+int FontPcf_OutlineCells(const struct FontSlot *slot, OutlineFontGlyph *cells);
 
 /* Frees the native tables and points the slot at its idle zeroed header/map,
  * so an unloaded slot is safe to read. Does not touch slot->pData. */

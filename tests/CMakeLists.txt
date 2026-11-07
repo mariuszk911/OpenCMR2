@@ -437,6 +437,21 @@ add_executable(font_pcf_test font_pcf.cpp)
 target_link_libraries(font_pcf_test PRIVATE opencmr2_platform)
 add_test(NAME font_pcf COMMAND font_pcf_test)
 
+# The forced variant compiles the parser itself to prove the swap path on the
+# little-endian host.
+add_executable(font_pcf_be_test font_pcf.cpp font_pcf_buffer_stub.cpp
+    ${PROJECT_SOURCE_DIR}/src/port/font_pcf.cpp)
+target_include_directories(font_pcf_be_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/game
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/port/compat)
+target_compile_options(font_pcf_be_test PRIVATE
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+    "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+    -fms-extensions)
+target_compile_definitions(font_pcf_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+add_test(NAME font_pcf_be COMMAND font_pcf_be_test)
+
 add_executable(saved_game_test saved_game.cpp)
 target_link_libraries(saved_game_test PRIVATE opencmr2_platform)
 add_test(NAME saved_game COMMAND saved_game_test)

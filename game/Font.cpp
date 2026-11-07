@@ -72,7 +72,6 @@ void Font_Release(BYTE index)
 void Font_Setup(void *pData, Texture *pTexture, unsigned int index, char bInArchive, DWORD dataSize)
 {
     FontSlot *font;
-    unsigned int i;
 
     if (index >= g_fontCount || pData == NULL || pTexture == NULL)
         return;
@@ -87,20 +86,7 @@ void Font_Setup(void *pData, Texture *pTexture, unsigned int index, char bInArch
     // PORT: drawn from a distance field, sharp at any scale.
     {
         OutlineFontGlyph cells[256];
-        int cellCount = 0;
-        for (i = 0; i < 256; i++) {
-            short glyph = font->pCharMap[i];
-            if (glyph < 0)
-                continue;
-            FontGlyph *pGlyph = &font->pGlyphs[glyph];
-            cells[cellCount].code = (BYTE)i;
-            cells[cellCount].x = ((short *)pGlyph->field_0x0)[0];
-            cells[cellCount].y = ((short *)pGlyph->field_0x0)[1];
-            cells[cellCount].width = pGlyph->width;
-            cells[cellCount].height = pGlyph->height;
-            cellCount++;
-        }
-        OutlineFont_Replace(pTexture->name, pTexture->pSurface, cells, cellCount);
+        OutlineFont_Replace(pTexture->name, pTexture->pSurface, cells, FontPcf_OutlineCells(font, cells));
     }
 }
 

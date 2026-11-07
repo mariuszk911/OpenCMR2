@@ -78,6 +78,28 @@ void FontPcf_Release(FontSlot *slot, unsigned int index)
     slot->pCharMap = s_idleCharMap;
 }
 
+int FontPcf_OutlineCells(const FontSlot *slot, OutlineFontGlyph *cells)
+{
+    int count = 0;
+    unsigned int i;
+
+    for (i = 0; i < 256; i++) {
+        short glyph = slot->pCharMap[i];
+        const FontGlyph *pGlyph;
+
+        if (glyph < 0)
+            continue;
+        pGlyph = &slot->pGlyphs[glyph];
+        cells[count].code = (BYTE)i;
+        memcpy(&cells[count].x, pGlyph->field_0x0, sizeof(short));
+        memcpy(&cells[count].y, pGlyph->field_0x0 + 2, sizeof(short));
+        cells[count].width = pGlyph->width;
+        cells[count].height = pGlyph->height;
+        count++;
+    }
+    return count;
+}
+
 int FontPcf_Setup(FontSlot *slot, unsigned int index, const void *data, DWORD dataSize)
 {
     const BYTE *base;

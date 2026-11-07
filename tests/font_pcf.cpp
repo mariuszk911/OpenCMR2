@@ -125,6 +125,20 @@ void CheckTables(FontSlot &slot)
     Check(slot.pGlyphs[2].pKern[0].ch == 'A' && slot.pGlyphs[2].pKern[0].offset == 1000, "kern 2");
 }
 
+void CheckOutlineCells(const FontSlot &slot)
+{
+    OutlineFontGlyph cells[256];
+    int count = FontPcf_OutlineCells(&slot, cells);
+
+    Check(count == 3, "outline cell count");
+    Check(cells[0].code == 'A' && cells[0].x == 1 && cells[0].y == 2 &&
+          cells[0].width == 5 && cells[0].height == 6, "outline cell A");
+    Check(cells[1].code == 'B' && cells[1].x == 10 && cells[1].y == 11 &&
+          cells[1].width == 7 && cells[1].height == 8, "outline cell B");
+    Check(cells[2].code == 'C' && cells[2].x == 20 && cells[2].y == 21 &&
+          cells[2].width == 9 && cells[2].height == 10, "outline cell C");
+}
+
 void ExpectRejected(const std::vector<unsigned char> &bytes, unsigned int index,
                     DWORD dataSize, const char *what)
 {
@@ -145,6 +159,7 @@ int main()
     std::memset(&slot, 0, sizeof(slot));
     Check(FontPcf_Setup(&slot, 0, data.data(), (DWORD)data.size()) == 1, "valid pcf rejected");
     CheckTables(slot);
+    CheckOutlineCells(slot);
 
     FontPcf_Release(&slot, 0);
     Check(slot.pGlyphs == NULL, "release clears the glyph table");
