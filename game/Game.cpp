@@ -2441,7 +2441,6 @@ void Game_DrawSortedNodes(int bit)
     int count = CGame::m_transparentDrawCount;
 
     if (count <= 0 || count > 4096) {
-        if (count != 0)
         CGame::m_transparentDrawCount = 0;
         return;
     }
@@ -2449,10 +2448,7 @@ void Game_DrawSortedNodes(int bit)
         qsort(CGame::m_transparentDrawNodes, (size_t)count, sizeof(CGame::m_transparentDrawNodes[0]), Game_CompareTransparentDrawEntries);
     }
     for (i = 0; i < (unsigned int)count; i++) {
-        SceneNode *pNode = (SceneNode *)CGame::m_transparentDrawNodes[i];
-        if (pNode == NULL)
-            continue;
-        Game_DrawViewMaskNode(pNode, bit);
+        Game_DrawViewMaskNode((SceneNode *)CGame::m_transparentDrawNodes[i], bit);
     }
     CGame::m_transparentDrawCount = 0;
 }
