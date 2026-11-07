@@ -275,6 +275,12 @@ add_executable(weather_map_test weather_map.cpp)
 target_include_directories(weather_map_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME weather_map COMMAND weather_map_test)
 
+# A backdrop draw's fog, expressed as GL linear fog on the MiniGL backend, stays
+# the vertex's specular alpha at every eye distance.
+add_executable(backdrop_fog_test backdrop_fog.cpp)
+target_include_directories(backdrop_fog_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME backdrop_fog COMMAND backdrop_fog_test)
+
 # M0.7 core-slice fixture: WAV fmt fields are little-endian on disk.
 add_executable(wave_format_test wave_format.cpp)
 target_include_directories(wave_format_test PRIVATE ${PROJECT_SOURCE_DIR}/src)

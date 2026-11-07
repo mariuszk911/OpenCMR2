@@ -14,6 +14,7 @@ These guides describe the maintained workflow and current project scope.
 | [Network play](NETWORK.md) | LAN, VPN and internet setup, protocol and tests. |
 | [Video](VIDEO.md) | Bink decoder scope and validation. |
 | [AmigaOS/PiStorm port](AMIGA_PORT.md) | Target requirements, build contract, ABI boundaries and MiniGL mapping. |
+| [`game/` divergence cleanup](GAME_DIVERGENCE_CLEANUP.md) | Active plan to reduce the port's edits to `game/`. |
 | [Releases and Windows builds](WINDOWS.md) | Release packages and cross-building Windows from Linux. |
 
 Frozen regression inputs and their provenance remain in

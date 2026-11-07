@@ -2,6 +2,7 @@
 //
 // Owns the MiniGL context/window, frame lifecycle, 2D TL rendering, and the
 // capability-tiered 3D fixed-function pipeline.
+#include "port/backdrop_fog.h"
 #include "port/gfx.h"
 #include "port/sys.h"
 #include "platform/amiga/amiga_sys.h"
@@ -275,6 +276,9 @@ int s_specularSource = GFX_MCS_COLOR2;
 int s_ambientSource = GFX_MCS_MATERIAL;
 int s_emissiveSource = GFX_MCS_MATERIAL;
 
+int s_colourLogEnabled;     // video.colour_log, see ColourLogEndFrame
+void ColourLogEndFrame(void);
+
 uint32_t s_fogColor;
 uint32_t s_textureFactor = 0xffffffffu;
 int s_fogEnabled;
@@ -348,6 +352,7 @@ enum DegradeLogKey {
     DEGRADE_LOG_NORMALIZE = 11,
     DEGRADE_LOG_ALPHA_OP = 12,
     DEGRADE_LOG_SELECT_CURRENT = 13,
+    DEGRADE_LOG_BACKDROP_FOG = 14,
     DEGRADE_LOG_COUNT
 };
 uint32_t s_degradeLoggedMask;
@@ -798,6 +803,7 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
     // size/2, so it needs 2 * the largest index; the immediate
     // path keeps librw's 4096.
     s_clientArraysRequested = Sys_GetOption("video.client_arrays", 0) != 0;
+    s_colourLogEnabled = Sys_GetOption("video.colour_log", 0) != 0;
     mglChooseVertexBufferSize(s_clientArraysRequested ? 32768 : 4096);
     // PORT: AMIGA: the default texture-object table is 2048 entries; the game
     // reuses one table across stage reloads, so keep headroom and avoid
@@ -999,6 +1005,8 @@ void Gfx_PresentBody(int vsync)
         return;
     if (s_diag.inStage)
         s_diag.frames++;
+    if (s_colourLogEnabled)
+        ColourLogEndFrame();
     s_tlScreenActive = 0;
     if (s_locked) {
         mglUnlockDisplay();
@@ -1772,6 +1780,108 @@ void UnpackColorFloats(uint32_t argb, float out[4])
     out[3] = ((argb >> 24) & 0xffu) / 255.0f;
 }
 
+// The specular alpha of a draw that Direct3D would fog by it (fog on with
+// neither vertex nor table fog), or -1 for any other draw. See port/backdrop_fog.h.
+int BackdropFogAlpha(const GfxVertex *vertices, uint32_t vertexCount)
+{
+    if (!s_fogEnabled || s_fogVertexMode != GFX_FOG_NONE || s_fogTableMode != GFX_FOG_NONE ||
+        !s_caps.hasFogLinear)
+        return -1;
+    const uint32_t alpha = vertices[0].specular >> 24;
+    for (uint32_t i = 1; i < vertexCount; ++i) {
+        if ((vertices[i].specular >> 24) != alpha) {
+            LogDegradationOnce(DEGRADE_LOG_BACKDROP_FOG,
+                               "AMIGA: backdrop draw with mixed specular alpha; fogged by its first vertex");
+            break;
+        }
+    }
+    return (int)alpha;
+}
+
+// video.colour_log: one line per frame in which the colours reaching the
+// renderer change, to tell a colour the game asked for from one added after
+// it. Off by default: it logs from the frame path. Sampled here rather than in
+// game/ because the backend sees the same values and needs no divergence.
+enum {
+    kColourLogBackdropDraws = 6,
+    kColourLogMaxLines = 4000   // caps the file: weather blends change every frame
+};
+
+// Compared with memcmp, so uint32_t only and no padding.
+struct ColourLogState {
+    uint32_t backdropDiffuse[kColourLogBackdropDraws];
+    uint32_t backdropSpecular[kColourLogBackdropDraws];
+    uint32_t backdropDraws;
+    uint32_t fogColor;
+    uint32_t fogEnabled;
+    uint32_t fogVertexMode;
+    uint32_t ambient;
+    uint32_t light0;            // scene light, 0xRRGGBB
+};
+
+int s_colourLogLines;
+uint32_t s_colourLogFrame;
+int s_colourLogSampled;
+uint32_t s_colourLogWorldDiffuse;   // baked world colour; varies with the mesh, so not compared
+ColourLogState s_colourLogNow;
+ColourLogState s_colourLogLast;
+
+uint32_t ColourLogChannel(float value)
+{
+    return value <= 0.0f ? 0u : (value >= 1.0f ? 255u : (uint32_t)(value * 255.0f));
+}
+
+void ColourLogSample(const GfxVertex *vertices, int backdropFogAlpha, bool prelit)
+{
+    if (!s_colourLogSampled) {
+        s_colourLogSampled = 1;
+        const GfxLight &light = s_lights[0];
+        s_colourLogNow.fogColor = s_fogColor;
+        s_colourLogNow.fogEnabled = (uint32_t)s_fogEnabled;
+        s_colourLogNow.fogVertexMode = (uint32_t)s_fogVertexMode;
+        s_colourLogNow.ambient = s_ambient;
+        s_colourLogNow.light0 = ColourLogChannel(light.diffuse.r) << 16 |
+                                ColourLogChannel(light.diffuse.g) << 8 |
+                                ColourLogChannel(light.diffuse.b);
+    }
+    if (backdropFogAlpha >= 0) {
+        if (s_colourLogNow.backdropDraws < kColourLogBackdropDraws) {
+            s_colourLogNow.backdropDiffuse[s_colourLogNow.backdropDraws] = vertices[0].diffuse;
+            s_colourLogNow.backdropSpecular[s_colourLogNow.backdropDraws] = vertices[0].specular;
+            s_colourLogNow.backdropDraws++;
+        }
+    } else if (s_colourLogWorldDiffuse == 0 && !prelit) {
+        s_colourLogWorldDiffuse = vertices[0].diffuse;
+    }
+}
+
+void ColourLogEndFrame(void)
+{
+    s_colourLogFrame++;
+    if (s_colourLogSampled && s_colourLogLines < kColourLogMaxLines &&
+        memcmp(&s_colourLogNow, &s_colourLogLast, sizeof(s_colourLogNow)) != 0) {
+        const ColourLogState &c = s_colourLogNow;
+        s_colourLogLast = c;
+        if (++s_colourLogLines == kColourLogMaxLines)
+            Sys_Log("AMIGA: colour log: line limit reached");
+        Sys_Log("AMIGA: colour f=%lu fog=%lu/%lu/%08lx amb=%08lx light=%06lx world=%08lx "
+                "n=%lu sky=%08lx/%02lx %08lx/%02lx %08lx/%02lx %08lx/%02lx %08lx/%02lx %08lx/%02lx",
+                (unsigned long)s_colourLogFrame, (unsigned long)c.fogEnabled,
+                (unsigned long)c.fogVertexMode, (unsigned long)c.fogColor,
+                (unsigned long)c.ambient, (unsigned long)c.light0,
+                (unsigned long)s_colourLogWorldDiffuse, (unsigned long)c.backdropDraws,
+                (unsigned long)c.backdropDiffuse[0], (unsigned long)(c.backdropSpecular[0] >> 24),
+                (unsigned long)c.backdropDiffuse[1], (unsigned long)(c.backdropSpecular[1] >> 24),
+                (unsigned long)c.backdropDiffuse[2], (unsigned long)(c.backdropSpecular[2] >> 24),
+                (unsigned long)c.backdropDiffuse[3], (unsigned long)(c.backdropSpecular[3] >> 24),
+                (unsigned long)c.backdropDiffuse[4], (unsigned long)(c.backdropSpecular[4] >> 24),
+                (unsigned long)c.backdropDiffuse[5], (unsigned long)(c.backdropSpecular[5] >> 24));
+    }
+    memset(&s_colourLogNow, 0, sizeof(s_colourLogNow));
+    s_colourLogSampled = 0;
+    s_colourLogWorldDiffuse = 0;
+}
+
 void MultiplyRowMatrices(const GfxMatrix &a, const GfxMatrix &b, GfxMatrix *out)
 {
     const float *pa = &a._11;
@@ -1955,7 +2065,9 @@ void Apply3DRasterState(void)
 //   sources that name a vertex colour are expressed through GL_COLOR_MATERIAL.
 //   The game uses one such source at a time: emissive=COLOR1 for the baked
 //   world meshes (modes 0/1) and diffuse=COLOR1 for mode 3.
-bool Apply3DLightingAndFog(void)
+//
+// backdropFogAlpha is BackdropFogAlpha()'s result for the draw.
+bool Apply3DLightingAndFog(int backdropFogAlpha)
 {
     const bool usePrelitPath = !s_lightingEnabled;
     const int wantGlLighting = usePrelitPath ? 0 : 1;
@@ -2118,7 +2230,10 @@ bool Apply3DLightingAndFog(void)
     }
 
     const bool activeFogMode = s_fogTableMode == GFX_FOG_LINEAR || s_fogVertexMode == GFX_FOG_LINEAR;
-    const int wantFog = (s_fogEnabled && activeFogMode && s_caps.hasFogLinear && s_fogEnd > s_fogStart) ? 1 : 0;
+    // Alpha 255 is no fog at all; it needs no fog state.
+    const bool backdropFog = backdropFogAlpha >= 0 && backdropFogAlpha < 255;
+    const int wantFog = (backdropFog ||
+                         (s_fogEnabled && activeFogMode && s_caps.hasFogLinear && s_fogEnd > s_fogStart)) ? 1 : 0;
     if (s_glCache.fog != wantFog) {
         if (wantFog)
             glEnable(GL_FOG);
@@ -2133,12 +2248,16 @@ bool Apply3DLightingAndFog(void)
             glFogfv(GL_FOG_COLOR, fogRgba);
             s_glCache.fogColor = s_fogColor;
         }
-        if (s_glCache.fogStart != s_fogStart || s_glCache.fogEnd != s_fogEnd) {
+        float fogStart = s_fogStart;
+        float fogEnd = s_fogEnd;
+        if (backdropFog)
+            BackdropFog_Limits((unsigned int)backdropFogAlpha, &fogStart, &fogEnd);
+        if (s_glCache.fogStart != fogStart || s_glCache.fogEnd != fogEnd) {
             glFogi(GL_FOG_MODE, GL_LINEAR);
-            glFogf(GL_FOG_START, s_fogStart);
-            glFogf(GL_FOG_END, s_fogEnd);
-            s_glCache.fogStart = s_fogStart;
-            s_glCache.fogEnd = s_fogEnd;
+            glFogf(GL_FOG_START, fogStart);
+            glFogf(GL_FOG_END, fogEnd);
+            s_glCache.fogStart = fogStart;
+            s_glCache.fogEnd = fogEnd;
         }
     }
 
@@ -2740,7 +2859,10 @@ void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexC
     GfxMatrix worldView;
     Apply3DTransforms(&worldView);
     Apply3DRasterState();
-    const bool prelit = Apply3DLightingAndFog();
+    const int backdropFogAlpha = BackdropFogAlpha(vertices, vertexCount);
+    const bool prelit = Apply3DLightingAndFog(backdropFogAlpha);
+    if (s_colourLogEnabled)
+        ColourLogSample(vertices, backdropFogAlpha, prelit);
     const int activeStages = Apply3DTextureStages();
     // The library renders a multitextured draw unlit when fog is on or unit 1
     // uses DECAL/REPLACE (gl/src/draw.c's `lit` predicate). Normals are then
