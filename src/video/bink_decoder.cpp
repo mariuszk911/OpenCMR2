@@ -32,31 +32,32 @@
 #include <complex>
 #include <cstring>
 #include <limits>
-#include <stdexcept>
 #include <utility>
 
 namespace Bink {
 namespace {
-void Require(bool valid, const char *message) {
-    if (!valid) throw std::runtime_error(message);
-}
-
-template<class T, size_t N> struct CheckedArray {
-    T values[N] = {};
-    T &operator[](int index) {
-        Require(index >= 0 && size_t(index) < N, "coefficient list overflow");
-        return values[index];
-    }
-};
-
+// The decoder is built without exceptions. Failure is sticky: the first message
+// is kept, later reads return zero and never touch memory past the buffer, and
+// callers check Failure() at their existing check points and stop.
 class Bits {
     const uint8_t *data;
     size_t size, position = 0;
+    const char *failure = nullptr;
 public:
     Bits(const uint8_t *bytes, size_t count) : data(bytes), size(count * 8) {}
     size_t Left() const { return size - position; }
+    const char *Failure() const { return failure; }
+    // Records the failure (the first one wins) and returns false.
+    bool Fail(const char *message) {
+        if (!failure) failure = message;
+        return false;
+    }
     uint32_t Read(unsigned count) {
-        Require(count <= 32 && count <= Left(), "truncated Bink bitstream");
+        if (count > 32 || count > Left()) {
+            Fail("truncated Bink bitstream");
+            position = size;
+            return 0;
+        }
         uint32_t value = 0;
         for (unsigned shift = 0; shift < count;) {
             unsigned take = std::min(8u - unsigned(position & 7), count - shift);
@@ -132,7 +133,8 @@ uint8_t Huff(Bits *bits, const Tree &tree) {
                 bink_tree_bits[tree.vlc_num][symbol] == code)
                 return tree.syms[symbol];
     }
-    throw std::runtime_error("invalid Bink Huffman code");
+    bits->Fail("invalid Bink Huffman code");
+    return 0;
 }
 #define GET_HUFF(gb, tree) Huff(gb, tree)
 
@@ -393,12 +395,20 @@ static int read_colors(Bits *gb, Bundle *b, VideoState *c)
     return 0;
 }
 
+// DC values are native-endian int16 in the byte storage of the bundle.
+static inline void store_dc(uint8_t **dst, int value)
+{
+    int16_t v = int16_t(value);
+    memcpy(*dst, &v, sizeof(v));
+    *dst += sizeof(v);
+}
+
 static int read_dcs(Bits *gb, Bundle *b,
                     int start_bits, int has_sign)
 {
     int i, j, len, len2, bsize, sign, v, v2;
-    int16_t *dst     = (int16_t*)b->cur_dec;
-    int16_t *dst_end = (int16_t*)b->data_end;
+    uint8_t *dst           = b->cur_dec;
+    const uint8_t *dst_end = b->data_end;
 
     CHECK_READ_VAL(gb, b, len);
     if (gb->Left() < unsigned(start_bits - has_sign))
@@ -408,13 +418,13 @@ static int read_dcs(Bits *gb, Bundle *b,
         sign = -gb->Read(1);
         v = (v ^ sign) - sign;
     }
-    if (dst_end - dst < 1)
+    if (dst_end - dst < 2)
         return -1;
-    *dst++ = v;
+    store_dc(&dst, v);
     len--;
     for (i = 0; i < len; i += 8) {
         len2 = std::min(len - i, 8);
-        if (dst_end - dst < len2)
+        if (dst_end - dst < 2 * len2)
             return -1;
         bsize = gb->Read(4);
         if (bsize) {
@@ -425,33 +435,36 @@ static int read_dcs(Bits *gb, Bundle *b,
                     v2 = (v2 ^ sign) - sign;
                 }
                 v += v2;
-                *dst++ = v;
+                store_dc(&dst, v);
                 if (v < -32768 || v > 32767) {
                     return -1;
                 }
             }
         } else {
             for (j = 0; j < len2; j++)
-                *dst++ = v;
+                store_dc(&dst, v);
         }
     }
 
-    b->cur_dec = (uint8_t*)dst;
+    b->cur_dec = dst;
     return 0;
 }
 
-static inline int get_value(VideoState *c, int bundle)
+static inline int get_value(Bits *gb, VideoState *c, int bundle)
 {
-    int ret;
     Bundle &b = c->bundle[bundle];
     const int bytes = (bundle == BINK_SRC_INTRA_DC || bundle == BINK_SRC_INTER_DC) ? 2 : 1;
-    Require(b.cur_dec && b.cur_dec - b.cur_ptr >= bytes, "exhausted video bundle");
+    if (!b.cur_dec || b.cur_dec - b.cur_ptr < bytes) {
+        gb->Fail("exhausted video bundle");
+        return 0;
+    }
 
     if (bundle < BINK_SRC_X_OFF || bundle == BINK_SRC_RUN)
         return *c->bundle[bundle].cur_ptr++;
     if (bundle == BINK_SRC_X_OFF || bundle == BINK_SRC_Y_OFF)
         return (int8_t)*c->bundle[bundle].cur_ptr++;
-    ret = *(int16_t*)c->bundle[bundle].cur_ptr;
+    int16_t ret;
+    memcpy(&ret, c->bundle[bundle].cur_ptr, sizeof(ret));
     c->bundle[bundle].cur_ptr += 2;
     return ret;
 }
@@ -460,8 +473,8 @@ static int read_dct_coeffs(Bits *gb, int32_t block[64],
                            const uint8_t *scan, int *coef_count_,
                            int coef_idx[64], int q)
 {
-    CheckedArray<int, 128> coef_list;
-    CheckedArray<int, 128> mode_list;
+    int coef_list[128] = {};
+    int mode_list[128] = {};
     int i, t, bits, ccoef, mode, sign;
     int list_start = 64, list_end = 64, list_pos;
     int coef_count = 0;
@@ -497,6 +510,10 @@ static int read_dct_coeffs(Bits *gb, int32_t block[64],
                 }
                 for (i = 0; i < 4; i++, ccoef++) {
                     if (gb->Read(1)) {
+                        if (list_start <= 0) {
+                            gb->Fail("coefficient list overflow");
+                            return -1;
+                        }
                         coef_list[--list_start] = ccoef;
                         mode_list[  list_start] = 3;
                     } else {
@@ -507,13 +524,20 @@ static int read_dct_coeffs(Bits *gb, int32_t block[64],
                             sign = -gb->Read(1);
                             t = (t ^ sign) - sign;
                         }
-                        Require(ccoef >= 0 && ccoef < 64 && coef_count < 64, "DCT coefficient overflow");
+                        if (ccoef < 0 || ccoef >= 64 || coef_count >= 64) {
+                            gb->Fail("DCT coefficient overflow");
+                            return -1;
+                        }
                         block[scan[ccoef]] = t;
                         coef_idx[coef_count++] = ccoef;
                     }
                 }
                 break;
             case 1:
+                if (list_end > 128 - 3) {
+                    gb->Fail("coefficient list overflow");
+                    return -1;
+                }
                 mode_list[list_pos] = 2;
                 for (i = 0; i < 3; i++) {
                     ccoef += 4;
@@ -529,7 +553,10 @@ static int read_dct_coeffs(Bits *gb, int32_t block[64],
                     sign = -gb->Read(1);
                     t = (t ^ sign) - sign;
                 }
-                Require(ccoef >= 0 && ccoef < 64 && coef_count < 64, "DCT coefficient overflow");
+                if (ccoef < 0 || ccoef >= 64 || coef_count >= 64) {
+                    gb->Fail("DCT coefficient overflow");
+                    return -1;
+                }
                 block[scan[ccoef]] = t;
                 coef_idx[coef_count++] = ccoef;
                 coef_list[list_pos]   = 0;
@@ -567,11 +594,11 @@ static void unquantize_dct_coeffs(int32_t block[64], const int32_t quant[64],
 
 static int read_residue(Bits *gb, int16_t block[64], int masks_count)
 {
-    CheckedArray<int, 128> coef_list;
-    CheckedArray<int, 128> mode_list;
+    int coef_list[128] = {};
+    int mode_list[128] = {};
     int i, sign, mask, ccoef, mode;
     int list_start = 64, list_end = 64, list_pos;
-    CheckedArray<int, 64> nz_coeff;
+    int nz_coeff[64] = {};
     int nz_coeff_count = 0;
 
     coef_list[list_end] =  4; mode_list[list_end++] = 0;
@@ -610,10 +637,17 @@ static int read_residue(Bits *gb, int16_t block[64], int masks_count)
                 }
                 for (i = 0; i < 4; i++, ccoef++) {
                     if (gb->Read(1)) {
+                        if (list_start <= 0) {
+                            gb->Fail("coefficient list overflow");
+                            return -1;
+                        }
                         coef_list[--list_start] = ccoef;
                         mode_list[  list_start] = 3;
                     } else {
-                        Require(ccoef >= 0 && ccoef < 64 && nz_coeff_count < 64, "residue coefficient overflow");
+                        if (ccoef < 0 || ccoef >= 64 || nz_coeff_count >= 64) {
+                            gb->Fail("residue coefficient overflow");
+                            return -1;
+                        }
                         nz_coeff[nz_coeff_count++] = bink_scan[ccoef];
                         sign = -gb->Read(1);
                         block[bink_scan[ccoef]] = (mask ^ sign) - sign;
@@ -624,6 +658,10 @@ static int read_residue(Bits *gb, int16_t block[64], int masks_count)
                 }
                 break;
             case 1:
+                if (list_end > 128 - 3) {
+                    gb->Fail("coefficient list overflow");
+                    return -1;
+                }
                 mode_list[list_pos] = 2;
                 for (i = 0; i < 3; i++) {
                     ccoef += 4;
@@ -632,7 +670,10 @@ static int read_residue(Bits *gb, int16_t block[64], int masks_count)
                 }
                 break;
             case 3:
-                Require(ccoef >= 0 && ccoef < 64 && nz_coeff_count < 64, "residue coefficient overflow");
+                if (ccoef < 0 || ccoef >= 64 || nz_coeff_count >= 64) {
+                    gb->Fail("residue coefficient overflow");
+                    return -1;
+                }
                 nz_coeff[nz_coeff_count++] = bink_scan[ccoef];
                 sign = -gb->Read(1);
                 block[bink_scan[ccoef]] = (mask ^ sign) - sign;
@@ -741,35 +782,38 @@ void CopyBlock(uint8_t *dst, const uint8_t *src, int stride) {
     for (int y = 0; y < 8; ++y) std::memcpy(dst + y * stride, src + y * stride, 8);
 }
 
-void DecodePlane(VideoState &s, Bits &bits, int index, bool chroma) {
+bool DecodePlane(VideoState &s, Bits &bits, int index, bool chroma) {
     Plane &plane = s.planes[index];
     int bw = (s.width + (chroma ? 15 : 7)) >> (chroma ? 4 : 3);
     int bh = (s.height + (chroma ? 15 : 7)) >> (chroma ? 4 : 3);
     init_lengths(&s, std::max(int(s.width >> chroma), 8), bw);
     for (int i = 0; i < BINK_NB_SRC; ++i)
-        Require(read_bundle(&bits, &s, i) == 0, "invalid Bink bundle tree");
-    auto value = [&](int source) { return get_value(&s, source); };
+        if (read_bundle(&bits, &s, i) != 0) return bits.Fail("invalid Bink bundle tree");
+    auto value = [&](int source) { return get_value(&bits, &s, source); };
     for (int by = 0; by < bh; ++by) {
-        Require(read_block_types(&bits, &s.bundle[BINK_SRC_BLOCK_TYPES]) == 0 &&
-                read_block_types(&bits, &s.bundle[BINK_SRC_SUB_BLOCK_TYPES]) == 0 &&
-                read_colors(&bits, &s.bundle[BINK_SRC_COLORS], &s) == 0 &&
-                read_patterns(&bits, &s.bundle[BINK_SRC_PATTERN]) == 0 &&
-                read_motion_values(&bits, &s.bundle[BINK_SRC_X_OFF]) == 0 &&
-                read_motion_values(&bits, &s.bundle[BINK_SRC_Y_OFF]) == 0 &&
-                read_dcs(&bits, &s.bundle[BINK_SRC_INTRA_DC], 11, 0) == 0 &&
-                read_dcs(&bits, &s.bundle[BINK_SRC_INTER_DC], 11, 1) == 0 &&
-                read_runs(&bits, &s.bundle[BINK_SRC_RUN]) == 0, "invalid Bink bundle");
+        if (!(read_block_types(&bits, &s.bundle[BINK_SRC_BLOCK_TYPES]) == 0 &&
+              read_block_types(&bits, &s.bundle[BINK_SRC_SUB_BLOCK_TYPES]) == 0 &&
+              read_colors(&bits, &s.bundle[BINK_SRC_COLORS], &s) == 0 &&
+              read_patterns(&bits, &s.bundle[BINK_SRC_PATTERN]) == 0 &&
+              read_motion_values(&bits, &s.bundle[BINK_SRC_X_OFF]) == 0 &&
+              read_motion_values(&bits, &s.bundle[BINK_SRC_Y_OFF]) == 0 &&
+              read_dcs(&bits, &s.bundle[BINK_SRC_INTRA_DC], 11, 0) == 0 &&
+              read_dcs(&bits, &s.bundle[BINK_SRC_INTER_DC], 11, 1) == 0 &&
+              read_runs(&bits, &s.bundle[BINK_SRC_RUN]) == 0))
+            return bits.Fail("invalid Bink bundle");
         for (int bx = 0; bx < bw; ++bx) {
             int type = value(BINK_SRC_BLOCK_TYPES);
+            if (bits.Failure()) return false;
             if (type == SCALED_BLOCK && ((by & 1) || (bx & 1))) {
-                Require(bx + 1 < bw, "scaled block outside plane");
+                if (bx + 1 >= bw) return bits.Fail("scaled block outside plane");
                 ++bx;
                 continue;
             }
             bool scaled = type == SCALED_BLOCK;
             if (scaled) type = value(BINK_SRC_SUB_BLOCK_TYPES);
-            Require(!scaled || type == RUN_BLOCK || type == INTRA_BLOCK || type == FILL_BLOCK ||
-                    type == PATTERN_BLOCK || type == RAW_BLOCK, "invalid scaled block type");
+            if (scaled && !(type == RUN_BLOCK || type == INTRA_BLOCK || type == FILL_BLOCK ||
+                            type == PATTERN_BLOCK || type == RAW_BLOCK))
+                return bits.Fail("invalid scaled block type");
             const int stride = plane.stride;
             uint8_t *target = plane.current.data() + by * 8 * stride + bx * 8;
             uint8_t scratch[64] = {};
@@ -778,8 +822,10 @@ void DecodePlane(VideoState &s, Bits &bits, int index, bool chroma) {
             auto motion = [&] {
                 int x = bx * 8 + value(BINK_SRC_X_OFF);
                 int y = by * 8 + value(BINK_SRC_Y_OFF);
-                Require(x >= 0 && y >= 0 && x + 8 <= bw * 8 && y + 8 <= bh * 8,
-                        "Bink motion vector outside plane");
+                if (!(x >= 0 && y >= 0 && x + 8 <= bw * 8 && y + 8 <= bh * 8)) {
+                    bits.Fail("Bink motion vector outside plane");
+                    return; // nothing is copied from outside the plane
+                }
                 CopyBlock(dst, plane.previous.data() + y * stride + x, stride);
             };
             switch (type) {
@@ -792,7 +838,7 @@ void DecodePlane(VideoState &s, Bits &bits, int index, bool chroma) {
             case RESIDUE_BLOCK: {
                 motion();
                 int16_t block[64] = {};
-                Require(read_residue(&bits, block, bits.Read(7)) == 0, "invalid Bink residue");
+                if (read_residue(&bits, block, bits.Read(7)) != 0) return bits.Fail("invalid Bink residue");
                 for (int y = 0; y < 8; ++y)
                     for (int x = 0; x < 8; ++x) dst[y * pitch + x] += block[y * 8 + x];
                 break;
@@ -804,7 +850,7 @@ void DecodePlane(VideoState &s, Bits &bits, int index, bool chroma) {
                 int count = 0, indices[64];
                 block[0] = value(type == INTRA_BLOCK ? BINK_SRC_INTRA_DC : BINK_SRC_INTER_DC);
                 int q = read_dct_coeffs(&bits, block, bink_scan, &count, indices, -1);
-                Require(q >= 0 && q < 16, "invalid Bink DCT quantizer");
+                if (q < 0 || q >= 16) return bits.Fail("invalid Bink DCT quantizer");
                 unquantize_dct_coeffs(block, type == INTRA_BLOCK ? bink_intra_quant[q] : bink_inter_quant[q],
                                       count, indices, bink_scan);
                 if (type == INTRA_BLOCK) bink_idct_put_c(dst, pitch, block);
@@ -834,7 +880,10 @@ void DecodePlane(VideoState &s, Bits &bits, int index, bool chroma) {
                 int position = 0;
                 while (position < 63) {
                     int count = value(BINK_SRC_RUN) + 1;
-                    Require(count <= 64 - position, "Bink run outside block");
+                    if (count > 64 - position) {
+                        bits.Fail("Bink run outside block");
+                        break;
+                    }
                     bool constant = bits.Read(1);
                     int color = constant ? value(BINK_SRC_COLORS) : 0;
                     for (int i = 0; i < count; ++i) {
@@ -848,10 +897,11 @@ void DecodePlane(VideoState &s, Bits &bits, int index, bool chroma) {
                 }
                 break;
             }
-            default: throw std::runtime_error("unknown Bink block type");
+            default: return bits.Fail("unknown Bink block type");
             }
+            if (bits.Failure()) return false;
             if (scaled) {
-                Require(bx + 1 < bw && by + 1 < bh, "scaled block outside plane");
+                if (!(bx + 1 < bw && by + 1 < bh)) return bits.Fail("scaled block outside plane");
                 for (int y = 0; y < 16; ++y)
                     for (int x = 0; x < 16; ++x) target[y * stride + x] = scratch[(y / 2) * 8 + x / 2];
                 ++bx;
@@ -859,16 +909,21 @@ void DecodePlane(VideoState &s, Bits &bits, int index, bool chroma) {
         }
     }
     bits.Align();
+    return !bits.Failure();
 }
 
-uint8_t Clamp(int value) { return uint8_t(std::clamp(value, 0, 255)); }
-void DecodeVideo(VideoState &s, const uint8_t *data, size_t bytes, Frame &frame) {
+uint8_t Clamp(int value) { return uint8_t(value < 0 ? 0 : value > 255 ? 255 : value); }
+// Returns nullptr on success or the first failure message.
+const char *DecodeVideo(VideoState &s, const uint8_t *data, size_t bytes, Frame &frame) {
     Bits bits(data, bytes);
-    if (s.alpha) { bits.Read(32); DecodePlane(s, bits, 3, false); }
+    if (s.alpha) {
+        bits.Read(32);
+        if (!DecodePlane(s, bits, 3, false)) return bits.Failure();
+    }
     bits.Read(32); // BIKi luma plane size; planes are word aligned.
-    DecodePlane(s, bits, 0, false);
-    DecodePlane(s, bits, 2, true); // BIKi stores V before U.
-    DecodePlane(s, bits, 1, true);
+    if (!DecodePlane(s, bits, 0, false)) return bits.Failure();
+    if (!DecodePlane(s, bits, 2, true)) return bits.Failure(); // BIKi stores V before U.
+    if (!DecodePlane(s, bits, 1, true)) return bits.Failure();
     frame.bgrx.resize(size_t(s.width) * s.height * 4);
     for (unsigned y = 0; y < s.height; ++y) {
         for (unsigned x = 0; x < s.width; ++x) {
@@ -883,6 +938,7 @@ void DecodeVideo(VideoState &s, const uint8_t *data, size_t bytes, Frame &frame)
         }
     }
     for (Plane &plane : s.planes) plane.previous.swap(plane.current);
+    return nullptr;
 }
 
 // Radix-2 complex FFT, unnormalised inverse. Bink uses only small fixed powers of two.
@@ -984,19 +1040,21 @@ struct AudioState {
         for (unsigned i = 0; i < length; ++i) c[i] = transform[i].real() * scale;
         return c;
     }
-    void Decode(const uint8_t *data, size_t bytes, std::vector<float> &pcm) {
-        Require(bytes >= 4, "truncated Bink audio packet");
+    // Returns nullptr on success or the first failure message.
+    const char *Decode(const uint8_t *data, size_t bytes, std::vector<float> &pcm) {
+        if (bytes < 4) return "truncated Bink audio packet";
         unsigned reported = LE32(data);
-        Require(reported <= 16 * 1024 * 1024 && reported % (2 * channels) == 0,
-                "invalid Bink audio output size");
+        if (!(reported <= 16 * 1024 * 1024 && reported % (2 * channels) == 0))
+            return "invalid Bink audio output size";
         Bits bits(data + 4, bytes - 4);
         pcm.clear();
         while (bits.Left()) {
-            Require(pcm.size() < 8 * 1024 * 1024, "Bink audio packet too large");
+            if (pcm.size() >= 8 * 1024 * 1024) return "Bink audio packet too large";
             if (dct) bits.Read(2);
             std::vector<float> samples[2];
             for (unsigned ch = 0; ch < codedChannels; ++ch) {
                 samples[ch] = Coefficients(bits);
+                if (bits.Failure()) return bits.Failure();
                 if (!first) {
                     unsigned total = overlap * codedChannels;
                     for (unsigned i = 0; i < overlap; ++i) {
@@ -1008,15 +1066,17 @@ struct AudioState {
             }
             first = false;
             bits.Align();
+            if (bits.Failure()) return bits.Failure();
             for (unsigned i = 0; i < length - overlap; ++i)
                 for (unsigned ch = 0; ch < codedChannels; ++ch) {
-                    Require(std::isfinite(samples[ch][i]), "invalid Bink audio sample");
+                    if (!std::isfinite(samples[ch][i])) return "invalid Bink audio sample";
                     pcm.push_back(samples[ch][i]);
                 }
         }
         // Last packets can carry fewer valid samples than a complete transform block.
-        Require(pcm.size() >= reported / 2, "Bink audio output shorter than reported");
+        if (pcm.size() < reported / 2) return "Bink audio output shorter than reported";
         pcm.resize(reported / 2);
+        return nullptr;
     }
 };
 } // namespace
@@ -1033,15 +1093,18 @@ struct Decoder::Impl {
     bool ready = false;
     std::vector<uint8_t> packet;
 
-    void Read(uint32_t offset, void *dst, uint32_t bytes) {
-        Require(offset <= reader.size && bytes <= reader.size - offset &&
-                reader.readAt(reader.context, offset, dst, bytes), "truncated Bink file");
+    bool ReadAt(uint32_t offset, void *dst, uint32_t bytes) {
+        return offset <= reader.size && bytes <= reader.size - offset &&
+               reader.readAt(reader.context, offset, dst, bytes);
     }
-    void Open(Reader source, int track) {
+    // Open and Decode return nullptr on success or the failure message.
+#define REQUIRE(valid, message) do { if (!(valid)) return message; } while (0)
+    const char *Open(Reader source, int track) {
         reader = source;
-        Require(reader.readAt && reader.size >= 44, "truncated Bink header");
-        uint8_t header[44]; Read(0, header, 44);
-        Require(std::memcmp(header, "BIKi", 4) == 0, "unsupported Bink revision (expected BIKi)");
+        REQUIRE(reader.readAt && reader.size >= 44, "truncated Bink header");
+        uint8_t header[44];
+        REQUIRE(ReadAt(0, header, 44), "truncated Bink file");
+        REQUIRE(std::memcmp(header, "BIKi", 4) == 0, "unsupported Bink revision (expected BIKi)");
         uint64_t fileSize = uint64_t(LE32(header + 4)) + 8;
         info.frames = LE32(header + 8);
         uint32_t largest = LE32(header + 12);
@@ -1049,21 +1112,21 @@ struct Decoder::Impl {
         info.fpsNumerator = LE32(header + 28); info.fpsDenominator = LE32(header + 32);
         uint32_t flags = LE32(header + 36);
         tracks = LE32(header + 40);
-        Require(fileSize <= reader.size && fileSize >= 44 && largest <= fileSize &&
+        REQUIRE(fileSize <= reader.size && fileSize >= 44 && largest <= fileSize &&
                 largest <= 64 * 1024 * 1024, "invalid Bink file size");
-        Require(info.frames && info.frames <= 1000000 && tracks <= 256, "invalid Bink frame/track count");
-        Require(info.width && info.height && info.width <= 4096 && info.height <= 4096 &&
+        REQUIRE(info.frames && info.frames <= 1000000 && tracks <= 256, "invalid Bink frame/track count");
+        REQUIRE(info.width && info.height && info.width <= 4096 && info.height <= 4096 &&
                 uint64_t(info.width) * info.height <= 4096 * 2160, "invalid Bink dimensions");
-        Require(info.fpsNumerator && info.fpsDenominator &&
+        REQUIRE(info.fpsNumerator && info.fpsDenominator &&
                 uint64_t(info.fpsNumerator) <= uint64_t(info.fpsDenominator) * 1000 &&
                 uint64_t(info.fpsDenominator) <= uint64_t(info.fpsNumerator) * 10 &&
                 uint64_t(info.frames) * 1000 * info.fpsDenominator / info.fpsNumerator <= UINT32_MAX,
                 "invalid Bink frame rate/duration");
-        Require((flags & ~0x00100000u) == 0, "unsupported Bink video flags");
+        REQUIRE((flags & ~0x00100000u) == 0, "unsupported Bink video flags");
         uint64_t tableEnd = 44ull + tracks * 12ull + info.frames * 4ull;
-        Require(tableEnd <= fileSize, "truncated Bink frame index");
+        REQUIRE(tableEnd <= fileSize, "truncated Bink frame index");
         std::vector<uint8_t> table(size_t(tableEnd) - 44);
-        Read(44, table.data(), uint32_t(table.size()));
+        REQUIRE(ReadAt(44, table.data(), uint32_t(table.size())), "truncated Bink file");
         selected = track < 0 || !tracks ? -1 : 0;
         for (unsigned i = 0; i < tracks; ++i)
             if (track >= 0 && LE32(table.data() + tracks * 8 + i * 4) == uint32_t(track)) selected = i;
@@ -1071,51 +1134,62 @@ struct Decoder::Impl {
             uint32_t format = LE32(table.data() + tracks * 4 + selected * 4);
             info.sampleRate = format & 65535;
             info.channels = format & 0x20000000 ? 2 : 1;
-            Require(info.sampleRate >= 1000 && info.sampleRate <= 48000, "invalid Bink sample rate");
+            REQUIRE(info.sampleRate >= 1000 && info.sampleRate <= 48000, "invalid Bink sample rate");
             audio.Init(info.sampleRate, info.channels, format & 0x10000000);
         }
         offsets.resize(info.frames + 1);
         for (unsigned i = 0; i < info.frames; ++i) offsets[i] = LE32(table.data() + tracks * 12 + i * 4) & ~1u;
         offsets.back() = uint32_t(fileSize);
-        Require(offsets.front() >= tableEnd, "Bink frame overlaps header/index");
+        REQUIRE(offsets.front() >= tableEnd, "Bink frame overlaps header/index");
         for (unsigned i = 0; i < info.frames; ++i)
-            Require(offsets[i + 1] > offsets[i] && offsets[i + 1] - offsets[i] <= largest,
+            REQUIRE(offsets[i + 1] > offsets[i] && offsets[i + 1] - offsets[i] <= largest,
                     "invalid Bink frame offset/size");
         video.Init(info.width, info.height, flags & 0x00100000);
         ready = true;
+        return nullptr;
     }
-    void Decode(Frame &output) {
-        Require(ready && frame < info.frames, "end of Bink movie");
+    const char *Decode(Frame &output) {
+        REQUIRE(ready && frame < info.frames, "end of Bink movie");
         packet.resize(offsets[frame + 1] - offsets[frame]);
-        Read(offsets[frame], packet.data(), uint32_t(packet.size()));
+        REQUIRE(ReadAt(offsets[frame], packet.data(), uint32_t(packet.size())), "truncated Bink file");
         size_t cursor = 0;
         output.audio.clear();
         for (unsigned i = 0; i < tracks; ++i) {
-            Require(packet.size() - cursor >= 4, "truncated Bink audio length");
+            REQUIRE(packet.size() - cursor >= 4, "truncated Bink audio length");
             uint32_t bytes = LE32(packet.data() + cursor); cursor += 4;
-            Require(bytes <= packet.size() - cursor && (bytes == 0 || bytes >= 4), "invalid Bink audio length");
-            if (int(i) == selected && bytes) audio.Decode(packet.data() + cursor, bytes, output.audio);
+            REQUIRE(bytes <= packet.size() - cursor && (bytes == 0 || bytes >= 4), "invalid Bink audio length");
+            if (int(i) == selected && bytes) {
+                const char *failure = audio.Decode(packet.data() + cursor, bytes, output.audio);
+                if (failure) return failure;
+            }
             cursor += bytes;
         }
-        DecodeVideo(video, packet.data() + cursor, packet.size() - cursor, output);
+        if (const char *failure = DecodeVideo(video, packet.data() + cursor, packet.size() - cursor, output))
+            return failure;
         ++frame;
+        return nullptr;
     }
+#undef REQUIRE
 };
 
 Decoder::Decoder() : impl(new Impl) {}
 Decoder::~Decoder() = default;
 bool Decoder::Open(Reader reader, int track) {
     impl.reset(new Impl);
-    try { impl->Open(reader, track); return true; }
-    catch (const std::exception &e) { impl->error = e.what(); impl->ready = false; return false; }
+    const char *failure = impl->Open(reader, track);
+    if (!failure) return true;
+    impl->error = failure;
+    impl->ready = false;
+    return false;
 }
 bool Decoder::Decode(Frame &frame) {
-    try { impl->Decode(frame); return true; }
-    catch (const std::exception &e) {
-        impl->error = e.what(); impl->ready = false;
-        frame.audio.clear(); frame.bgrx.clear();
-        return false;
-    }
+    const char *failure = impl->Decode(frame);
+    if (!failure) return true;
+    impl->error = failure;
+    impl->ready = false;
+    frame.audio.clear();
+    frame.bgrx.clear();
+    return false;
 }
 const Info &Decoder::GetInfo() const { return impl->info; }
 const std::string &Decoder::Error() const { return impl->error; }
