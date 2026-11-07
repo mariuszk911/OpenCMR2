@@ -469,6 +469,23 @@ foreach(texture_disk_variant texture_disk texture_disk_be)
 endforeach()
 target_compile_definitions(texture_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# Stage collision block: little-endian tables, size-validated counts, native
+# aligned copy. The forced variant proves the swap path on the host.
+foreach(track_collision_variant track_collision_disk track_collision_disk_be)
+    add_executable(${track_collision_variant}_test track_collision_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/track_collision_disk.cpp)
+    target_include_directories(${track_collision_variant}_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/game
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/port/compat)
+    target_compile_options(${track_collision_variant}_test PRIVATE
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+        -fms-extensions)
+    add_test(NAME ${track_collision_variant} COMMAND ${track_collision_variant}_test)
+endforeach()
+target_compile_definitions(track_collision_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 add_executable(saved_game_test saved_game.cpp)
 target_link_libraries(saved_game_test PRIVATE opencmr2_platform)
 add_test(NAME saved_game COMMAND saved_game_test)

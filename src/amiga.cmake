@@ -56,7 +56,8 @@ add_library(cmr2_game OBJECT
     port/stage_camera_disk.cpp
     port/stage_light_transform_disk.cpp
     port/start_table_disk.cpp
-    port/texture_disk.cpp)
+    port/texture_disk.cpp
+    port/track_collision_disk.cpp)
 # Built through the executable that links it, not on its own.
 set_target_properties(cmr2_game PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_include_directories(cmr2_game PUBLIC
