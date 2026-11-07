@@ -504,6 +504,23 @@ foreach(scene_lighting_variant scene_lighting_disk scene_lighting_disk_be)
 endforeach()
 target_compile_definitions(scene_lighting_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# Stage C3D layout, bounds, payload decode and mesh range check. The forced
+# variant proves the swap path on the little-endian host.
+foreach(c3d_stage_variant c3d_stage c3d_stage_be)
+    add_executable(${c3d_stage_variant}_test c3d_stage.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/c3d_stage.cpp)
+    target_include_directories(${c3d_stage_variant}_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/game
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/port/compat)
+    target_compile_options(${c3d_stage_variant}_test PRIVATE
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+        -fms-extensions)
+    add_test(NAME ${c3d_stage_variant} COMMAND ${c3d_stage_variant}_test)
+endforeach()
+target_compile_definitions(c3d_stage_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 add_executable(saved_game_test saved_game.cpp)
 target_link_libraries(saved_game_test PRIVATE opencmr2_platform)
 add_test(NAME saved_game COMMAND saved_game_test)

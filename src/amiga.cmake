@@ -40,6 +40,7 @@ add_library(cmr2_game OBJECT
     ${GAME_SOURCES}
     diagnostics/observer.cpp
     port/ai_disk.cpp
+    port/c3d_stage.cpp
     port/car_info_disk.cpp
     port/credits_text.cpp
     port/cod_disk.cpp
