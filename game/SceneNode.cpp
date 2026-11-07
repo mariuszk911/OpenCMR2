@@ -14,6 +14,7 @@
 #include "port/c3d_payload.h"
 #include "port/sys.h"
 #include "port/endian.h"
+#include "port/scene_lighting_disk.h"
 #include "LightZone.h"
 #include "TrackCollisionData.h"
 
@@ -1336,20 +1337,17 @@ void Scene_LoadLighting(int *pData, DWORD size)
     if (pData == NULL)
         return;
     // PORT: AMIGA: the payload is little-endian and may be unaligned; decode into aligned native arrays.
-    if (size < 50)
+    SceneLightingDisk light;
+    const int status = SceneLightingDisk_Decode((const BYTE *)pData, size, &light);
+    if (status == SCENE_LIGHTING_REJECTED)
         return;
-    const BYTE *tre = (const BYTE *)pData;
-    const unsigned int zoneCount = ReadLE16(tre + 48);
-    const BYTE *pZoneDisk = tre + 50;
-    if ((uint64_t)zoneCount * 0x14u > (uint64_t)(size - 50))
-        return;
-    g_sceneLightDir.x = (int)ReadLE32(tre + 0);
-    g_sceneLightDir.y = (int)ReadLE32(tre + 4);
-    g_sceneLightDir.z = (int)ReadLE32(tre + 8);
+    g_sceneLightDir.x = light.lightDir[0];
+    g_sceneLightDir.y = light.lightDir[1];
+    g_sceneLightDir.z = light.lightDir[2];
     for (i = 0; i < 3; i++) {
-        g_sceneLightBasis[i].x = (int)ReadLE32(tre + 12 + i * 12);
-        g_sceneLightBasis[i].y = (int)ReadLE32(tre + 16 + i * 12);
-        g_sceneLightBasis[i].z = (int)ReadLE32(tre + 20 + i * 12);
+        g_sceneLightBasis[i].x = light.basis[i][0];
+        g_sceneLightBasis[i].y = light.basis[i][1];
+        g_sceneLightBasis[i].z = light.basis[i][2];
     }
     g_sceneLightRight.x = g_sceneLightBasis[0].x;
     g_sceneLightDirF[0] = X87S_MUL(X87S_FILD(float, g_sceneLightDir.x), (float)CGraphics::m_oneOver65536);
@@ -1370,123 +1368,13 @@ void Scene_LoadLighting(int *pData, DWORD size)
     g_sceneLightBasisF[7] = X87S_MUL(X87S_FILD(float, g_sceneLightBasis[2].y), (float)CGraphics::m_oneOver65536);
     g_sceneLightBasisF[8] = X87S_MUL(X87S_FILD(float, g_sceneLightBasis[2].z), (float)CGraphics::m_oneOver65536);
 
-    {
-        const BYTE *pItemDisk;
-        const BYTE *pMeshDisk;
-        const BYTE *pArrayDisk;
-        const BYTE *pVertFile;
-        const BYTE *pTriFile;
-        const BYTE *pLevelFile;
-        uint64_t itemCount = 0;
-        uint64_t payloadBytes = 0;
-        BYTE *pOut;
-        LightZone *pZones;
-        LightZoneMesh *pMeshes;
-        LightZoneItem *pNextItem;
-
-        for (zone = 0; zone < (int)zoneCount; zone++)
-            itemCount += ReadLE16(pZoneDisk + zone * 0x14 + 2);
-        if (itemCount > (uint64_t)(size_t)-1 / sizeof(LightZoneItem))
-            return;
-        if ((uint64_t)50 + (uint64_t)zoneCount * 0x14u +
-                itemCount * 0x30u > (uint64_t)size)
-            return;
-        g_sceneLightNative = (BYTE *)CFileBuffer::AllocateLockedBuffer(
-            zoneCount * (sizeof(LightZone) + sizeof(LightZoneMesh)) + (size_t)itemCount * sizeof(LightZoneItem) + 1);
-        if (g_sceneLightNative == NULL)
-            return;
-        pZones = (LightZone *)g_sceneLightNative;
-        pMeshes = (LightZoneMesh *)(pZones + zoneCount);
-        pNextItem = (LightZoneItem *)(pMeshes + zoneCount);
-        pItemDisk = pZoneDisk + zoneCount * 0x14;
-        for (zone = 0; zone < (int)zoneCount; zone++) {
-            const BYTE *zoneFile = pZoneDisk + zone * 0x14;
-            pZones[zone].sector = (short)ReadLE16(zoneFile + 0);
-            pZones[zone].itemCount = ReadLE16(zoneFile + 2);
-            pZones[zone].x = (int)ReadLE32(zoneFile + 4);
-            pZones[zone].z = (int)ReadLE32(zoneFile + 8);
-            pZones[zone].pItems = pNextItem;
-            pZones[zone].pMesh = &pMeshes[zone];
-            for (item = 0; item < pZones[zone].itemCount; item++, pItemDisk += 0x30, pNextItem++) {
-                const BYTE *itemFile = pItemDisk;
-                memset(pNextItem, 0, sizeof(*pNextItem));
-                pNextItem->ownerX = (int)ReadLE32(itemFile + 0x00);
-                pNextItem->ownerZ = (int)ReadLE32(itemFile + 0x04);
-                pNextItem->x = (int)ReadLE32(itemFile + 0x08);
-                pNextItem->z = (int)ReadLE32(itemFile + 0x0c);
-                pNextItem->halfSizeRight = (int)ReadLE32(itemFile + 0x10);
-                pNextItem->halfSizeForward = (int)ReadLE32(itemFile + 0x14);
-                pNextItem->field_0x18 = (int)ReadLE32(itemFile + 0x18);
-                pNextItem->field_0x1c = (int)ReadLE32(itemFile + 0x1c);
-                pNextItem->intensity = (int)ReadLE32(itemFile + 0x20);
-                pNextItem->field_0x24 = (int)ReadLE32(itemFile + 0x24);
-                pNextItem->vertexCount = (int)ReadLE32(itemFile + 0x28);
-            }
-        }
-        pMeshDisk = pItemDisk;
-        if ((uint64_t)(pMeshDisk - tre) + (uint64_t)zoneCount * 0x14u > (uint64_t)size)
-            return;
-        for (zone = 0; zone < (int)zoneCount; zone++) {
-            const BYTE *meshFile = pMeshDisk + zone * 0x14;
-            pMeshes[zone].triangleCount = (int)ReadLE32(meshFile + 0);
-            pMeshes[zone].vertexCount = (int)ReadLE32(meshFile + 4);
-            if (pMeshes[zone].triangleCount < 0 || pMeshes[zone].vertexCount < 0) {
-                CFileBuffer::FreeGenericFileBuffer(g_sceneLightNative);
-                g_sceneLightNative = NULL;
-                return;
-            }
-            payloadBytes += (uint64_t)pMeshes[zone].vertexCount * 0x30;
-            payloadBytes += (uint64_t)pMeshes[zone].triangleCount * 0x4c;
-            payloadBytes += (uint64_t)pMeshes[zone].vertexCount * 4;
-        }
-        if ((uint64_t)(pMeshDisk - tre) + (uint64_t)zoneCount * 0x14u +
-                payloadBytes > (uint64_t)size) {
-            CFileBuffer::FreeGenericFileBuffer(g_sceneLightNative);
-            g_sceneLightNative = NULL;
-            return;
-        }
-        if (payloadBytes > (uint64_t)(size_t)-1) {
-            CFileBuffer::FreeGenericFileBuffer(g_sceneLightNative);
-            g_sceneLightNative = NULL;
-            return;
-        }
-        g_sceneLightPayload = (BYTE *)CFileBuffer::AllocateLockedBuffer(
-            payloadBytes != 0 ? (size_t)payloadBytes : 1);
-        if (g_sceneLightPayload == NULL) {
-            CFileBuffer::FreeGenericFileBuffer(g_sceneLightNative);
-            g_sceneLightNative = NULL;
-            return;
-        }
-        pArrayDisk = pMeshDisk + zoneCount * 0x14;
-        pOut = g_sceneLightPayload;
-        pVertFile = pArrayDisk;
-        for (zone = 0; zone < (int)zoneCount; zone++) {
-            const size_t bytes = (size_t)pMeshes[zone].vertexCount * 0x30;
-            pMeshes[zone].pVertices = (MeshVertexF *)pOut;
-            C3D_DecodeWords(pOut, pVertFile, bytes);
-            pOut += bytes;
-            pVertFile += bytes;
-        }
-        pTriFile = pVertFile;
-        for (zone = 0; zone < (int)zoneCount; zone++) {
-            pMeshes[zone].pTriangles = (MeshTriangle *)pOut;
-            for (item = 0; item < pMeshes[zone].triangleCount; item++)
-                C3D_DecodeTriangle((BYTE *)pMeshes[zone].pTriangles + item * 0x4c, pTriFile + item * 0x4c);
-            pOut += (size_t)pMeshes[zone].triangleCount * 0x4c;
-            pTriFile += (size_t)pMeshes[zone].triangleCount * 0x4c;
-        }
-        pLevelFile = pTriFile;
-        for (zone = 0; zone < (int)zoneCount; zone++) {
-            const size_t bytes = (size_t)pMeshes[zone].vertexCount * 4;
-            pMeshes[zone].pLevels = (int *)pOut;
-            C3D_DecodeWords(pOut, pLevelFile, bytes);
-            pOut += bytes;
-            pLevelFile += bytes;
-        }
-        g_sceneLightZoneCount = (unsigned short)zoneCount;
-        g_sceneLightData = &g_sceneLightZoneCount;
-        g_sceneLightZones = pZones;
-    }
+    g_sceneLightNative = light.native;
+    g_sceneLightPayload = light.payload;
+    if (status != SCENE_LIGHTING_OK)
+        return;
+    g_sceneLightZoneCount = (unsigned short)light.zoneCount;
+    g_sceneLightData = &g_sceneLightZoneCount;
+    g_sceneLightZones = (LightZone *)light.native;
 
     // Sector of each zone.
     for (zone = 0; zone < *g_sceneLightData; zone++) {

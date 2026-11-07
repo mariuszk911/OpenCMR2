@@ -76,6 +76,7 @@ add_library(opencmr2_platform STATIC
     port/stage_light_transform_disk.cpp
     port/start_table_disk.cpp
     port/save_image_disk.cpp
+    port/scene_lighting_disk.cpp
     port/split_table_disk.cpp
     port/texture_disk.cpp
     port/track_collision_disk.cpp
