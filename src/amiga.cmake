@@ -152,6 +152,17 @@ target_link_directories(amiga_minigl_movie_upload_test PRIVATE ${MINIGL_LIBRARY_
 target_link_libraries(amiga_minigl_movie_upload_test PRIVATE minigl)
 opencmr2_amiga_stack(amiga_minigl_movie_upload_test)
 
+# The renderer opened straight with Gfx_SetVideoMode, outside the game, and the
+# movie stream textures through it (Domain B, target only, not staged).
+add_executable(amiga_gfx_stream_texture_test ${PROJECT_SOURCE_DIR}/tests/amiga/gfx_stream_texture_test.cpp
+    render/minigl/gfx_minigl.cpp
+    platform/amiga/amiga_sys.cpp
+    platform/amiga/amiga_libfix.c)
+target_include_directories(amiga_gfx_stream_texture_test PRIVATE ${MINIGL_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_directories(amiga_gfx_stream_texture_test PRIVATE ${MINIGL_LIBRARY_DIR})
+target_link_libraries(amiga_gfx_stream_texture_test PRIVATE minigl m)
+opencmr2_amiga_stack(amiga_gfx_stream_texture_test)
+
 # Sys time/logging smoke: Domain B, no MiniGL. Not staged.
 add_executable(amiga_sys_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_time_test.c
     platform/amiga/amiga_sys.cpp)
