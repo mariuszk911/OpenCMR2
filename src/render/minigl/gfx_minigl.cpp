@@ -3,6 +3,8 @@
 // Owns the MiniGL context/window, frame lifecycle, 2D TL rendering, and the
 // capability-tiered 3D fixed-function pipeline.
 #include "port/backdrop_fog.h"
+#include "port/bc_decode.h"
+#include "port/stage_passthrough.h"
 #include "port/light_range.h"
 #include "port/d3d_light.h"
 #include "port/gfx.h"
@@ -400,6 +402,7 @@ enum DegradeLogKey {
     DEGRADE_LOG_ALPHA_OP = 12,
     DEGRADE_LOG_SELECT_CURRENT = 13,
     DEGRADE_LOG_BACKDROP_FOG = 14,
+    DEGRADE_LOG_PASSTHROUGH_ALPHA = 15,
     DEGRADE_LOG_COUNT
 };
 uint32_t s_degradeLoggedMask;
@@ -2676,9 +2679,16 @@ int Apply3DTextureStages(void)
         const StageState &st = s_stages[stage];
         SelectActiveUnit(stage);
 
+        // A second stage that passes the colour through is left off: GL_MODULATE
+        // would multiply its texture in (port/stage_passthrough.h).
+        const bool passThrough = stage == 1 &&
+            GfxStage_ColourPassesCurrent(st.colorOp, st.colorArg1, st.colorArg2);
+        if (passThrough && GfxStage_AlphaReadsTexture(st.alphaOp, st.alphaArg1, st.alphaArg2))
+            LogDegradationOnce(DEGRADE_LOG_PASSTHROUGH_ALPHA,
+                               "AMIGA: pass-through stage left off; its texture alpha is not applied");
         const bool stageDisabled = (stage == 0 && st.colorOp == GFX_TOP_DISABLE) ||
                                    (stage == 1 && (s_stages[0].colorOp == GFX_TOP_DISABLE || st.colorOp == GFX_TOP_DISABLE)) ||
-                                   st.texture == NULL;
+                                   passThrough || st.texture == NULL;
         if (stageDisabled) {
             if (s_glCache.texEnabled[stage] != 0) {
                 glDisable(GL_TEXTURE_2D);
@@ -3539,95 +3549,6 @@ void PutPixelRGBA(unsigned char *dst, const unsigned char *src, int format)
     }
 }
 
-void DecodeBCColor(unsigned int c0, unsigned int c1, int alpha, unsigned int *palette)
-{
-    const unsigned int r0 = ((c0 >> 11) & 0x1f) * 255 / 31;
-    const unsigned int g0 = ((c0 >> 5) & 0x3f) * 255 / 63;
-    const unsigned int b0 = (c0 & 0x1f) * 255 / 31;
-    const unsigned int r1 = ((c1 >> 11) & 0x1f) * 255 / 31;
-    const unsigned int g1 = ((c1 >> 5) & 0x3f) * 255 / 63;
-    const unsigned int b1 = (c1 & 0x1f) * 255 / 31;
-    const unsigned int p0 = r0 | (g0 << 8) | (b0 << 16) | 0xff000000u;
-    const unsigned int p1 = r1 | (g1 << 8) | (b1 << 16) | 0xff000000u;
-    palette[0] = p0;
-    palette[1] = p1;
-    if (alpha) {
-        palette[2] = (((p0 & 0xff) + (p1 & 0xff)) / 2) |
-                     ((((p0 >> 8) & 0xff) + ((p1 >> 8) & 0xff)) / 2) << 8 |
-                     ((((p0 >> 16) & 0xff) + ((p1 >> 16) & 0xff)) / 2) << 16 |
-                     0xff000000u;
-        palette[3] = 0;
-    } else if (c0 > c1) {
-        palette[2] = (((p0 & 0xff) * 2 + (p1 & 0xff)) / 3) |
-                     ((((p0 >> 8) & 0xff) * 2 + ((p1 >> 8) & 0xff)) / 3) << 8 |
-                     ((((p0 >> 16) & 0xff) * 2 + ((p1 >> 16) & 0xff)) / 3) << 16 |
-                     0xff000000u;
-        palette[3] = (((p0 & 0xff) + (p1 & 0xff) * 2) / 3) |
-                     ((((p0 >> 8) & 0xff) + ((p1 >> 8) & 0xff) * 2) / 3) << 8 |
-                     ((((p0 >> 16) & 0xff) + ((p1 >> 16) & 0xff) * 2) / 3) << 16 |
-                     0xff000000u;
-    } else {
-        palette[2] = (((p0 & 0xff) + (p1 & 0xff)) / 2) |
-                     ((((p0 >> 8) & 0xff) + ((p1 >> 8) & 0xff)) / 2) << 8 |
-                     ((((p0 >> 16) & 0xff) + ((p1 >> 16) & 0xff)) / 2) << 16 |
-                     0xff000000u;
-        palette[3] = 0;
-    }
-}
-
-void DecodeBC1Block(const unsigned char *src, unsigned char *dst, int dstPitch)
-{
-    unsigned int palette[4];
-    const unsigned int c0 = src[0] | (src[1] << 8);
-    const unsigned int c1 = src[2] | (src[3] << 8);
-    DecodeBCColor(c0, c1, 0, palette);
-    const unsigned int bits = src[4] | (src[5] << 8) | (src[6] << 16) | ((unsigned int)src[7] << 24);
-    for (int y = 0; y < 4; ++y)
-        for (int x = 0; x < 4; ++x) {
-            const unsigned int p = palette[(bits >> (2 * (y * 4 + x))) & 3];
-            unsigned char *d = dst + y * dstPitch + x * 4;
-            d[0] = (unsigned char)(p & 0xff);
-            d[1] = (unsigned char)((p >> 8) & 0xff);
-            d[2] = (unsigned char)((p >> 16) & 0xff);
-            d[3] = (unsigned char)((p >> 24) & 0xff);
-        }
-}
-
-void DecodeBC3Block(const unsigned char *src, unsigned char *dst, int dstPitch)
-{
-    unsigned char alpha[8];
-    alpha[0] = src[0];
-    alpha[1] = src[1];
-    if (alpha[0] > alpha[1]) {
-        for (int i = 1; i < 7; ++i)
-            alpha[i + 1] = (unsigned char)(((7 - i) * alpha[0] + i * alpha[1]) / 7);
-    } else {
-        for (int i = 1; i < 5; ++i)
-            alpha[i + 1] = (unsigned char)(((5 - i) * alpha[0] + i * alpha[1]) / 5);
-        alpha[6] = 0;
-        alpha[7] = 255;
-    }
-    unsigned long long bits = 0;
-    for (int i = 0; i < 6; ++i)
-        bits |= (unsigned long long)src[2 + i] << (8 * i);
-    unsigned int palette[4];
-    const unsigned int c0 = src[8] | (src[9] << 8);
-    const unsigned int c1 = src[10] | (src[11] << 8);
-    DecodeBCColor(c0, c1, 0, palette);
-    const unsigned int colorBits = src[12] | (src[13] << 8) | (src[14] << 16) | ((unsigned int)src[15] << 24);
-    for (int y = 0; y < 4; ++y)
-        for (int x = 0; x < 4; ++x) {
-            const int index = y * 4 + x;
-            const unsigned int p = palette[(colorBits >> (2 * index)) & 3];
-            const unsigned char a = alpha[(bits >> (3 * index)) & 7];
-            unsigned char *d = dst + y * dstPitch + x * 4;
-            d[0] = (unsigned char)(p & 0xff);
-            d[1] = (unsigned char)((p >> 8) & 0xff);
-            d[2] = (unsigned char)((p >> 16) & 0xff);
-            d[3] = a;
-        }
-}
-
 unsigned char *TextureToRGBA(const GfxTexture *texture)
 {
     const size_t width = (size_t)texture->width;
@@ -3660,9 +3581,9 @@ unsigned char *TextureToRGBA(const GfxTexture *texture)
                 const unsigned char *block = texture->data + (by * blocksWide + bx) * blockSize;
                 unsigned char pixels[16 * 4];
                 if (texture->format == GFX_FORMAT_BC1)
-                    DecodeBC1Block(block, pixels, 16);
+                    BcDecode_BC1Block(block, pixels, 16);
                 else
-                    DecodeBC3Block(block, pixels, 16);
+                    BcDecode_BC3Block(block, pixels, 16);
                 // Edge blocks of a texture whose size is not a multiple of
                 // four only cover part of the 4x4 block.
                 const size_t rows = height - by * 4 < 4 ? height - by * 4 : 4;

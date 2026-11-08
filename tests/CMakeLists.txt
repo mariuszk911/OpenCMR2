@@ -294,6 +294,18 @@ add_executable(weather_map_test weather_map.cpp)
 target_include_directories(weather_map_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME weather_map COMMAND weather_map_test)
 
+# Software BC1/BC3 decode for the MiniGL backend: a BC3 colour half is always
+# four-colour.
+add_executable(bc_decode_test bc_decode.cpp)
+target_include_directories(bc_decode_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME bc_decode COMMAND bc_decode_test)
+
+# A texture stage that passes the colour through is left off on the MiniGL
+# backend (the car's Standard environment pass).
+add_executable(stage_passthrough_test stage_passthrough.cpp)
+target_include_directories(stage_passthrough_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME stage_passthrough COMMAND stage_passthrough_test)
+
 # A backdrop draw's fog, expressed as GL linear fog on the MiniGL backend, stays
 # the vertex's specular alpha at every eye distance.
 add_executable(backdrop_fog_test backdrop_fog.cpp)
