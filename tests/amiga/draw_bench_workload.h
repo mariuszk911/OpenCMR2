@@ -190,4 +190,88 @@ static long Bench_ElapsedMs(const struct DateStamp *a, const struct DateStamp *b
     return ticks * (1000L / TICKS_PER_SECOND);
 }
 
+/* ---- 2D: menu, text and HUD sprites ------------------------------------
+ * Sprite_DrawLayer draws each sprite as its own 4-vertex triangle strip of
+ * pre-transformed (TL) vertices rebuilt every frame, switching the texture
+ * only when it changes (glyph runs share a font atlas). The benchmark's menu
+ * frame has kBenchMenuSprites of them, the race frame's HUD kBenchHudSprites
+ * over the 3D frame. Sizes: mostly glyphs and icons, every 25th a panel. */
+enum { kBenchMenuSprites = 300, kBenchHudSprites = 40, kBenchMaxSprites = 2000 };
+
+struct BenchTLVertex {      /* GfxTLVertex: 32 bytes */
+    float sx, sy, sz, rhw;
+    unsigned char colour[4];
+    unsigned int specular;
+    float u, v;
+};
+
+struct BenchSprite {
+    float x, y, w, h;
+    int texture;
+    unsigned char shade;
+};
+
+static struct BenchSprite g_benchSprites[kBenchMaxSprites];
+static struct BenchTLVertex g_benchTL[kBenchMaxSprites * 4];
+
+static void Bench_BuildSprites(int count, int width, int height)
+{
+    int i, texture = 0;
+    if (count > kBenchMaxSprites)
+        count = kBenchMaxSprites;
+    for (i = 0; i < count; ++i) {
+        struct BenchSprite *s = &g_benchSprites[i];
+        if (i == 0 || BenchRandom() % 8 == 0)
+            texture = (int)(BenchRandom() % kBenchTextures);
+        if (i % 25 == 0) {
+            s->w = (float)(120 + BenchRandom() % 200);
+            s->h = (float)(24 + BenchRandom() % 40);
+        } else {
+            s->w = (float)(8 + BenchRandom() % 16);
+            s->h = (float)(12 + BenchRandom() % 12);
+        }
+        s->x = (float)(BenchRandom() % (unsigned long)(width - (int)s->w));
+        s->y = (float)(BenchRandom() % (unsigned long)(height - (int)s->h));
+        s->texture = texture;
+        s->shade = (unsigned char)(160 + BenchRandom() % 95);
+    }
+}
+
+/* Rebuilds the TL vertices of the first `count` sprites for frame `frame`, as
+ * the game does every frame (a small drift so the data really changes).
+ * argb: colour byte order as in Bench_Build. */
+static void Bench_FillSprites(int count, int frame, int argb)
+{
+    int i, k;
+    const float drift = (float)(frame & 7);
+    for (i = 0; i < count; ++i) {
+        const struct BenchSprite *s = &g_benchSprites[i];
+        struct BenchTLVertex *v = &g_benchTL[i * 4];
+        for (k = 0; k < 4; ++k) {
+            v[k].sx = s->x + drift + ((k & 1) ? s->w : 0.0f);
+            v[k].sy = s->y + ((k & 2) ? s->h : 0.0f);
+            v[k].sz = 0.0f;
+            v[k].rhw = 1.0f;
+            if (argb) {
+                v[k].colour[0] = 220; v[k].colour[1] = s->shade;
+                v[k].colour[2] = s->shade; v[k].colour[3] = s->shade;
+            } else {
+                v[k].colour[0] = s->shade; v[k].colour[1] = s->shade;
+                v[k].colour[2] = s->shade; v[k].colour[3] = 220;
+            }
+            v[k].specular = 0;
+            v[k].u = (k & 1) ? 1.0f : 0.0f;
+            v[k].v = (k & 2) ? 1.0f : 0.0f;
+        }
+    }
+}
+
+/* Frame kinds: 0 the 3D frame, 1 a menu (2D only), 2 a race (3D + HUD). */
+static int Bench_SpriteCount(int kind, int override)
+{
+    if (override > 0)
+        return override > kBenchMaxSprites ? kBenchMaxSprites : override;
+    return kind == 1 ? kBenchMenuSprites : kind == 2 ? kBenchHudSprites : 0;
+}
+
 #endif

@@ -5,6 +5,17 @@
  * objects. Compare with minigl_draw_bench.c.
  *
  *     amiga_ogles2_draw_bench [frames] [rebind] [full] [window] [draws]
+ *                             [kind] [sprites] [mode2d]
+ *
+ * kind: 0 the 3D frame, 1 a menu (sprites only), 2 a race (3D + HUD), as in
+ *   minigl_draw_bench.c; sprites: per frame (default 300 menu, 40 HUD).
+ * mode2d, how the sprites' TL vertices, new every frame, reach the GPU (a
+ *   second program, screen-space position, colour x texture, blended):
+ *   0 per sprite: glBufferSubData of its four vertices into a stream buffer
+ *     (orphaned each frame), glDrawArrays of a strip;
+ *   1 client arrays: no buffer bound, glDrawArrays straight from CPU memory;
+ *   2 batched: one glBufferData of every sprite per frame, one glDrawElements
+ *     per run of sprites with the same texture (a static quad index buffer).
  *
  * window 1: ogles2's own window of the native size instead of the full screen.
  * draws: draws per frame, at most the workload's 411 (0: clear and swap only).
@@ -141,6 +152,31 @@ static const char *kFullFragmentShader =
     "    gl_FragColor = c;\n"
     "}\n";
 
+/* ---- 2D sprites --------------------------------------------------------- */
+
+static const char *k2DVertexShader =
+    "attribute vec2 a_position;\n"
+    "attribute vec4 a_colour;\n"
+    "attribute vec2 a_uv;\n"
+    "uniform vec2 u_screen;\n"
+    "varying vec4 v_colour;\n"
+    "varying vec2 v_uv;\n"
+    "void main() {\n"
+    "    v_colour = a_colour;\n"
+    "    v_uv = a_uv;\n"
+    "    gl_Position = vec4(a_position.x / u_screen.x * 2.0 - 1.0,\n"
+    "                       1.0 - a_position.y / u_screen.y * 2.0, 0.0, 1.0);\n"
+    "}\n";
+
+static const char *k2DFragmentShader =
+    "precision mediump float;\n"
+    "uniform sampler2D u_texture;\n"
+    "varying vec4 v_colour;\n"
+    "varying vec2 v_uv;\n"
+    "void main() {\n"
+    "    gl_FragColor = texture2D(u_texture, v_uv) * v_colour;\n"
+    "}\n";
+
 static GLuint Compile(GLenum type, const char *src)
 {
     GLuint s = glCreateShader(type);
@@ -184,6 +220,66 @@ static void SetAttributes(GLintptr base)
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (const void *)(base + 12));
     glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, (const void *)(base + 24));
     glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, stride, (const void *)(base + 28));
+}
+
+/* The 2D attributes of a BenchTLVertex array at `base` (a buffer offset, or
+ * a CPU address with no buffer bound). */
+static void Set2DAttributes(const unsigned char *base)
+{
+    const GLsizei stride = (GLsizei)sizeof(struct BenchTLVertex);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, base + 0);
+    glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, base + 16);
+    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, stride, base + 24);
+}
+
+static void Draw2D(int count, int mode, GLuint program2D, GLuint stream, GLuint quadIndices,
+                   const GLuint *textures)
+{
+    int n, texture = -1;
+    glUseProgram(program2D);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisableVertexAttribArray(1);
+    if (mode == 1) {
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        Set2DAttributes((const unsigned char *)g_benchTL);
+        for (n = 0; n < count; ++n) {
+            if (g_benchSprites[n].texture != texture) {
+                texture = g_benchSprites[n].texture;
+                glBindTexture(GL_TEXTURE_2D, textures[texture]);
+            }
+            glDrawArrays(GL_TRIANGLE_STRIP, n * 4, 4);
+        }
+        return;
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, stream);
+    if (mode == 2) {
+        glBufferData(GL_ARRAY_BUFFER, count * 4 * sizeof(struct BenchTLVertex), g_benchTL, GL_STREAM_DRAW);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, quadIndices);
+        Set2DAttributes(NULL);
+        for (n = 0; n < count;) {
+            int end = n + 1;
+            while (end < count && g_benchSprites[end].texture == g_benchSprites[n].texture)
+                ++end;
+            glBindTexture(GL_TEXTURE_2D, textures[g_benchSprites[n].texture]);
+            glDrawElements(GL_TRIANGLES, (end - n) * 6, GL_UNSIGNED_SHORT,
+                           (const void *)(n * 6 * sizeof(unsigned short)));
+            n = end;
+        }
+        return;
+    }
+    glBufferData(GL_ARRAY_BUFFER, count * 4 * sizeof(struct BenchTLVertex), NULL, GL_STREAM_DRAW);
+    Set2DAttributes(NULL);
+    for (n = 0; n < count; ++n) {
+        if (g_benchSprites[n].texture != texture) {
+            texture = g_benchSprites[n].texture;
+            glBindTexture(GL_TEXTURE_2D, textures[texture]);
+        }
+        glBufferSubData(GL_ARRAY_BUFFER, n * 4 * sizeof(struct BenchTLVertex), 4 * sizeof(struct BenchTLVertex),
+                        &g_benchTL[n * 4]);
+        glDrawArrays(GL_TRIANGLE_STRIP, n * 4, 4);
+    }
 }
 
 static void Set4(float *v, float a, float b, float c, float d)
@@ -277,6 +373,11 @@ int main(int argc, char **argv)
     const int rebind = full ? 1 : (argc > 2 ? atoi(argv[2]) : 0);
     const int window = argc > 4 ? atoi(argv[4]) : 0;
     const int draws = argc > 5 && atoi(argv[5]) < kBenchDraws ? atoi(argv[5]) : kBenchDraws;
+    const int kind = argc > 6 ? atoi(argv[6]) : 0;
+    const int sprites = Bench_SpriteCount(kind, argc > 7 ? atoi(argv[7]) : 0);
+    const int mode2d = argc > 8 ? atoi(argv[8]) : 0;
+    static unsigned short quadIndices[kBenchMaxSprites * 6];
+    GLuint program2D = 0, buffers2D[2];
     const int warmup = 20;
     static unsigned char texels[kBenchTexSize * kBenchTexSize * 4];
     static float vertexState[kVertexVec4 * 4], fragmentState[kFragmentVec4 * 4];
@@ -301,6 +402,7 @@ int main(int argc, char **argv)
         goto out;
     }
     Bench_NativeSize(&width, &height);
+    Bench_BuildSprites(sprites, width, height);
     context = OpenContext(width, height, window);
     if (context == NULL)
         goto out;
@@ -326,6 +428,24 @@ int main(int argc, char **argv)
         glUniform3f(glGetUniformLocation(program, "u_ambient"), 0.25f, 0.25f, 0.25f);
     }
 
+    if (sprites > 0) {
+        program2D = Link(k2DVertexShader, k2DFragmentShader);
+        if (program2D == 0)
+            goto out;
+        glUseProgram(program2D);
+        glUniform1i(glGetUniformLocation(program2D, "u_texture"), 0);
+        glUniform2f(glGetUniformLocation(program2D, "u_screen"), (float)width, (float)height);
+        glUseProgram(program);
+        for (t = 0; t < sprites; ++t) {
+            unsigned short *q = &quadIndices[t * 6];
+            const unsigned short b = (unsigned short)(t * 4);
+            q[0] = b; q[1] = (unsigned short)(b + 1); q[2] = (unsigned short)(b + 2);
+            q[3] = (unsigned short)(b + 2); q[4] = (unsigned short)(b + 1); q[5] = (unsigned short)(b + 3);
+        }
+        glGenBuffers(2, buffers2D);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffers2D[1]);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sprites * 6 * sizeof(unsigned short), quadIndices, GL_STATIC_DRAW);
+    }
     glGenBuffers(2, buffers);
     glBindBuffer(GL_ARRAY_BUFFER, buffers[0]);
     glBufferData(GL_ARRAY_BUFFER, sizeof(g_benchVertices), g_benchVertices, GL_STATIC_DRAW);
@@ -355,7 +475,16 @@ int main(int argc, char **argv)
         if (f == warmup)
             DateStamp(&start);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        for (d = 0; d < draws; ++d) {
+        if (kind != 1) {
+            glUseProgram(program);
+            glEnable(GL_DEPTH_TEST);
+            glDisable(GL_BLEND);
+            glBindBuffer(GL_ARRAY_BUFFER, buffers[0]);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffers[1]);
+            glEnableVertexAttribArray(1);
+            SetAttributes(0);
+        }
+        for (d = 0; kind != 1 && d < draws; ++d) {
             const struct BenchDraw *draw = &g_benchDraws[d];
             if (full) {
                 if (draw->object != object || draw->lit != lit) {
@@ -397,15 +526,19 @@ int main(int argc, char **argv)
             glDrawElements(GL_TRIANGLES, kBenchIndicesPerDraw, GL_UNSIGNED_SHORT,
                            (const void *)(d * kBenchIndicesPerDraw * sizeof(unsigned short)));
         }
+        if (sprites > 0) {
+            Bench_FillSprites(sprites, f, 0);
+            Draw2D(sprites, mode2d, program2D, buffers2D[0], buffers2D[1], textures);
+        }
         aglSwapBuffers();
     }
     glFinish();
     DateStamp(&end);
     ms = Bench_ElapsedMs(&start, &end);
-    printf("gles-bench: %dx%d %s, %d frames, %d draws x %d triangles each, rebind %d, full %d: %ld ms, "
-           "%ld.%02ld ms/frame\n",
-           width, height, window ? "window" : "full screen", frames, draws, kBenchIndicesPerDraw / 3, rebind, full, ms, ms / frames,
-           (ms * 100 / frames) % 100);
+    printf("gles-bench: %dx%d %s, kind %d, %d frames, %d 3D draws, rebind %d, full %d, %d sprites, "
+           "mode2d %d: %ld ms, %ld.%02ld ms/frame\n",
+           width, height, window ? "window" : "full screen", kind, frames, kind == 1 ? 0 : draws, rebind, full,
+           sprites, mode2d, ms, ms / frames, (ms * 100 / frames) % 100);
     fflush(stdout);
     rc = 0;
 

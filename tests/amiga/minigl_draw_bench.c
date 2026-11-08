@@ -3,9 +3,15 @@
  * workload of draw_bench_workload.h as OpenCMR2's MiniGL renderer submits a
  * 3D draw: client-array pointers set per draw and glDrawElements, the
  * modelview loaded when it changes, the texture bound when it changes, GL
- * lighting switched with the draw. Compare with ogles2_draw_bench.c.
+ * lighting switched with the draw. 2D sprites are drawn as its TL path draws
+ * them (SubmitTLBlocks): a screen projection, blending on, depth off, each
+ * sprite a glBegin(GL_TRIANGLE_STRIP) of four vertices, the texture bound when
+ * it changes. Compare with ogles2_draw_bench.c.
  *
- *     amiga_minigl_draw_bench [frames]
+ *     amiga_minigl_draw_bench [frames] [kind] [sprites]
+ *
+ * kind: 0 the 3D frame, 1 a menu (sprites only), 2 a race (3D + HUD).
+ * sprites: sprites per frame (default 300 for a menu, 40 for a race HUD).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,9 +23,42 @@
 
 struct IntuitionBase *IntuitionBase;
 
+/* The sprites, as the renderer's TL path submits them. */
+static void DrawSprites(int count, const GLuint *textures, int width, int height)
+{
+    int n, k, texture = -1;
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, (double)width, (double)height, 0.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glDisable(GL_LIGHTING);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    for (n = 0; n < count; ++n) {
+        const struct BenchTLVertex *v = &g_benchTL[n * 4];
+        if (g_benchSprites[n].texture != texture) {
+            texture = g_benchSprites[n].texture;
+            glBindTexture(GL_TEXTURE_2D, textures[texture]);
+        }
+        glBegin(GL_TRIANGLE_STRIP);
+        for (k = 0; k < 4; ++k) {
+            /* ARGB bytes, as EmitTLVertex unpacks a GfxTLVertex colour. */
+            glColor4ub(v[k].colour[1], v[k].colour[2], v[k].colour[3], v[k].colour[0]);
+            glTexCoord2f(v[k].u, v[k].v);
+            glVertex2f(v[k].sx, v[k].sy);
+        }
+        glEnd();
+    }
+}
+
 int main(int argc, char **argv)
 {
     const int frames = argc > 1 ? atoi(argv[1]) : 300;
+    const int kind = argc > 2 ? atoi(argv[2]) : 0;
+    const int sprites = Bench_SpriteCount(kind, argc > 3 ? atoi(argv[3]) : 0);
     const int warmup = 20;
     static unsigned char texels[kBenchTexSize * kBenchTexSize * 4];
     GLuint textures[kBenchTextures];
@@ -38,6 +77,7 @@ int main(int argc, char **argv)
     Bench_NativeSize(&width, &height);
     CloseLibrary((struct Library *)IntuitionBase);
     printf("mgl-bench: native size %dx%d\n", width, height);
+    Bench_BuildSprites(sprites, width, height);
     if (!MiniGLOpen()) {
         printf("mgl-bench: MiniGLOpen failed\n");
         return 10;
@@ -94,7 +134,17 @@ int main(int argc, char **argv)
         if (f == warmup)
             DateStamp(&start);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        for (d = 0; d < kBenchDraws; ++d) {
+        if (kind != 1) {
+            glMatrixMode(GL_PROJECTION);
+            glLoadMatrixf(projection);
+            glMatrixMode(GL_MODELVIEW);
+            glEnable(GL_DEPTH_TEST);
+            glEnable(GL_ALPHA_TEST);
+            glDisable(GL_BLEND);
+            glEnableClientState(GL_VERTEX_ARRAY);
+            glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        }
+        for (d = 0; kind != 1 && d < kBenchDraws; ++d) {
             const struct BenchDraw *draw = &g_benchDraws[d];
             const struct BenchVertex *v = &g_benchVertices[draw->firstVertex];
             const GLsizei stride = (GLsizei)sizeof(struct BenchVertex);
@@ -127,6 +177,15 @@ int main(int argc, char **argv)
             glTexCoordPointer(2, GL_FLOAT, stride, &v->u);
             glDrawElements(GL_TRIANGLES, kBenchIndicesPerDraw, GL_UNSIGNED_SHORT, g_benchLocalIndices);
         }
+        if (sprites > 0) {
+            /* The TL path draws immediate: no client array left armed. */
+            glDisableClientState(GL_VERTEX_ARRAY);
+            glDisableClientState(GL_NORMAL_ARRAY);
+            glDisableClientState(GL_COLOR_ARRAY);
+            glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+            Bench_FillSprites(sprites, f, 1);
+            DrawSprites(sprites, textures, width, height);
+        }
         mglUnlockDisplay();
         mglSwitchDisplay();
         mglLockDisplay();
@@ -134,8 +193,9 @@ int main(int argc, char **argv)
     glFinish();
     DateStamp(&end);
     ms = Bench_ElapsedMs(&start, &end);
-    printf("mgl-bench: %dx%d, %d frames, %d draws x %d triangles each: %ld ms, %ld.%02ld ms/frame\n",
-           width, height, frames, kBenchDraws, kBenchIndicesPerDraw / 3, ms, ms / frames, (ms * 100 / frames) % 100);
+    printf("mgl-bench: %dx%d, kind %d, %d frames, %d 3D draws, %d sprites: %ld ms, %ld.%02ld ms/frame\n",
+           width, height, kind, frames, kind == 1 ? 0 : kBenchDraws, sprites, ms, ms / frames,
+           (ms * 100 / frames) % 100);
     fflush(stdout);
 
     mglUnlockDisplay();
