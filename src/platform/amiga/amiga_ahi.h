@@ -25,6 +25,12 @@ typedef void (*AmigaAhiRenderFunc)(int16_t *output, uint32_t frames);
 int AmigaAhi_Open(uint32_t *rate, uint32_t blockMs, uint32_t maxBlockFrames, AmigaAhiRenderFunc render);
 void AmigaAhi_Close(void);
 
+/* Time from rendering a frame to hearing it, as far as this ring decides it:
+   the renderer keeps up to AHI_RENDERER_BLOCKS blocks ready behind the one AHI
+   has queued, so a rendered frame waits that many blocks plus the queued one.
+   AHI's own mixing buffer comes on top and is not known here. 0 when closed. */
+uint32_t AmigaAhi_GetLatencyMs(void);
+
 /* Serialises game-side voice changes with rendering. Valid before Open. */
 void AmigaAhi_Lock(void);
 void AmigaAhi_Unlock(void);

@@ -3,8 +3,9 @@
 // through one AHI channel. Sample data stays little-endian; mixer.cpp converts
 // it as it reads.
 //
-// Movies are stubbed on this target (video/movie_stub.cpp), so nothing queues
-// stream audio; the stream calls only keep the interface whole.
+// Movie sound is a mixer stream: a ring the game task fills behind the play
+// position (converting float to 16-bit outside the lock) and the mixer task
+// plays at unity gain, with silence when it runs dry.
 #include "audio/mixer.h"
 #include "platform/amiga/amiga_ahi.h"
 #include "port/audio.h"
@@ -31,7 +32,9 @@ struct AudioBuffer {
 };
 
 struct AudioStream {
-    int unused;
+    MixStream stream;
+    int16_t *ring;
+    uint32_t dropped;   // frames that did not fit (logged once, then counted)
 };
 
 namespace {
@@ -40,11 +43,15 @@ enum {
     DEFAULT_RATE = 22050,
     DEFAULT_BLOCK_MS = 20,
     MIN_BLOCK_MS = 10,
-    MAX_BLOCK_MS = 40
+    MAX_BLOCK_MS = 40,
+    // 2.97 s at 44.1 kHz: the movies queue about 0.78 s ahead of the picture,
+    // the largest packet is 34560 frames.
+    STREAM_RING_FRAMES = 131072
 };
 
 Mixer s_mixer;
 bool s_mixerReady;
+bool s_outputOpen;
 
 void Render(int16_t *output, uint32_t frames)
 {
@@ -90,12 +97,14 @@ extern "C" BOOL Audio_Init(int sampleRate, int channels)
     if (!AmigaAhi_Open(&rate, (uint32_t)blockMs, MIXER_MAX_BLOCK_FRAMES, Render))
         return FALSE;
     s_mixer.rate = rate;
+    s_outputOpen = true;
     return TRUE;
 }
 
 extern "C" void Audio_Shutdown(void)
 {
     AmigaAhi_Close();
+    s_outputOpen = false;
     // Buffers the game did not release keep their data until exit.
 }
 
@@ -277,25 +286,67 @@ extern "C" void Audio_SetFrequency(AudioBuffer *buffer, DWORD frequency)
 
 extern "C" AudioStream *Audio_CreateStream(DWORD sampleRate, int channels)
 {
-    (void)sampleRate;
-    (void)channels;
-    return NULL;
+    // Without an output nothing would consume the ring; the movie plays silent.
+    if (!s_outputOpen || channels < 1 || channels > 2 || sampleRate == 0)
+        return NULL;
+    AudioStream *stream = (AudioStream *)calloc(1, sizeof(AudioStream));
+    int16_t *ring = (int16_t *)malloc((size_t)STREAM_RING_FRAMES * (size_t)channels * sizeof(int16_t));
+    if (stream == NULL || ring == NULL) {
+        Sys_Log("audio: no memory for a %d-channel movie stream", channels);
+        free(stream);
+        free(ring);
+        return NULL;
+    }
+    stream->ring = ring;
+    MixStream_Init(&stream->stream, ring, STREAM_RING_FRAMES, channels, (uint32_t)sampleRate);
+    return stream;
 }
 
+// The game task is the only writer: `written` changes only here, and the room
+// read under the lock can only grow while the conversion runs without it.
 extern "C" BOOL Audio_QueueStream(AudioStream *stream, const float *samples, DWORD sampleCount)
 {
-    (void)stream;
-    (void)samples;
-    (void)sampleCount;
-    return FALSE;
+    if (stream == NULL || (samples == NULL && sampleCount != 0))
+        return FALSE;
+    const uint32_t frames = (uint32_t)sampleCount / (uint32_t)stream->stream.channels;
+    uint32_t room;
+    {
+        Lock lock;
+        room = MixStream_Free(&stream->stream);
+    }
+    const uint32_t wrote = MixStream_WriteFloat(&stream->stream, samples, frames, room);
+    {
+        Lock lock;
+        MixStream_Commit(&stream->stream, wrote);
+    }
+    if (wrote < frames) {
+        if (stream->dropped == 0)
+            Sys_Log("audio: movie stream full, dropping %lu frames", (unsigned long)(frames - wrote));
+        stream->dropped += frames - wrote;
+    }
+    return TRUE;
 }
 
 extern "C" void Audio_StartStream(AudioStream *stream)
 {
-    (void)stream;
+    if (stream == NULL)
+        return;
+    Lock lock;
+    Mixer_PlayStream(&s_mixer, &stream->stream);
 }
 
 extern "C" void Audio_ReleaseStream(AudioStream *stream)
 {
-    (void)stream;
+    if (stream == NULL)
+        return;
+    uint32_t underruns;
+    {
+        Lock lock;
+        Mixer_StopStream(&s_mixer, &stream->stream);
+        underruns = stream->stream.underruns;
+    }
+    Sys_Log("audio: movie stream released, %lu underruns, %lu frames dropped",
+            (unsigned long)underruns, (unsigned long)stream->dropped);
+    free(stream->ring);
+    free(stream);
 }

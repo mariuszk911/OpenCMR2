@@ -50,6 +50,7 @@ static AmigaAhiRenderFunc s_render;
 static int16_t *s_ring;
 static int16_t *s_silence;
 static uint32_t s_blockFrames;
+static uint32_t s_rate;
 static BYTE s_wakeBit = -1;
 static volatile ULONG s_wakeMask;
 static volatile uint32_t s_queued;   /* blocks handed to AHI: hook only */
@@ -249,6 +250,7 @@ int AmigaAhi_Open(uint32_t *rate, uint32_t blockMs, uint32_t maxBlockFrames, Ami
     blockFrames = blockFrames > maxBlockFrames ? maxBlockFrames : blockFrames;
     s_render = render;
     s_blockFrames = blockFrames;
+    s_rate = *rate;
     s_queued = 1;   /* block 0 goes straight to AHI_Play below */
     s_rendered = 0;
     s_underruns = 0;
@@ -295,6 +297,13 @@ void AmigaAhi_Close(void)
     StopMixer();
     Sys_Log("audio: closed after %lu blocks, %lu late", (unsigned long)s_rendered, (unsigned long)s_underruns);
     FreeResources();
+}
+
+uint32_t AmigaAhi_GetLatencyMs(void)
+{
+    if (s_control == NULL || s_rate == 0)
+        return 0;
+    return (uint32_t)((AHI_RENDERER_BLOCKS + 1) * s_blockFrames * 1000u / s_rate);
 }
 
 void AmigaAhi_Lock(void)
