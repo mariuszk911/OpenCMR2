@@ -30,7 +30,9 @@ extern "C" {
 
 // A width x height RGBA8 texture (each side 1..4096), or NULL on failure. It
 // has no pixels until the first GfxMiniGL_UploadRows. Free it with
-// Gfx_DestroyTexture.
+// Gfx_DestroyTexture, which keeps the GL texture of the last two for the next
+// stream textures of the same size (MiniGL keeps deleted texture memory until
+// the context closes, so a new one per movie would add up).
 GfxTexture *GfxMiniGL_CreateStreamTexture(int width, int height);
 
 // The size of the GL texture behind a stream texture (powers of two). Returns 1

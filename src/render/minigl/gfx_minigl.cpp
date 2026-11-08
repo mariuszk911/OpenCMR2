@@ -50,6 +50,9 @@ struct GfxTexture {
     // texture, the next powers of two above width and height.
     int glWidth;
     int glHeight;
+    // Set until the first GfxMiniGL_UploadRows, which then stores the whole
+    // frame (the GL name may be a reused one holding an older frame).
+    int streamFresh;
 };
 
 struct GfxVertexBuffer {
@@ -231,6 +234,17 @@ StageDiagnostics s_diag;
 // construction apart from rendering.
 int s_stageEntryPending;
 unsigned int s_neutralReflectionTex;
+// GL names of destroyed stream textures, kept for the next ones of the same
+// size: MiniGL 29.1 moves a deleted texture's memory into a pool that only its
+// texture renames draw from, so deleting the two 1024x512 movie textures after
+// every movie kept 4 MB per movie until the context closed. Deleted at shutdown.
+struct SpareStreamTexture {
+    unsigned int glId;
+    int glWidth, glHeight;
+};
+enum { kSpareStreamTextures = 2 };
+SpareStreamTexture s_spareStreams[kSpareStreamTextures];
+int s_spareStreamCount;
 
 StageState s_stages[2];
 GfxTexture *s_boundTexture;
@@ -946,6 +960,10 @@ extern "C" void Gfx_Shutdown(void)
             glDeleteTextures(1, &s_neutralReflectionTex);
             s_neutralReflectionTex = 0;
         }
+        for (int i = 0; i < s_spareStreamCount; ++i) {
+            if (EnsureLocked())
+                glDeleteTextures(1, &s_spareStreams[i].glId);
+        }
         if (s_locked) {
             mglUnlockDisplay();
             s_locked = 0;
@@ -959,6 +977,7 @@ extern "C" void Gfx_Shutdown(void)
         s_context = NULL;
     }
     s_neutralReflectionTex = 0;
+    s_spareStreamCount = 0;
     s_caps.probed = 0;
     InvalidateGlCache();
     if (s_gameWindow != NULL) {
@@ -3765,6 +3784,14 @@ extern "C" GfxTexture *GfxMiniGL_CreateStreamTexture(int width, int height)
     texture->glHeight = NextPowerOfTwo(height);
     texture->format = GFX_FORMAT_BGRX8; // opaque; the stored pixels are RGBA with alpha 255
     texture->mipLevels = 1;
+    texture->streamFresh = 1;
+    for (int i = 0; i < s_spareStreamCount; ++i) {
+        if (s_spareStreams[i].glWidth == texture->glWidth && s_spareStreams[i].glHeight == texture->glHeight) {
+            texture->glId = s_spareStreams[i].glId;
+            s_spareStreams[i] = s_spareStreams[--s_spareStreamCount];
+            break;
+        }
+    }
     return texture;
 }
 
@@ -3817,10 +3844,14 @@ extern "C" int GfxMiniGL_UploadRows(GfxTexture *texture, const uint8_t *rgba, in
         free(blank);
         // The first upload stores the whole frame, whatever the row range.
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, texture->width, texture->height, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    } else if (texture->streamFresh) {
+        // A reused GL name: replace the older frame it holds.
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, texture->width, texture->height, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
     } else {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y0, texture->width, rows, GL_RGBA, GL_UNSIGNED_BYTE,
                         rgba + (size_t)y0 * (size_t)texture->width * 4);
     }
+    texture->streamFresh = 0;
     return 1;
 }
 
@@ -3873,7 +3904,15 @@ extern "C" void Gfx_DestroyTexture(GfxTexture *texture)
                     s_glCache.texEnabled[1] = 0;
                     SelectActiveUnit(0);
                 }
-                glDeleteTextures(1, &texture->glId);
+                const bool stream = texture->data == NULL && texture->glWidth > 0;
+                if (stream && s_spareStreamCount < kSpareStreamTextures) {
+                    SpareStreamTexture &spare = s_spareStreams[s_spareStreamCount++];
+                    spare.glId = texture->glId;
+                    spare.glWidth = texture->glWidth;
+                    spare.glHeight = texture->glHeight;
+                } else {
+                    glDeleteTextures(1, &texture->glId);
+                }
                 if (!wasLocked) {
                     mglUnlockDisplay();
                     s_locked = 0;
