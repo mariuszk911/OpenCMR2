@@ -1460,6 +1460,11 @@ extern "C" void AmigaSys_SetWindow(void *window)
     struct Window *base = (struct Window *)window;
 
     CloseInputState();
+    // The game opens Intuition before its first video mode (Sys_GetDesktopSize),
+    // but a program that goes straight to Gfx_SetVideoMode does not: the calls
+    // below then went through a NULL IntuitionBase (a Line-A Guru on the target).
+    if (base != NULL && !EnsureIntuition())
+        return;
     if (base != NULL && base->UserPort != NULL) {
         // PORT: AMIGA: a window that already owns an IDCMP port is the one the
         // events arrive on (windowed MiniGL, test harnesses). Adopt it rather
