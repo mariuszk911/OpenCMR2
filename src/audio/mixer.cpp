@@ -338,6 +338,96 @@ void WriteLimited(Mixer *mixer, int16_t *output, uint32_t frames)
     mixer->limiterGain = end;
 }
 
+// Streams play at unity gain; the sample at `pos` is read as the frame at the
+// ring index, mono to both sides.
+inline void StreamFrame(const MixStream *stream, uint32_t pos, int32_t *left, int32_t *right)
+{
+    const int16_t *p = stream->ring + (size_t)(pos & stream->mask) * (size_t)stream->channels;
+    *left = p[0];
+    *right = stream->channels == 2 ? p[1] : p[0];
+}
+
+void StreamStep(const Mixer *mixer, MixStream *stream)
+{
+    const uint32_t frequency = stream->frequency != 0 ? stream->frequency : mixer->rate;
+    stream->stepWhole = frequency / mixer->rate;
+    stream->stepFrac = ((frequency % mixer->rate) << 16) / mixer->rate;
+    if (stream->stepWhole == 0 && stream->stepFrac == 0)
+        stream->stepFrac = 1;
+}
+
+void StreamToDeclick(Mixer *mixer, MixStream *stream)
+{
+    const int32_t unity = GainFor(0);
+    mixer->declickLeft += Scale(stream->lastLeft, unity);
+    mixer->declickRight += Scale(stream->lastRight, unity);
+    stream->lastLeft = 0;
+    stream->lastRight = 0;
+}
+
+// The position may step past `written` (a step above one frame); the signed
+// difference then reads as "nothing left", and the next commit covers it.
+void MixStreamBlock(Mixer *mixer, MixStream *stream, int32_t *out, uint32_t frames)
+{
+    const int32_t unity = GainFor(0);
+    const uint32_t stepWhole = stream->stepWhole;
+    const uint32_t stepFrac = stream->stepFrac;
+    const bool box = stepWhole >= 2;
+    uint32_t pos = stream->consumed;
+    uint32_t frac = stream->frac;
+    int32_t left = stream->lastLeft;
+    int32_t right = stream->lastRight;
+
+    for (uint32_t i = 0; i < frames; ++i) {
+        const int32_t available = (int32_t)(stream->written - pos);
+        if (available <= 0) {
+            if (!stream->starved) {
+                // Fade from here, not from the block start the shared declick
+                // uses, and hand what is left to it for the next block.
+                int32_t fadeLeft = Scale(left, unity);
+                int32_t fadeRight = Scale(right, unity);
+                AddDeclick(out + i * 2, &fadeLeft, frames - i);
+                AddDeclick(out + i * 2 + 1, &fadeRight, frames - i);
+                mixer->declickLeft += fadeLeft;
+                mixer->declickRight += fadeRight;
+                stream->starved = true;
+                ++stream->underruns;
+                stream->lastLeft = 0;
+                stream->lastRight = 0;
+            }
+            stream->consumed = pos;
+            stream->frac = frac;
+            return;
+        }
+        stream->starved = false;
+        int32_t aLeft, aRight, bLeft, bRight;
+        StreamFrame(stream, pos, &aLeft, &aRight);
+        if (available > 1)
+            StreamFrame(stream, pos + 1, &bLeft, &bRight);
+        else {
+            bLeft = aLeft;
+            bRight = aRight;
+        }
+        if (box) {
+            left = (aLeft + bLeft) >> 1;
+            right = (aRight + bRight) >> 1;
+        } else {
+            const int32_t f = (int32_t)(frac >> 4);
+            left = aLeft + ((bLeft - aLeft) * f >> 12);
+            right = aRight + ((bRight - aRight) * f >> 12);
+        }
+        out[i * 2] += Scale(left, unity);
+        out[i * 2 + 1] += Scale(right, unity);
+        frac += stepFrac;
+        pos += stepWhole + (frac >> 16);
+        frac &= 0xffffu;
+    }
+    stream->consumed = pos;
+    stream->frac = frac;
+    stream->lastLeft = left;
+    stream->lastRight = right;
+}
+
 } // namespace
 
 void Mixer_Init(Mixer *mixer, uint32_t outputRate)
@@ -414,6 +504,76 @@ void Mixer_SetPosition(MixVoice *voice, uint32_t frame)
     voice->frac = 0;
 }
 
+void MixStream_Init(MixStream *stream, int16_t *ring, uint32_t ringFrames, int channels, uint32_t frequency)
+{
+    memset(stream, 0, sizeof(*stream));
+    stream->ring = ring;
+    stream->mask = ringFrames - 1;
+    stream->channels = channels;
+    stream->frequency = frequency;
+}
+
+uint32_t MixStream_Free(const MixStream *stream)
+{
+    const int32_t queued = (int32_t)(stream->written - stream->consumed);
+    const uint32_t capacity = stream->mask + 1;
+    return queued <= 0 ? capacity : capacity - (uint32_t)queued;
+}
+
+uint32_t MixStream_WriteFloat(MixStream *stream, const float *samples, uint32_t frames, uint32_t room)
+{
+    const uint32_t count = frames < room ? frames : room;
+    const int channels = stream->channels;
+    for (uint32_t i = 0; i < count; ++i) {
+        int16_t *dst = stream->ring + (size_t)((stream->written + i) & stream->mask) * (size_t)channels;
+        for (int c = 0; c < channels; ++c) {
+            float x = samples[(size_t)i * (size_t)channels + (size_t)c];
+            if (x != x)
+                x = 0.0f;
+            x = x > 1.0f ? 1.0f : (x < -1.0f ? -1.0f : x);
+            x *= 32767.0f;
+            // Truncation after the half offset rounds to nearest, halves away
+            // from zero; the clamp keeps the value inside int16.
+            dst[c] = (int16_t)(int32_t)(x >= 0.0f ? x + 0.5f : x - 0.5f);
+        }
+    }
+    return count;
+}
+
+void MixStream_Commit(MixStream *stream, uint32_t frames)
+{
+    stream->written += frames;
+}
+
+void Mixer_PlayStream(Mixer *mixer, MixStream *stream)
+{
+    if (stream->playing)
+        return;
+    StreamStep(mixer, stream);
+    stream->playing = true;
+    stream->prev = NULL;
+    stream->next = mixer->streams;
+    if (mixer->streams != NULL)
+        mixer->streams->prev = stream;
+    mixer->streams = stream;
+}
+
+void Mixer_StopStream(Mixer *mixer, MixStream *stream)
+{
+    if (!stream->playing)
+        return;
+    StreamToDeclick(mixer, stream);
+    if (stream->prev != NULL)
+        stream->prev->next = stream->next;
+    else
+        mixer->streams = stream->next;
+    if (stream->next != NULL)
+        stream->next->prev = stream->prev;
+    stream->prev = NULL;
+    stream->next = NULL;
+    stream->playing = false;
+}
+
 void Mixer_Render(Mixer *mixer, int16_t *output, uint32_t frames)
 {
     if (mixer->paused) {
@@ -429,5 +589,9 @@ void Mixer_Render(Mixer *mixer, int16_t *output, uint32_t frames)
     }
     AddDeclick(mixer->accumulator, &mixer->declickLeft, frames);
     AddDeclick(mixer->accumulator + 1, &mixer->declickRight, frames);
+    // After the declick: a stream that runs dry fades out from that frame
+    // itself and leaves the rest of its fade to the next block.
+    for (MixStream *stream = mixer->streams; stream != NULL; stream = stream->next)
+        MixStreamBlock(mixer, stream, mixer->accumulator, frames);
     WriteLimited(mixer, output, frames);
 }

@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -243,6 +244,139 @@ void DecoderWritesLittleEndian()
     Check(out[0] == 0x04 && out[1] == 0x03 && out[2] == 0x02 && out[3] == 0x01, "the decoder output is LE");
 }
 
+
+// ---- streams (movie sound) ------------------------------------------------
+
+void Queue(MixStream *stream, const std::vector<float> &samples)
+{
+    const uint32_t frames = (uint32_t)(samples.size() / stream->channels);
+    const uint32_t wrote = MixStream_WriteFloat(stream, samples.data(), frames, MixStream_Free(stream));
+    MixStream_Commit(stream, wrote);
+}
+
+void StreamConvertsRoundsAndClamps()
+{
+    std::vector<int16_t> ring(8 * 2);
+    MixStream stream;
+    MixStream_Init(&stream, ring.data(), 8, 2, 1000);
+    const float in[] = { 0.5f, -0.5f, 2.0f, -2.0f, NAN, 1.0f / 65534.0f };
+    Check(MixStream_WriteFloat(&stream, in, 3, 8) == 3, "three stereo frames convert");
+    Check(ring[0] == 16384 && ring[1] == -16384, "halves round away from zero");
+    Check(ring[2] == 32767 && ring[3] == -32767, "out of range clamps");
+    Check(ring[4] == 0 && ring[5] == 1, "NaN is silence, a half step rounds up");
+    Check(stream.written == 0, "converting does not publish");
+    Check(MixStream_WriteFloat(&stream, in, 3, 2) == 2, "the room limits the write");
+}
+
+void StreamWrapsAroundTheRing()
+{
+    Mixer_Init(&mixer, 1000);
+    std::vector<int16_t> ring(8);
+    MixStream stream;
+    MixStream_Init(&stream, ring.data(), 8, 1, 1000);
+    Mixer_PlayStream(&mixer, &stream);
+    std::vector<float> first, second;
+    for (int i = 0; i < 6; ++i)
+        first.push_back((float)(i + 1) * 1000.0f / 32767.0f);
+    for (int i = 0; i < 6; ++i)
+        second.push_back((float)(i + 7) * 1000.0f / 32767.0f);
+    Queue(&stream, first);
+    int16_t out[6 * 2];
+    Mixer_Render(&mixer, out, 5);
+    Check(abs(out[0] - 1000) <= 1 && abs(out[8] - 5000) <= 1, "stream plays its frames in order");
+    Check(MixStream_Free(&stream) == 7, "played frames free their room");
+    Queue(&stream, second);
+    Check(stream.written == 12, "the second write wraps the ring");
+    Mixer_Render(&mixer, out, 6);
+    bool ordered = true;
+    for (int i = 0; i < 6; ++i)
+        ordered = ordered && abs(out[i * 2] - (i + 6) * 1000) <= 1 && out[i * 2] == out[i * 2 + 1];
+    Check(ordered, "frames across the wrap play in order, mono to both sides");
+    Check(stream.underruns == 0, "no underrun while data is ahead");
+}
+
+void StreamUnderrunIsSilentAndResumes()
+{
+    Mixer_Init(&mixer, 1000);
+    std::vector<int16_t> ring(64);
+    MixStream stream;
+    MixStream_Init(&stream, ring.data(), 64, 1, 1000);
+    Mixer_PlayStream(&mixer, &stream);
+    Queue(&stream, std::vector<float>(4, 0.25f));
+    int16_t out[400 * 2];
+    Mixer_Render(&mixer, out, 400);
+    Check(stream.underruns == 1 && stream.starved, "running dry counts one underrun");
+    Check(stream.consumed == stream.written, "the mixer never passes the writer");
+    Check(abs(out[3 * 2] - 8192) <= 1 && out[4 * 2] < 8192 && out[399 * 2] < 100,
+          "the dry stream fades from its last frame");
+    Mixer_Render(&mixer, out, 400);
+    Check(out[399 * 2] == 0 && mixer.declickLeft == 0, "and reaches silence");
+    Check(stream.underruns == 1, "a long gap is one underrun");
+    Queue(&stream, std::vector<float>(10, -0.5f));
+    Mixer_Render(&mixer, out, 5);
+    Check(!stream.starved && out[4 * 2] < -16000, "the stream resumes when data arrives");
+    Check(MixStream_Free(&stream) == 64 - 5, "free room follows the play position");
+}
+
+// A 440 Hz sine fed in packets must come out without steps at the output rate.
+void StreamResamplesContinuously(uint32_t sourceRate)
+{
+    Mixer_Init(&mixer, 48000);
+    std::vector<int16_t> ring(4096 * 2);
+    MixStream stream;
+    MixStream_Init(&stream, ring.data(), 4096, 2, sourceRate);
+    Mixer_PlayStream(&mixer, &stream);
+    const double amplitude = 10000.0 / 32767.0;
+    uint32_t fed = 0;
+    int16_t out[480 * 2];
+    int previous = 0, maxStep = 0, peak = 0;
+    bool first = true;
+    for (int block = 0; block < 100; ++block) {
+        while (MixStream_Free(&stream) > 1500) {
+            std::vector<float> packet;
+            for (int i = 0; i < 700; ++i, ++fed) {
+                const float v = (float)(amplitude * std::sin(2.0 * 3.14159265358979323846 * 440.0 * fed / sourceRate));
+                packet.push_back(v);
+                packet.push_back(v);
+            }
+            Queue(&stream, packet);
+        }
+        Mixer_Render(&mixer, out, 480);
+        for (int i = 0; i < 480; ++i) {
+            const int v = out[i * 2];
+            if (!first)
+                maxStep = abs(v - previous) > maxStep ? abs(v - previous) : maxStep;
+            peak = abs(v) > peak ? abs(v) : peak;
+            previous = v;
+            first = false;
+        }
+    }
+    const uint32_t expected = (uint32_t)((uint64_t)100 * 480 * sourceRate / 48000);
+    char what[96];
+    std::snprintf(what, sizeof(what), "%u Hz stream has no steps", (unsigned)sourceRate);
+    Check(maxStep < 650 && peak > 9900 && peak < 10100, what);
+    std::snprintf(what, sizeof(what), "%u Hz stream advances at its rate", (unsigned)sourceRate);
+    Check(stream.underruns == 0 && stream.consumed + 1 >= expected && stream.consumed <= expected + 1, what);
+}
+
+void StreamStopsWithoutClick()
+{
+    Mixer_Init(&mixer, 22050);
+    std::vector<int16_t> ring(1024 * 2);
+    MixStream stream;
+    MixStream_Init(&stream, ring.data(), 1024, 2, 22050);
+    Mixer_PlayStream(&mixer, &stream);
+    Queue(&stream, std::vector<float>(1024 * 2, 0.6f));
+    int16_t out[1000 * 2];
+    Mixer_Render(&mixer, out, 10);
+    Mixer_StopStream(&mixer, &stream);
+    Check(!stream.playing && mixer.streams == NULL, "a stopped stream leaves the mixer");
+    Mixer_Render(&mixer, out, 1000);
+    Check(out[0] > 18000 && out[1] > 18000, "a stopped stream decays from where it stopped");
+    Check(out[1998] == 0 && mixer.declickLeft == 0 && mixer.declickRight == 0, "and reaches silence");
+    Check(stream.consumed == 10, "nothing plays after the stop");
+}
+
 } // namespace
 
 int main()
@@ -260,6 +394,12 @@ int main()
     PausedHoldsPositions();
     Eight8BitAndStereo();
     DecoderWritesLittleEndian();
+    StreamConvertsRoundsAndClamps();
+    StreamWrapsAroundTheRing();
+    StreamUnderrunIsSilentAndResumes();
+    StreamResamplesContinuously(44100);
+    StreamResamplesContinuously(22050);
+    StreamStopsWithoutClick();
     if (failures == 0)
         std::printf("audio_mixer: ok\n");
     return failures != 0;
