@@ -4,6 +4,7 @@
 // capability-tiered 3D fixed-function pipeline.
 #include "port/backdrop_fog.h"
 #include "port/bc_decode.h"
+#include "port/bump_luminance.h"
 #include "port/stage_passthrough.h"
 #include "port/light_range.h"
 #include "port/d3d_light.h"
@@ -55,6 +56,13 @@ struct GfxTexture {
     // Set until the first GfxMiniGL_UploadRows, which then stores the whole
     // frame (the GL name may be a reused one holding an older frame).
     int streamFresh;
+    // The grey luminance texture a BUMPENVMAPLUMINANCE stage draws in this
+    // texture's place (port/bump_luminance.h), and the scale and offset it was
+    // built with; rebuilt after an upload of this texture.
+    unsigned int lumGlId;
+    int lumValid;
+    float lumScale;
+    float lumOffset;
 };
 
 struct GfxVertexBuffer {
@@ -106,6 +114,8 @@ struct StageState {
     int magFilter;
     uint32_t texCoordIndex;
     int textureTransform;
+    float bumpLumScale;
+    float bumpLumOffset;
     GfxTexture *texture;
 };
 
@@ -271,6 +281,7 @@ int s_fullscreen;
 // Windowed mode: the application owns this window and MiniGL renders into it.
 void *s_gameWindow;
 void UploadTexture(GfxTexture *texture);
+unsigned int EnsureBumpLuminanceTexture(GfxTexture *texture, float scale, float offset);
 void ApplyViewport(void);
 int s_virtualWidth;
 int s_virtualHeight;
@@ -319,6 +330,10 @@ BoundsCacheEntry s_boundsCache[kBoundsCacheSize];
 // reaches on the CPU. 0 drops point and spot lights instead (GL keeps only the
 // directional lights), which saves the CPU time.
 int s_cpuLightsEnabled = 1;
+// video.mt_cpu_light (default 1): a lit draw with both texture units is lit
+// on the CPU and drawn unlit. MiniGL's lit two-unit path drew the car's Bump
+// environment pass with flickering squares; its unlit two-unit path does not.
+int s_multiTextureCpuLight = 1;
 // Set while a draw is drawn with CPU-lit vertex colours (see CpuLightDraw).
 int s_cpuLitDraw;
 // Grow-only scratch vertices for CPU-lit draws.
@@ -437,6 +452,8 @@ void ResetStageStates(void)
         s_stages[i].magFilter = GFX_FILTER_POINT;
         s_stages[i].texCoordIndex = (uint32_t)i;
         s_stages[i].textureTransform = GFX_TTFF_DISABLE;
+        s_stages[i].bumpLumScale = 1.0f;
+        s_stages[i].bumpLumOffset = 0.0f;
         s_stages[i].texture = NULL;
     }
     s_boundTexture = NULL;
@@ -857,6 +874,7 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
     s_colourLogEnabled = Sys_GetOption("video.colour_log", 0) != 0;
     s_debugLightMask = (uint32_t)Sys_GetOption("video.light_mask", 0xff) & 0xffu;
     s_cpuLightsEnabled = Sys_GetOption("video.cpu_lights", 1) != 0;
+    s_multiTextureCpuLight = Sys_GetOption("video.mt_cpu_light", 1) != 0;
     if (!s_cpuLightsEnabled)
         Sys_Log("AMIGA: video.cpu_lights=0: point and spot lights are not drawn");
     if (s_debugLightMask != 0xffu)
@@ -1741,14 +1759,14 @@ extern "C" void Gfx_SetStageBumpEnvMat(int stage, int index, float value)
 extern "C" void Gfx_SetStageBumpEnvLScale(int stage, float value)
 {
     s_diag.stageSetterCalls++;
-    (void)stage;
-    (void)value;
+    if (stage >= 0 && stage < 2)
+        s_stages[stage].bumpLumScale = value;
 }
 extern "C" void Gfx_SetStageBumpEnvLOffset(int stage, float value)
 {
     s_diag.stageSetterCalls++;
-    (void)stage;
-    (void)value;
+    if (stage >= 0 && stage < 2)
+        s_stages[stage].bumpLumOffset = value;
 }
 
 extern "C" GfxVertexBuffer *Gfx_CreateVertexBuffer(uint32_t vertexCount)
@@ -2659,7 +2677,7 @@ GLint MapStageEnvMode(int stage)
     case GFX_TOP_BUMPENVMAP:
     case GFX_TOP_BUMPENVMAPLUMINANCE:
         LogDegradationOnce(DEGRADE_LOG_BUMPENVMAP,
-                           "AMIGA: BUMPENVMAP perturbation disabled; using base MODULATE path (per M3.2 policy)");
+                           "AMIGA: BUMPENVMAP perturbation disabled; the stage modulates by its luminance");
         return GL_MODULATE;
     default:
         return GL_MODULATE;
@@ -2708,6 +2726,15 @@ int Apply3DTextureStages(void)
             if (drawn->dirty)
                 UploadTexture(drawn);
             texId = drawn->glId;
+            // A bump stage only scales the next stage by its luminance: draw
+            // that, not the bump texel (port/bump_luminance.h).
+            if (st.colorOp == GFX_TOP_BUMPENVMAPLUMINANCE || st.colorOp == GFX_TOP_BUMPENVMAP) {
+                const unsigned int lumId = st.colorOp == GFX_TOP_BUMPENVMAP
+                    ? EnsureBumpLuminanceTexture(drawn, 0.0f, 1.0f)
+                    : EnsureBumpLuminanceTexture(drawn, st.bumpLumScale, st.bumpLumOffset);
+                if (lumId != 0)
+                    texId = lumId;
+            }
         }
 
         if (texId == 0) {
@@ -3206,7 +3233,10 @@ void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexC
     DrawGeometry geometry = { vertices, indices, indices != NULL ? indexCount : vertexCount, 0, { 0, 0, 0, 0 } };
     const GfxVertex *drawVertices = vertices;
     s_cpuLitDraw = 0;
-    if (s_cpuLightsEnabled && s_lightingEnabled && PositionalLightReachesDraw(&geometry)) {
+    const bool twoStages = s_multiTextureCpuLight && s_caps.maxTexUnits > 1 &&
+        GfxStage_DrawUsesTwoUnits(s_stages[0].colorOp, s_stages[0].texture != NULL, s_stages[1].colorOp,
+                                  s_stages[1].colorArg1, s_stages[1].colorArg2, s_stages[1].texture != NULL);
+    if (s_lightingEnabled && ((s_cpuLightsEnabled && PositionalLightReachesDraw(&geometry)) || twoStages)) {
         const GfxVertex *lit = CpuLightDraw(vertices, vertexCount, indices, indexCount);
         if (lit != NULL) {
             drawVertices = lit;
@@ -3640,6 +3670,43 @@ void UploadTexture(GfxTexture *texture)
         s_diag.textureUploads++;
     }
     texture->dirty = 0;
+    texture->lumValid = 0;
+}
+
+// The luminance texture of a BUMPENVMAPLUMINANCE stage (port/bump_luminance.h),
+// built on first use and after the texture changes. Returns 0 when it cannot
+// be built; the caller then binds the texture itself.
+unsigned int EnsureBumpLuminanceTexture(GfxTexture *texture, float scale, float offset)
+{
+    if (texture->data == NULL || BumpLuminance_TexelBytes(texture->format) == 0)
+        return 0;
+    if (texture->lumValid && texture->lumGlId != 0 && texture->lumScale == scale &&
+        texture->lumOffset == offset)
+        return texture->lumGlId;
+    const size_t size = (size_t)texture->width * (size_t)texture->height * 4u;
+    unsigned char *rgba = (unsigned char *)malloc(size);
+    if (rgba == NULL)
+        return 0;
+    BumpLuminance_Build(texture->format, texture->data, (long)texture->pitch, texture->width,
+                        texture->height, scale, offset, rgba);
+    if (texture->lumGlId == 0)
+        glGenTextures(1, &texture->lumGlId);
+    if (texture->lumGlId == 0) {
+        free(rgba);
+        return 0;
+    }
+    const int unit = s_glCache.activeUnit >= 0 && s_glCache.activeUnit < 2 ? s_glCache.activeUnit : 0;
+    glBindTexture(GL_TEXTURE_2D, texture->lumGlId);
+    s_glCache.boundTex[unit] = texture->lumGlId;
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, texture->width, texture->height, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, rgba);
+    free(rgba);
+    s_diag.textureUploads++;
+    texture->lumValid = 1;
+    texture->lumScale = scale;
+    texture->lumOffset = offset;
+    return texture->lumGlId;
 }
 
 } // namespace
@@ -3824,6 +3891,14 @@ extern "C" void Gfx_DestroyTexture(GfxTexture *texture)
                     glDisable(GL_TEXTURE_2D);
                     s_glCache.texEnabled[1] = 0;
                     SelectActiveUnit(0);
+                }
+                if (texture->lumGlId != 0) {
+                    for (int u = 0; u < 2; ++u) {
+                        if (s_glCache.boundTex[u] == texture->lumGlId)
+                            s_glCache.boundTex[u] = ~0u;
+                    }
+                    glDeleteTextures(1, &texture->lumGlId);
+                    texture->lumGlId = 0;
                 }
                 const bool stream = texture->data == NULL && texture->glWidth > 0;
                 if (stream && s_spareStreamCount < kSpareStreamTextures) {

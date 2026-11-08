@@ -45,4 +45,17 @@ static inline int GfxStage_AlphaReadsTexture(int alphaOp, int alphaArg1, int alp
     }
 }
 
+/*
+ * Whether a draw uses both texture units: stage 0 and stage 1 on, each with a
+ * texture, and stage 1 not a pass-through (which the MiniGL backend leaves
+ * off). MiniGL's lit two-unit path draws such a draw with flickering squares
+ * (the car's Bump environment pass), so the backend lights it on the CPU.
+ */
+static inline int GfxStage_DrawUsesTwoUnits(int op0, int hasTexture0, int op1, int arg1a, int arg1b,
+                                            int hasTexture1)
+{
+    return op0 != GFX_TOP_DISABLE && hasTexture0 && op1 != GFX_TOP_DISABLE && hasTexture1 &&
+           !GfxStage_ColourPassesCurrent(op1, arg1a, arg1b);
+}
+
 #endif

@@ -306,6 +306,12 @@ add_executable(stage_passthrough_test stage_passthrough.cpp)
 target_include_directories(stage_passthrough_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME stage_passthrough COMMAND stage_passthrough_test)
 
+# A bump stage modulates by its luminance on the MiniGL backend, read from the
+# channel the host shader uses (the car's Bump environment pass).
+add_executable(bump_luminance_test bump_luminance.cpp)
+target_include_directories(bump_luminance_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME bump_luminance COMMAND bump_luminance_test)
+
 # A backdrop draw's fog, expressed as GL linear fog on the MiniGL backend, stays
 # the vertex's specular alpha at every eye distance.
 add_executable(backdrop_fog_test backdrop_fog.cpp)
@@ -697,6 +703,11 @@ add_test(NAME sector_culling COMMAND sector_culling_test)
 add_executable(sector_geometry_test sector_geometry.cpp)
 target_link_libraries(sector_geometry_test PRIVATE opencmr2_platform)
 add_test(NAME sector_geometry COMMAND sector_geometry_test)
+
+# Bump maps are created in the renderer's bump format (SelectTextureFormats).
+add_executable(bump_format_test bump_format.cpp)
+target_link_libraries(bump_format_test PRIVATE opencmr2_platform)
+add_test(NAME bump_format COMMAND bump_format_test)
 
 add_executable(headlight_collision_test headlight_collision.cpp)
 target_link_libraries(headlight_collision_test PRIVATE opencmr2_platform)

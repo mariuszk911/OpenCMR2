@@ -1570,6 +1570,12 @@ void CGraphics::SelectTextureFormats(void)
         m_texFormatBump32 = m_texFormatBump16;
         m_texFormatBump32.format = m_texFormatBump16.format;
     }
+    // PORT: the renderers offer one bump format, and CreateTextureSurface
+    // takes it only when there are two: bump maps fell back to BGRX8.
+    if (m_hasTexFormatBump32 && !m_hasTexFormatBump16) {
+        m_hasTexFormatBump16 = TRUE;
+        m_texFormatBump16 = m_texFormatBump32;
+    }
 
     if (g_pGraphics->depth != 16) {
         if (g_pGraphics->depth == 32) {

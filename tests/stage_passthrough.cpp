@@ -33,6 +33,17 @@ int main()
     REQUIRE(GfxStage_AlphaReadsTexture(GFX_TOP_MODULATE, GFX_TA_CURRENT, GFX_TA_TEXTURE));
     REQUIRE(!GfxStage_AlphaReadsTexture(GFX_TOP_MODULATE, GFX_TA_CURRENT, GFX_TA_DIFFUSE));
 
+    // Two units: the Bump environment pass (bump luminance, then the flare
+    // modulating CURRENT) on; the Standard pass's pass-through stage 1 off.
+    REQUIRE(GfxStage_DrawUsesTwoUnits(GFX_TOP_BUMPENVMAPLUMINANCE, 1, GFX_TOP_MODULATE, GFX_TA_TEXTURE,
+                                      GFX_TA_CURRENT, 1));
+    REQUIRE(!GfxStage_DrawUsesTwoUnits(GFX_TOP_MODULATE, 1, GFX_TOP_SELECTARG2, GFX_TA_TEXTURE,
+                                       GFX_TA_CURRENT, 1));
+    REQUIRE(!GfxStage_DrawUsesTwoUnits(GFX_TOP_MODULATE, 1, GFX_TOP_DISABLE, GFX_TA_TEXTURE, GFX_TA_CURRENT, 1));
+    REQUIRE(!GfxStage_DrawUsesTwoUnits(GFX_TOP_DISABLE, 1, GFX_TOP_MODULATE, GFX_TA_TEXTURE, GFX_TA_CURRENT, 1));
+    REQUIRE(!GfxStage_DrawUsesTwoUnits(GFX_TOP_MODULATE, 0, GFX_TOP_MODULATE, GFX_TA_TEXTURE, GFX_TA_CURRENT, 1));
+    REQUIRE(!GfxStage_DrawUsesTwoUnits(GFX_TOP_MODULATE, 1, GFX_TOP_MODULATE, GFX_TA_TEXTURE, GFX_TA_CURRENT, 0));
+
     printf("stage_passthrough: ok\n");
     return 0;
 }
