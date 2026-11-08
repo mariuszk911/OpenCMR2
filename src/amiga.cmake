@@ -143,6 +143,13 @@ target_include_directories(amiga_minigl_tl_rects_test PRIVATE ${MINIGL_INCLUDE_D
 target_link_directories(amiga_minigl_tl_rects_test PRIVATE ${MINIGL_LIBRARY_DIR})
 target_link_libraries(amiga_minigl_tl_rects_test PRIVATE minigl)
 
+# MiniGL lit two-texture-unit reproducer: the car's Bump reflection pass drawn
+# lit by GL and lit on the CPU must match, and repeat exactly frame to frame.
+add_executable(amiga_minigl_lit_multitexture_test ${PROJECT_SOURCE_DIR}/tests/amiga/minigl_lit_multitexture_test.c)
+target_include_directories(amiga_minigl_lit_multitexture_test PRIVATE ${MINIGL_INCLUDE_DIR})
+target_link_directories(amiga_minigl_lit_multitexture_test PRIVATE ${MINIGL_LIBRARY_DIR})
+target_link_libraries(amiga_minigl_lit_multitexture_test PRIVATE minigl m)
+
 # Movie-frame upload check against MiniGL (Domain B, target only): a full
 # upload and two row-run sub-uploads must reach the framebuffer exactly.
 add_executable(amiga_minigl_movie_upload_test ${PROJECT_SOURCE_DIR}/tests/amiga/minigl_movie_upload_test.c
