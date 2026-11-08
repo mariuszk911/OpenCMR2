@@ -1,21 +1,13 @@
-// Stubs on the host: the black movie frame, the unavailable network and
-// the no-op Amiga profiling hooks. The Amiga target compiles the same
-// translation units, so this test protects the contract the game relies on.
+// Stubs on the host: the unavailable network and the no-op Amiga profiling
+// hooks. The Amiga target compiles the same translation units, so this test
+// protects the contract the game relies on. The movie player's fallback (one
+// black frame) is tested with the player itself, in tests/movie_amiga.cpp.
 #include "diagnostics/timing.h"
-#include "port/gfx.h"
-#include "port/movie.h"
 #include "port/net.h"
 
 #include <cstdio>
 
 namespace {
-
-int clearCount;
-int presentCount;
-int logCount;
-DWORD lastClearFlags;
-DWORD lastClearColor;
-BOOL lastVsync;
 
 int providerCalls;
 int sessionCalls;
@@ -54,61 +46,8 @@ void Check(bool condition, const char *what)
 
 } // namespace
 
-extern "C" void Gfx_Clear(DWORD flags, DWORD color, float z)
-{
-    (void)z;
-    ++clearCount;
-    lastClearFlags = flags;
-    lastClearColor = color;
-}
-
-extern "C" void Gfx_Present(BOOL vsync)
-{
-    ++presentCount;
-    lastVsync = vsync;
-}
-
-extern "C" void Sys_Log(const char *format, ...)
-{
-    (void)format;
-    ++logCount;
-}
-
 int main()
 {
-    // ---- movie ------------------------------------------------------------
-    Movie *movie = Movie_Open("Movies\\intro.bik", 0);
-    if (!movie) {
-        std::fprintf(stderr, "FAIL: Movie_Open succeeds without the file\n");
-        return 1;
-    }
-    Check(Movie_GetWidth(movie) == 640 && Movie_GetHeight(movie) == 480, "movie is 640x480");
-    Check(Movie_GetFrameCount(movie) == 1, "movie has one frame");
-    Check(Movie_GetFrameNumber(movie) == 1, "frame numbers start at 1");
-
-    Movie_DecodeFrame(movie);
-    Movie_Present(movie, 0, 0, 640, 480);
-    Check(clearCount == 1, "present clears the frame");
-    Check(presentCount == 1, "present presents once");
-    Check(lastClearColor == 0xff000000, "the stub frame is black");
-    Check((lastClearFlags & GFX_CLEAR_TARGET) != 0, "present clears the target");
-    Check(lastVsync == TRUE, "present uses vsync as the host path does");
-
-    Movie_NextFrame(movie);
-    Check(Movie_GetFrameNumber(movie) == 2, "next frame advances the frame number");
-    Check(Movie_GetFrameNumber(movie) > Movie_GetFrameCount(movie),
-          "the intro loop ends after one frame");
-    Movie_NextFrame(movie);
-    Check(Movie_GetFrameNumber(movie) == 2, "next frame does not run past the count");
-    Check(Movie_Wait(movie) == FALSE, "the stub never waits");
-    Movie_Close(movie);
-
-    Movie *unnamed = Movie_Open(NULL, 0);
-    Check(unnamed != NULL, "Movie_Open accepts a null path");
-    Movie_Close(unnamed);
-    Movie_Close(NULL);
-    Check(logCount == 2, "the stub logs each open once");
-
     // ---- network ----------------------------------------------------------
     NetGuid application = {};
     NetSessionDesc desc = {};

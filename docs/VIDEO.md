@@ -67,9 +67,54 @@ Measured on the PiStorm (MiniGL 29.1, `build/amiga/minigl-movie-upload-pistorm.l
 - **Edges.** With linear filtering the right and bottom edge of the frame would blend with the
   transparent padding; the movie code insets the texture coordinates by half a texel.
 
-The wrapper is verified inside the game's own renderer when the movie code uses it (phase 7):
-a test harness that opens the renderer outside the game crashed in `Gfx_SetVideoMode`, so
+The wrapper is verified inside the game's own renderer by the movie player (below); a test
+harness that opens the renderer outside the game crashed in `Gfx_SetVideoMode`, so
 `tests/amiga/minigl_movie_upload_test.c` drives MiniGL directly with the same call sequence.
+
+`Gfx_DestroyTexture` keeps the GL names of the last two destroyed stream textures and
+`GfxMiniGL_CreateStreamTexture` reuses one of the same padded size: MiniGL 29.1 moves deleted
+texture memory into a pool that only its texture renames use, so a fresh pair per movie kept
+4 MB per movie until exit (measured: free memory 4,194,960 bytes lower after every movie;
+with reuse it returns to the value before the open).
+
+## Amiga playback (`src/video/movie_amiga.cpp`)
+
+Same observable rules as `movie.cpp`: frame numbers from 1, clock and sound start at the first
+frame shown, the last frame is kept for its display interval, closing or skipping releases the
+sound at once, render state is pushed and popped around the movie pass, `video.stretch_movies`
+and the aspect fit with black bars (`movie_pacing.h`, shared with the host test).
+
+- **Per frame.** `Movie_DecodeFrame` decodes with `Decode(frame, &planes)`, queues the sound and
+  ORs `planes.changed` into a pending map. `Movie_Present` clears (which locks the display and
+  begins the frame), converts the pending macroblocks into one persistent RGBA8 frame, marks
+  their macroblock rows stale in both textures, uploads the stale row runs of the texture the
+  previous frame did not draw from, draws the fitted quad and presents.
+- **File reads.** The decoder reads through a 256 KB read-ahead block instead of one seek and
+  read per packet (7-9 ms each on the target).
+- **Frame dropping** (`video.movie_frame_drop`, default 1). The game's loop never skips a frame,
+  so `Movie_Present` skips conversion, upload and present when the next frame is already due.
+  Decoding still happens and the pending map keeps the skipped frames' changes. Never the first
+  or the last frame, never more than three in a row.
+- **Sound and latency.** The sound is a mixer stream through AHI (`docs/AMIGA_PORT.md`, audio
+  output). The movie clock starts `AmigaAhi_GetLatencyMs()` (140 ms with 20 ms blocks) after
+  the first frame is shown, so the picture waits for the output latency. Judged in sync by ear
+  on the target (2026-11-08).
+- **Fallback.** A missing or broken file, a failed allocation or `video.movies = 0` logs the
+  reason and plays one black 640x480 frame: `Movie_Open` never returns NULL, because the game
+  loops on a "no CD" requester while it does.
+- **Log.** One line at open (size, rate, sound format, latency, free memory) and one at close:
+  frames shown and dropped, fps, average and maximum microseconds of decode, convert, upload
+  and present; then the stream's underruns and the free memory after closing.
+
+Measured on the PiStorm (68060/PAL, Emu68), whole movies, 2026-11-08:
+
+| Movie | Shown / frames | Dropped | fps | Decode avg/max ms | Convert | Upload | Sound |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `cm.bik` (25 fps) | 549 / 549 | 0 | 25.00 | 12.0 / 49.7 | 2.8 / 8.4 | 15.1 / 43.2 | 0 frames dropped, 1 underrun (end) |
+| `intro.bik` (30 fps) | 2735 / 2760 | 25 | 29.72 | 11.3 / 35.7 | 3.3 / 8.1 | 11.1 / 45.2 | 0 frames dropped, 1 underrun (end) |
+| `FIN.bik` (30 fps, track 0) | 656 / 660 | 4 | 29.81 | 12.4 / 33.1 | 3.5 / 9.1 | 12.7 / 31.7 | 0 frames dropped, 1 underrun (end) |
+
+AHI reported `0 late` blocks for every run.
 
 ## Tests
 
@@ -107,10 +152,21 @@ an empty filename suppresses that output. Test dumps are not game assets to ship
 On the 68k target the float math differs from the host in the last bits, so
 audio is checked by tolerance, not by hash: dump a host reference with
 `bink_decode FILE 0 "" REF.f32 FRAMES` and run
-`amiga_bink_audio_check FILE REF.f32 [FRAMES]` (maximum absolute difference and
-the number of samples over 1e-5). `amiga_bink_planes_check FILE [FRAMES]` does
-the same for the planes and the changed-macroblock conversion, against the
-decoder's own BGRX output.
+`amiga_bink_audio_check FILE REF.f32 [FRAMES [planes]]` (maximum absolute difference and
+the number of samples over 1e-5); `planes` decodes as the game does (planes and
+sound together), the combination that hid the GCC fault in `docs/AMIGA_PORT.md`.
+`amiga_bink_planes_check FILE [FRAMES]` does the same for the planes and the
+changed-macroblock conversion, against the decoder's own BGRX output. A decoder
+change is not done until, on the target, the planes check over the whole of
+`cm.bik` gives the host hash and the audio check passes in both modes.
+
+The Amiga player has host tests of its own: `movie_pacing` (due times across the
+clock wrap, the drop rule, the aspect fit) and `movie_amiga`, which runs
+`movie_amiga.cpp` against fake renderer, audio and file layers: frame contents in
+both stream textures, texture coordinates, latency wait, dropped frames keeping
+their changes, `video.movie_frame_drop = 0`, every fallback to the black frame,
+and a corrupt packet. The mixer stream (wrap-around, underrun and resume,
+44.1/22.05 to 48 kHz continuity, stop without a click) is in `audio_mixer`.
 
 ### Reference hashes
 

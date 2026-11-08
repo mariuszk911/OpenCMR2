@@ -82,6 +82,7 @@ add_library(opencmr2_platform OBJECT
     audio/audio_ahi.cpp
     audio/mixer.cpp
     audio/msadpcm.cpp
+    video/movie_amiga.cpp
     platform/amiga/amiga_ahi.c
     port/intdiv.cpp
     platform/amiga/minigl_abi_check.cpp)
@@ -93,10 +94,9 @@ target_include_directories(opencmr2_platform PRIVATE ${MINIGL_INCLUDE_DIR})
 set_source_files_properties(platform/amiga/amiga_libfix.c PROPERTIES COMPILE_FLAGS "-fno-builtin -fno-math-errno")
 
 # ---- Stubs (Domain B) ------------------------------------------------------
-# The features left out on this target: movies, network, profiling and the
-# host-only render enhancements.
+# The features left out on this target: network, profiling and the host-only
+# render enhancements.
 add_library(opencmr2_amiga_stubs OBJECT
-    video/movie_stub.cpp
     net/net_stub.cpp
     platform/amiga/amiga_diagnostics.cpp
     render/amiga_enhancement_stubs.cpp)
@@ -118,7 +118,7 @@ add_executable(opencmr2
     $<TARGET_OBJECTS:opencmr2_amiga_stubs>)
 opencmr2_amiga_stack(opencmr2)
 target_compile_definitions(opencmr2 PRIVATE OPENCMR2_AMIGA_STACK=${OPENCMR2_AMIGA_STACK})
-target_link_libraries(opencmr2 PRIVATE opencmr2_domain_a opencmr2_platform)
+target_link_libraries(opencmr2 PRIVATE opencmr2_domain_a opencmr2_platform opencmr2_bink)
 # bridge_client.c is compiled into opencmr2_platform; no prebuilt library
 # (the SDK .a is not in a format the GCC hunk linker accepts).
 target_link_directories(opencmr2 PRIVATE ${MINIGL_LIBRARY_DIR})
@@ -158,8 +158,8 @@ add_executable(amiga_sys_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_time_test.c
 target_include_directories(amiga_sys_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 opencmr2_amiga_stack(amiga_sys_test)
 
-# Bink decoder (Domain B, no NDK): built for the target but not yet linked into
-# opencmr2. The benchmark is the Phase 2 gate of docs/BINK_AMIGA_PLAN.md.
+# Bink decoder and YUV converter (Domain B, no NDK), linked into opencmr2 for
+# video/movie_amiga.cpp and into the target checks below.
 add_library(opencmr2_bink STATIC video/bink_decoder.cpp video/yuv_rgba.cpp)
 target_include_directories(opencmr2_bink PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # GCC 6.5 for m68k keeps values in call-clobbered registers (a0/a1/d0/d1) across

@@ -339,10 +339,9 @@ foreach(bfl_variant bfl_archive bfl_archive_be)
 endforeach()
 target_compile_definitions(bfl_archive_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
-# M1 stubs: a black movie frame, an unavailable network and no-op Amiga
-# profiling. The Amiga target compiles the same translation units.
+# M1 stubs: an unavailable network and no-op Amiga profiling. The Amiga
+# target compiles the same translation units.
 add_executable(amiga_stubs_test amiga_stubs.cpp
-    ${PROJECT_SOURCE_DIR}/src/video/movie_stub.cpp
     ${PROJECT_SOURCE_DIR}/src/net/net_stub.cpp
     ${PROJECT_SOURCE_DIR}/src/platform/amiga/amiga_diagnostics.cpp
     ${PROJECT_SOURCE_DIR}/src/diagnostics/observer.cpp)
@@ -399,6 +398,16 @@ add_test(NAME yuv_rgba COMMAND yuv_rgba_test)
 add_executable(movie_playback_test movie_playback.cpp ${PROJECT_SOURCE_DIR}/src/video/movie.cpp)
 target_link_libraries(movie_playback_test PRIVATE opencmr2_bink)
 add_test(NAME movie_playback COMMAND movie_playback_test)
+
+# Movie timing and layout rules shared by the Amiga player.
+add_executable(movie_pacing_test movie_pacing.cpp)
+target_include_directories(movie_pacing_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME movie_pacing COMMAND movie_pacing_test)
+
+# The Amiga movie player against fake renderer, audio and file layers.
+add_executable(movie_amiga_test movie_amiga.cpp ${PROJECT_SOURCE_DIR}/src/video/movie_amiga.cpp)
+target_link_libraries(movie_amiga_test PRIVATE opencmr2_bink)
+add_test(NAME movie_amiga COMMAND movie_amiga_test)
 
 add_executable(movie_render_state_test movie_render_state.cpp
     ${PROJECT_SOURCE_DIR}/src/diagnostics/observer.cpp

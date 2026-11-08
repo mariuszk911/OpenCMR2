@@ -15,6 +15,7 @@
 
 #include <exec/types.h>
 #include <exec/io.h>
+#include <exec/memory.h>
 #include <exec/ports.h>
 #include <devices/timer.h>
 #include <devices/input.h>
@@ -1596,6 +1597,11 @@ extern "C" int Sys_PollEvent(SysEvent *event)
     if (TakePendingText(event))
         return 1;
     return PollEvent(event, NULL);
+}
+
+extern "C" unsigned long AmigaSys_GetFreeMemory(void)
+{
+    return (unsigned long)AvailMem(MEMF_ANY);
 }
 
 extern "C" void AmigaSys_GetKeyState(unsigned char keys[256])

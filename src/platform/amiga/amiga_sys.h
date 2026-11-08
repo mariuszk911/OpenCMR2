@@ -44,6 +44,10 @@ void *AmigaSys_CreateGameWindow(int width, int height, const char *title);
 void AmigaSys_GetKeyState(unsigned char keys[256]);
 int AmigaSys_IsKeyDown(int dik);
 
+/* Free memory of any type in bytes (AvailMem(MEMF_ANY)), for leak checks in
+   the logs. */
+unsigned long AmigaSys_GetFreeMemory(void);
+
 #ifdef __cplusplus
 }
 #endif
