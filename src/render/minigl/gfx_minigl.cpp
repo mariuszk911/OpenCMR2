@@ -6,6 +6,7 @@
 #include "port/light_range.h"
 #include "port/d3d_light.h"
 #include "port/gfx.h"
+#include "render/minigl/gfx_minigl_movie.h"
 #include "port/sys.h"
 #include "platform/amiga/amiga_sys.h"
 
@@ -45,6 +46,10 @@ struct GfxTexture {
     int samplerWrap;
     int samplerMinFilter;
     int samplerMagFilter;
+    // Stream textures only (GfxMiniGL_CreateStreamTexture): the size of the GL
+    // texture, the next powers of two above width and height.
+    int glWidth;
+    int glHeight;
 };
 
 struct GfxVertexBuffer {
@@ -3725,6 +3730,98 @@ extern "C" GfxTexture *Gfx_CreateTexture(int width, int height, int format, int 
     texture->pitch = pitch;
     texture->dirty = 1;
     return texture;
+}
+
+// ---- stream textures (movie frames) --------------------------------------
+// See gfx_minigl_movie.h. A stream texture has data == NULL, so every path
+// that reads texture->data (UploadTexture, Gfx_LockTexture, Gfx_CopyTexture,
+// TextureToRGBA, destruction) already skips it, and dirty stays 0 so the
+// bind paths never try to upload it; its GL name exists after the first
+// GfxMiniGL_UploadRows.
+//
+// The GL texture is padded to powers of two and only its top-left
+// width x height is written: MiniGL 29.1 on the PiStorm samples a 640x480
+// texture with shifted rows (tests/amiga/minigl_movie_upload_test.c, "npot"),
+// but a 1024x512 texture exactly.
+static int NextPowerOfTwo(int value)
+{
+    int result = 1;
+    while (result < value)
+        result <<= 1;
+    return result;
+}
+
+extern "C" GfxTexture *GfxMiniGL_CreateStreamTexture(int width, int height)
+{
+    if (width <= 0 || height <= 0 || width > 4096 || height > 4096)
+        return NULL;
+    GfxTexture *texture = new (std::nothrow) GfxTexture;
+    if (texture == NULL)
+        return NULL;
+    memset(texture, 0, sizeof(*texture));
+    texture->width = width;
+    texture->height = height;
+    texture->glWidth = NextPowerOfTwo(width);
+    texture->glHeight = NextPowerOfTwo(height);
+    texture->format = GFX_FORMAT_BGRX8; // opaque; the stored pixels are RGBA with alpha 255
+    texture->mipLevels = 1;
+    return texture;
+}
+
+extern "C" int GfxMiniGL_GetStreamTextureSize(const GfxTexture *texture, int *glWidth, int *glHeight)
+{
+    if (texture == NULL || texture->data != NULL || texture->glWidth <= 0 || glWidth == NULL || glHeight == NULL)
+        return 0;
+    *glWidth = texture->glWidth;
+    *glHeight = texture->glHeight;
+    return 1;
+}
+
+extern "C" int GfxMiniGL_UploadRows(GfxTexture *texture, const uint8_t *rgba, int y0, int rows)
+{
+    if (texture == NULL || rgba == NULL || texture->parent != NULL || texture->data != NULL ||
+        texture->glWidth <= 0 || y0 < 0 || rows <= 0 ||
+        rows > texture->height || y0 > texture->height - rows)
+        return 0;
+    const bool created = texture->glId == 0;
+    unsigned char *blank = NULL;
+    if (created) {
+        // The padded GL texture starts blank (black, alpha 0); freed right after.
+        blank = (unsigned char *)calloc((size_t)texture->glWidth * (size_t)texture->glHeight, 4);
+        if (blank == NULL) {
+            Sys_Log("gfx: no memory for the %dx%d stream texture", texture->glWidth, texture->glHeight);
+            return 0;
+        }
+    }
+    if (!EnsureLocked()) {
+        free(blank);
+        return 0;
+    }
+    const int unit = s_glCache.activeUnit >= 0 && s_glCache.activeUnit < 2 ? s_glCache.activeUnit : 0;
+    if (created)
+        glGenTextures(1, &texture->glId);
+    if (texture->glId == 0) {
+        Sys_Log("gfx: glGenTextures failed for the %dx%d stream texture", texture->glWidth, texture->glHeight);
+        free(blank);
+        return 0;
+    }
+    glBindTexture(GL_TEXTURE_2D, texture->glId);
+    s_glCache.boundTex[unit] = texture->glId;
+    // Tightly packed rows: MiniGL then stores the caller's rows directly, with
+    // no conversion buffer.
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (created) {
+        ApplyStageSampler(unit, texture, texture->glId);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, texture->glWidth, texture->glHeight, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, blank);
+        free(blank);
+        // The first upload stores the whole frame, whatever the row range.
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, texture->width, texture->height, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y0, texture->width, rows, GL_RGBA, GL_UNSIGNED_BYTE,
+                        rgba + (size_t)y0 * (size_t)texture->width * 4);
+    }
+    return 1;
 }
 
 extern "C" void Gfx_Finish(void)

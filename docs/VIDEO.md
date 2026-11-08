@@ -39,6 +39,38 @@ restores its viewport. This keeps the game's cached state setters consistent:
 fonts and menu sprites retain their texture operations and transparency after
 the intro or a country video.
 
+## Amiga movie frames: stream textures (phase 5 of the Bink plan)
+
+The Amiga build will not copy decoded frames into a CPU texture. `src/render/minigl/gfx_minigl_movie.h`
+adds stream textures for it: `GfxMiniGL_CreateStreamTexture`,
+`GfxMiniGL_GetStreamTextureSize` and `GfxMiniGL_UploadRows`. A stream texture has no CPU
+copy (`data == NULL`), so every path that reads `texture->data` skips it and its `dirty` flag
+stays 0; it binds and draws like any other texture, and its GL name appears on the first upload.
+
+Measured on the PiStorm (MiniGL 29.1, `build/amiga/minigl-movie-upload-pistorm.log`):
+
+- **A 640x480 texture is not sampled correctly.** Rows shift from x = 32 on and the last
+  pixels are never written (284,672 of 307,200 pixels wrong). The stream texture is therefore
+  padded to the next powers of two (1024x512): only its top-left 640x480 is filled, and the frame
+  is drawn with texture coordinates up to 640/1024 and 480/512. With that, the full frame and two
+  replaced row runs read back exactly (0 pixels over tolerance, worst channel difference 0).
+  The plan had assumed non-power-of-two sizes were fine from reading the library source.
+- **Upload cost.** About 1.5 ms for 48 rows (32 us per row), 14.4 ms for a full frame
+  (`glTexSubImage2D`, average of 10), 43 ms once to create the padded texture. A frame whose
+  macroblocks are mostly flagged (about 55%) touches nearly every macroblock row, so the upload
+  of changed row runs approaches the full-frame figure; this is the largest remaining per-frame
+  cost after decoding and conversion.
+- **Alternate two textures.** MiniGL protects a texture only against being overwritten between
+  draws of the same pass. A render still running from the previous frame can read a texture
+  that is overwritten in place, so the movie code uploads frame N to the texture frame N-1 did
+  not draw from, and uploads the union of the last two frames' changed rows to each.
+- **Edges.** With linear filtering the right and bottom edge of the frame would blend with the
+  transparent padding; the movie code insets the texture coordinates by half a texel.
+
+The wrapper is verified inside the game's own renderer when the movie code uses it (phase 7):
+a test harness that opens the renderer outside the game crashed in `Gfx_SetVideoMode`, so
+`tests/amiga/minigl_movie_upload_test.c` drives MiniGL directly with the same call sequence.
+
 ## Tests
 
 The default CTest suite needs no game assets or codec tools. It exercises padded

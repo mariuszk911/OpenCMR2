@@ -143,6 +143,15 @@ target_include_directories(amiga_minigl_tl_rects_test PRIVATE ${MINIGL_INCLUDE_D
 target_link_directories(amiga_minigl_tl_rects_test PRIVATE ${MINIGL_LIBRARY_DIR})
 target_link_libraries(amiga_minigl_tl_rects_test PRIVATE minigl)
 
+# Movie-frame upload check against MiniGL (Domain B, target only): a full
+# upload and two row-run sub-uploads must reach the framebuffer exactly.
+add_executable(amiga_minigl_movie_upload_test ${PROJECT_SOURCE_DIR}/tests/amiga/minigl_movie_upload_test.c
+    platform/amiga/amiga_sys.cpp)
+target_include_directories(amiga_minigl_movie_upload_test PRIVATE ${MINIGL_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_directories(amiga_minigl_movie_upload_test PRIVATE ${MINIGL_LIBRARY_DIR})
+target_link_libraries(amiga_minigl_movie_upload_test PRIVATE minigl)
+opencmr2_amiga_stack(amiga_minigl_movie_upload_test)
+
 # Sys time/logging smoke: Domain B, no MiniGL. Not staged.
 add_executable(amiga_sys_test ${PROJECT_SOURCE_DIR}/tests/amiga/sys_time_test.c
     platform/amiga/amiga_sys.cpp)
