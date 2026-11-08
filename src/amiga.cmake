@@ -409,3 +409,8 @@ target_compile_options(amiga_ftoi_ties_test PRIVATE "SHELL:-include ${CMAKE_CURR
 set_source_files_properties(platform/amiga/amiga_libfix.c TARGET_DIRECTORY amiga_ftoi_ties_test
     PROPERTIES COMPILE_FLAGS "-fno-builtin -fno-math-errno")
 opencmr2_amiga_stack(amiga_ftoi_ties_test)
+
+add_executable(amiga_replay_packet_test ${PROJECT_SOURCE_DIR}/tests/replay_packet.cpp)
+target_include_directories(amiga_replay_packet_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR})
+target_compile_options(amiga_replay_packet_test PRIVATE "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/port/types.h")
+opencmr2_amiga_stack(amiga_replay_packet_test)

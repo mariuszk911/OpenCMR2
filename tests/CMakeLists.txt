@@ -431,6 +431,13 @@ target_include_directories(ftoi_ties_test PRIVATE ${PROJECT_SOURCE_DIR}/game)
 target_compile_options(ftoi_ties_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")
 add_test(NAME ftoi_ties COMMAND ftoi_ties_test)
 
+# Replay input packet run checks read the same bits on every byte order. Also
+# built for the Amiga target (src/amiga.cmake).
+add_executable(replay_packet_test replay_packet.cpp)
+target_include_directories(replay_packet_test PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/game)
+target_compile_options(replay_packet_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")
+add_test(NAME replay_packet COMMAND replay_packet_test)
+
 # Tests that run game code, on every target.
 add_executable(math_tables_test math_tables.cpp)
 target_link_libraries(math_tables_test PRIVATE opencmr2_platform)

@@ -113,4 +113,26 @@ struct ReplaySample {
     unsigned int pad28 : 4;
 };
 
+// Replay input packet (4 bytes, one per recorded frame, see
+// Replay_EncodeControlPacket): bytes 0, 1 and 3 and the top two bits of byte 2
+// hold the controls, the low six bits of byte 2 the run's repeat count.
+// PORT: AMIGA: the original read these through LSB-first bitfields; GCC on
+// big-endian m68k allocates bitfields from the MSB, so the recorder compared
+// the count's low bits instead of the byte 2 control flags and folded those
+// control changes into the previous run (a replay of a just-driven stage then
+// left the recorded line). Masks give the same bits on every target.
+#define REPLAY_PACKET_COUNT_MASK 0x3f
+
+inline BYTE ReplayPacket_Count(const BYTE *packet)
+{
+    return (BYTE)(packet[2] & REPLAY_PACKET_COUNT_MASK);
+}
+
+// Whether two packets carry the same controls, ignoring the repeat count.
+inline int ReplayPacket_SameControls(const BYTE *a, const BYTE *b)
+{
+    return a[0] == b[0] && a[1] == b[1] && a[3] == b[3] &&
+           (a[2] & ~REPLAY_PACKET_COUNT_MASK & 0xff) == (b[2] & ~REPLAY_PACKET_COUNT_MASK & 0xff);
+}
+
 #endif

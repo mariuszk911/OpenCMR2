@@ -8418,34 +8418,18 @@ void StageObject_StartReplaySession(char restart)
 
 // Checks whether a replay packet agrees with current controls.
 // match 57%: below the 90% bar; kept as FUNCTION on purpose so reccmp measures it (see CONVENCIONES)
-// Replay input packet (4 bytes, one per recorded frame).
-struct ReplayPacket {
-    BYTE b0lo : 2;
-    BYTE b0hi : 6;
-    BYTE b1lo : 2;
-    BYTE b1hi : 6;
-    BYTE count : 6;
-    BYTE b2hi : 2;
-    BYTE b3lo : 7;
-    BYTE b3hi : 1;
-};
-
 // FUNCTION: CMR2 0x0046cbe0
 int Replay_CanExtendControlPacketRun(BYTE *pPacket, BYTE car)
 {
-    ReplayPacket *packet = (ReplayPacket *)pPacket;
-    ReplayPacket current;
+    BYTE current[4] = { 0, 0, 0, 0 };
+    BYTE count = ReplayPacket_Count(pPacket);
 
-    if (packet->count == 0)
+    if (count == 0)
         return 1;
-    if (packet->count >= 0x3f)
+    if (count >= REPLAY_PACKET_COUNT_MASK)
         return 0;
-    Replay_EncodeCarControls((BYTE *)&current, car);
-    if (packet->b0hi == current.b0hi && packet->b1hi == current.b1hi && packet->b3lo == current.b3lo &&
-        packet->b1lo == current.b1lo && packet->b2hi == current.b2hi && packet->b0lo == current.b0lo &&
-        packet->b3hi == current.b3hi)
-        return 1;
-    return 0;
+    Replay_EncodeCarControls(current, car);
+    return ReplayPacket_SameControls(pPacket, current);
 }
 
 // Interpolates a stage object record between two frames.
