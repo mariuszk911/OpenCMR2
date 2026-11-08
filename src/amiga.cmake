@@ -150,6 +150,13 @@ target_include_directories(amiga_minigl_lit_multitexture_test PRIVATE ${MINIGL_I
 target_link_directories(amiga_minigl_lit_multitexture_test PRIVATE ${MINIGL_LIBRARY_DIR})
 target_link_libraries(amiga_minigl_lit_multitexture_test PRIVATE minigl m)
 
+# Draw-cost benchmark, MiniGL side (the ogles2 side, ogles2_draw_bench.c, is
+# built with the ogles2 SDK's clib2 flags, see its header).
+add_executable(amiga_minigl_draw_bench ${PROJECT_SOURCE_DIR}/tests/amiga/minigl_draw_bench.c)
+target_include_directories(amiga_minigl_draw_bench PRIVATE ${MINIGL_INCLUDE_DIR})
+target_link_directories(amiga_minigl_draw_bench PRIVATE ${MINIGL_LIBRARY_DIR})
+target_link_libraries(amiga_minigl_draw_bench PRIVATE minigl m)
+
 # Movie-frame upload check against MiniGL (Domain B, target only): a full
 # upload and two row-run sub-uploads must reach the framebuffer exactly.
 add_executable(amiga_minigl_movie_upload_test ${PROJECT_SOURCE_DIR}/tests/amiga/minigl_movie_upload_test.c
