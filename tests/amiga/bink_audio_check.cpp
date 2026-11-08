@@ -4,8 +4,10 @@
  * reference by tolerance instead of by hash:
  *
  *     bink_decode FILE 0 "" REF.f32 FRAMES        (host, little-endian float32)
- *     amiga_bink_audio_check FILE REF.f32 [FRAMES]
+ *     amiga_bink_audio_check FILE REF.f32 [FRAMES [planes]]
  *
+ * With "planes" it decodes as the game does (Decode(frame, &planes): no BGRX
+ * conversion) and also checks that every frame's sample count is sane.
  * Reports the largest absolute difference, the number of samples that differ
  * by more than 1e-5 and the time per frame of Decode (video, BGRX conversion and
  * audio together). Exit status 10 on failure.
@@ -41,7 +43,7 @@ int main(int argc, char **argv)
 {
     AmigaSys_SetCommandLine("amiga_bink_audio_check");
     if (argc < 3) {
-        printf("usage: amiga_bink_audio_check FILE REF.f32 [FRAMES]\n");
+        printf("usage: amiga_bink_audio_check FILE REF.f32 [FRAMES [planes]]\n");
         return 5;
     }
     FILE *movie = fopen(argv[1], "rb");
@@ -56,18 +58,28 @@ int main(int argc, char **argv)
             const Bink::Info info = decoder.GetInfo();
             const unsigned limit = argc > 3 ? (unsigned)atoi(argv[3]) : 0;
             const unsigned count = limit && limit < info.frames ? limit : info.frames;
+            const bool usePlanes = argc > 4 && strcmp(argv[4], "planes") == 0;
             Bink::Frame frame;
+            Bink::Planes planes = {};
             double maxDiff = 0, decodeMs = 0;
             unsigned long samples = 0, over = 0;
             status = 0;
             for (unsigned i = 0; i < count && status == 0; ++i) {
                 const double start = Sys_GetTicksPrecise();
-                if (!decoder.Decode(frame)) {
+                if (!(usePlanes ? decoder.Decode(frame, &planes) : decoder.Decode(frame))) {
                     printf("audio_check: FAIL frame %u: %s\n", i + 1, decoder.Error().c_str());
                     status = 10;
                     break;
                 }
                 decodeMs += Sys_GetTicksPrecise() - start;
+                if (frame.audio.size() > 8u * 1024u * 1024u || frame.bgrx.size() != (usePlanes ? 0u : size_t(info.width) * info.height * 4)) {
+                    printf("audio_check: FAIL frame %u: %lu samples, %lu BGRX bytes\n", i + 1,
+                           (unsigned long)frame.audio.size(), (unsigned long)frame.bgrx.size());
+                    status = 10;
+                    break;
+                }
+                if (i < 3)
+                    printf("audio_check: frame %u: %lu samples\n", i + 1, (unsigned long)frame.audio.size());
                 for (size_t s = 0; s < frame.audio.size(); ++s) {
                     uint8_t raw[4];
                     if (fread(raw, 1, 4, reference) != 4) {
@@ -84,8 +96,8 @@ int main(int argc, char **argv)
             if (status == 0) {
                 // The maximum is printed in units of 1e-9 (libnix printf has no %f).
                 printf("audio_check: OK %u frames, %lu samples, max abs diff %lu e-9, %lu over 1e-5, "
-                       "%lu us/frame (video + audio)\n", count, samples, (unsigned long)(maxDiff * 1e9), over,
-                       (unsigned long)(decodeMs * 1000.0 / count));
+                       "%lu us/frame (video + audio%s)\n", count, samples, (unsigned long)(maxDiff * 1e9), over,
+                       (unsigned long)(decodeMs * 1000.0 / count), usePlanes ? ", planes" : ", BGRX");
                 if (over != 0) status = 10;
             }
         } else {

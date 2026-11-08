@@ -952,7 +952,6 @@ void ConvertBgrx(const VideoState &s, Frame &frame) {
 const char *DecodeVideo(VideoState &s, const uint8_t *data, size_t bytes, Frame &frame,
                         Planes *planes) {
     Bits bits(data, bytes);
-    if (planes) frame.bgrx.clear(); // before the plane calls: no scratch register is held across them
     std::fill(s.changed.begin(), s.changed.end(), s.first ? 1 : 0);
     s.first = false;
     if (s.alpha) {
@@ -1276,7 +1275,20 @@ bool Decoder::Open(Reader reader, int track) {
     return false;
 }
 bool Decoder::Decode(Frame &frame) { return Decode(frame, nullptr); }
+// Bebbo's GCC 6.5 m68k backend optimiser ("bbb"; -fbbb=- turns it off) turns
+// a bare clear() of a vector at offset 0 into move.l ([frame],0),4(An) without
+// ever loading An with &frame. Inlined into the decode, An held &frame.audio, so
+// decoding planes with an audio track set the audio vector's end to null. The
+// empty() test keeps the pointer in a register (checked with objdump), and the
+// function stays out of line so the pattern cannot reappear in a caller
+// (docs/AMIGA_PORT.md, GCC 6.5 gotchas).
+__attribute__((noinline)) void ClearBgrx(Frame &frame) {
+    if (!frame.bgrx.empty()) // this form compiles correctly; a bare clear() does not
+        frame.bgrx.clear();
+}
+
 bool Decoder::Decode(Frame &frame, Planes *planes) {
+    if (planes) ClearBgrx(frame);
     const char *failure = impl->Decode(frame, planes);
     if (!failure) return true;
     if (planes) *planes = Planes();
