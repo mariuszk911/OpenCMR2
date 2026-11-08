@@ -7,7 +7,8 @@
  * about 10 triangles, a new modelview on about 60% of them (mvLoads), a
  * texture switch on about half, about 30% lit by one directional light and
  * the rest pre-lit vertex colours. The per-draw CPU cost, not the GPU, is
- * what the comparison measures.
+ * what the comparison measures. Both programs draw at the Workbench screen's
+ * size, in its mode (the native mode).
  */
 #ifndef OPENCMR2_DRAW_BENCH_WORKLOAD_H
 #define OPENCMR2_DRAW_BENCH_WORKLOAD_H
@@ -17,7 +18,9 @@
 
 #include <exec/types.h>
 #include <dos/dos.h>
+#include <intuition/screens.h>
 #include <proto/dos.h>
+#include <proto/intuition.h>
 
 enum {
     kBenchDraws = 411,
@@ -26,9 +29,7 @@ enum {
     kBenchTexSize = 64,
     kBenchVertsPerDraw = 12,   /* a strip of five quads */
     kBenchIndicesPerDraw = 30, /* ten triangles */
-    kBenchVertices = kBenchDraws * kBenchVertsPerDraw,
-    kBenchWidth = 640,
-    kBenchHeight = 480
+    kBenchVertices = kBenchDraws * kBenchVertsPerDraw
 };
 
 struct BenchVertex {
@@ -124,10 +125,11 @@ static void Bench_Modelview(int object, int frame, float m[16])
     m[15] = 1.0f;
 }
 
-/* glFrustum(-0.8, 0.8, -0.6, 0.6, 1, 50), column-major. */
-static void Bench_Projection(float p[16])
+/* glFrustum(-0.6 * aspect, 0.6 * aspect, -0.6, 0.6, 1, 50), column-major. */
+static void Bench_Projection(float p[16], int width, int height)
 {
-    const float l = -0.8f, r = 0.8f, b = -0.6f, t = 0.6f, n = 1.0f, f = 50.0f;
+    const float r = 0.6f * (float)width / (float)height, l = -r;
+    const float b = -0.6f, t = 0.6f, n = 1.0f, f = 50.0f;
     memset(p, 0, 16 * sizeof(float));
     p[0] = 2.0f * n / (r - l);
     p[5] = 2.0f * n / (t - b);
@@ -163,6 +165,20 @@ static void Bench_Texture(int t, unsigned char *rgba)
             p[2] = (unsigned char)(on ? 200 : 120 + t * 5);
             p[3] = 255;
         }
+}
+
+/* The Workbench screen's size: both benchmarks draw at the native mode.
+ * Needs IntuitionBase open. */
+static void Bench_NativeSize(int *width, int *height)
+{
+    struct Screen *wb = LockPubScreen(NULL);
+    *width = 640;
+    *height = 480;
+    if (wb != NULL) {
+        *width = wb->Width;
+        *height = wb->Height;
+        UnlockPubScreen(NULL, wb);
+    }
 }
 
 /* Elapsed time in milliseconds between two DateStamps (50 ticks/s). */

@@ -15,6 +15,8 @@
 
 #include "draw_bench_workload.h"
 
+struct IntuitionBase *IntuitionBase;
+
 int main(int argc, char **argv)
 {
     const int frames = argc > 1 ? atoi(argv[1]) : 300;
@@ -26,10 +28,16 @@ int main(int argc, char **argv)
     const GLfloat lightDir[4] = { 0.3f, 0.6f, 0.75f, 0.0f };
     const GLfloat lightColour[4] = { 0.9f, 0.85f, 0.8f, 1.0f };
     const GLfloat ambient[4] = { 0.25f, 0.25f, 0.25f, 1.0f };
-    int f, d, t;
+    int f, d, t, width, height;
     long ms;
 
     Bench_Build(1);
+    IntuitionBase = (struct IntuitionBase *)OpenLibrary((STRPTR) "intuition.library", 39);
+    if (IntuitionBase == NULL)
+        return 20;
+    Bench_NativeSize(&width, &height);
+    CloseLibrary((struct Library *)IntuitionBase);
+    printf("mgl-bench: native size %dx%d\n", width, height);
     if (!MiniGLOpen()) {
         printf("mgl-bench: MiniGLOpen failed\n");
         return 10;
@@ -37,7 +45,7 @@ int main(int argc, char **argv)
     /* As OpenCMR2's renderer with video.client_arrays = 1. */
     mglChooseVertexBufferSize(32768);
     mglChooseTextureBufferSize(4096);
-    if (mglCreateContext(0, 0, kBenchWidth, kBenchHeight) == NULL) {
+    if (mglCreateContext(0, 0, width, height) == NULL) {
         printf("mgl-bench: mglCreateContext failed\n");
         MiniGLClose();
         return 11;
@@ -50,8 +58,8 @@ int main(int argc, char **argv)
         return 12;
     }
 
-    glViewport(0, 0, kBenchWidth, kBenchHeight);
-    Bench_Projection(projection);
+    glViewport(0, 0, width, height);
+    Bench_Projection(projection, width, height);
     glMatrixMode(GL_PROJECTION);
     glLoadMatrixf(projection);
     glMatrixMode(GL_MODELVIEW);
@@ -126,8 +134,8 @@ int main(int argc, char **argv)
     glFinish();
     DateStamp(&end);
     ms = Bench_ElapsedMs(&start, &end);
-    printf("mgl-bench: %d frames, %d draws x %d triangles each: %ld ms, %ld.%02ld ms/frame\n", frames,
-           kBenchDraws, kBenchIndicesPerDraw / 3, ms, ms / frames, (ms * 100 / frames) % 100);
+    printf("mgl-bench: %dx%d, %d frames, %d draws x %d triangles each: %ld ms, %ld.%02ld ms/frame\n",
+           width, height, frames, kBenchDraws, kBenchIndicesPerDraw / 3, ms, ms / frames, (ms * 100 / frames) % 100);
     fflush(stdout);
 
     mglUnlockDisplay();
