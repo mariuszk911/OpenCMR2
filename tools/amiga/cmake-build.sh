@@ -5,6 +5,7 @@ set -eu
 
 : "${REPO:?REPO is not set}"
 : "${PISTORM3D:?PISTORM3D is not set}"
+: "${OGLES2_SDK:?OGLES2_SDK is not set}"
 : "${CPU:=68040}"
 : "${FPU:=68881}"
 : "${OPT:=-O2}"
@@ -31,6 +32,7 @@ cmake -S "$REPO" -B "$BUILD_DIR" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$REPO/cmake/amigaos.toolchain.cmake" \
     -DAMIGAOS=ON \
     -DPISTORM3D="$PISTORM3D" \
+    -DOGLES2_SDK="$OGLES2_SDK" \
     -DOPENCMR2_AMIGA_CPU="$CPU" \
     -DOPENCMR2_AMIGA_FPU="$FPU" \
     -DOPENCMR2_AMIGA_OPT="$OPT" \

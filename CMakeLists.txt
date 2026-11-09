@@ -59,6 +59,13 @@ if(AMIGAOS)
         endif()
     endforeach()
 
+    # ogles2.library SDK 1.3.3 (headers only: its libogles2.a cannot be linked
+    # by the toolchain's GNU ld, src/render/gles2/ogles2_glue.c replaces it).
+    set(OGLES2_SDK "${CMAKE_SOURCE_DIR}/SDKs/ogles2-sdk-1.3.3" CACHE PATH "ogles2 SDK root (include/)")
+    if(NOT EXISTS "${OGLES2_SDK}/include/proto/ogles2.h")
+        message(FATAL_ERROR "OpenCMR2: missing ${OGLES2_SDK}/include/proto/ogles2.h; set OGLES2_SDK to the ogles2 SDK root")
+    endif()
+
     # tools/amiga/build.sh expects the executable directly in build/amiga.
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 endif()

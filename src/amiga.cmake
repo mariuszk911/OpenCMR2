@@ -3,6 +3,14 @@
 
 set(MINIGL_INCLUDE_DIR "${PISTORM3D}/SDK/minigl-shared-library/include")
 set(MINIGL_LIBRARY_DIR "${PISTORM3D}/SDK/lib")
+set(OGLES2_INCLUDE_DIR "${OGLES2_SDK}/include")
+# Sources that include <proto/ogles2.h>. They get the SDK's include directory
+# on their own (not the whole target), as MiniGL's and ogles2's headers differ.
+set(OGLES2_SOURCES
+    render/gles2/ogles2_glue.c
+    render/gles2/ogles2_display.c)
+set_source_files_properties(${OGLES2_SOURCES}
+    PROPERTIES INCLUDE_DIRECTORIES "${OGLES2_INCLUDE_DIR};${CMAKE_CURRENT_SOURCE_DIR}")
 
 # libnix swapstack.o plus the __stack size. The Shell stack is too small for the
 # C++ game and the STL-heavy Sys layer; the reference Amiga port uses the same
@@ -78,6 +86,7 @@ add_library(opencmr2_platform OBJECT
     platform/amiga/amiga_sys.cpp
     platform/amiga/amiga_platform.cpp
     render/minigl/gfx_minigl.cpp
+    ${OGLES2_SOURCES}
     input/input_amiga.cpp
     audio/audio_ahi.cpp
     audio/mixer.cpp
@@ -136,6 +145,13 @@ target_include_directories(amiga_smoke PRIVATE
     ${AHI_SDK}/Developer/Include/C)
 target_link_directories(amiga_smoke PRIVATE ${MINIGL_LIBRARY_DIR})
 target_link_libraries(amiga_smoke PRIVATE minigl)
+
+# ogles2.library smoke test: the glue, a 32-bit mode and a full-screen context
+# with no game code (Domain B, target only, not staged).
+add_executable(amiga_ogles2_smoke_test ${PROJECT_SOURCE_DIR}/tests/amiga/ogles2_smoke_test.c
+    ${OGLES2_SOURCES})
+target_include_directories(amiga_ogles2_smoke_test PRIVATE ${OGLES2_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_ogles2_smoke_test)
 
 # MiniGL zero-area 2D rectangle reproducer for the option-screen separators.
 add_executable(amiga_minigl_tl_rects_test ${PROJECT_SOURCE_DIR}/tests/amiga/minigl_tl_rects_test.c)

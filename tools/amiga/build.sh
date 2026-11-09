@@ -19,6 +19,7 @@ STACK=${STACK:-2097152}
 JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}
 MINIGL_TIMING=${MINIGL_TIMING:-OFF}
 PISTORM3D_ROOT=${PISTORM3D:-"$REPO/SDKs/PiStorm3D"}
+OGLES2_ROOT=${OGLES2_SDK:-"$REPO/SDKs/ogles2-sdk-1.3.3"}
 
 usage() {
     cat <<'EOF'
@@ -31,6 +32,7 @@ usage: tools/amiga/build.sh [--clean] [--info] [--probe] [--layout]
 
 Environment overrides:
   PISTORM3D  PiStorm3D SDK root (default: SDKs/PiStorm3D)
+  OGLES2_SDK ogles2 SDK 1.3.3 root (default: SDKs/ogles2-sdk-1.3.3)
   IMAGE      Docker image (default: opencmr2/amiga-toolchain:latest)
   CPU        Amiga CPU for -m (default: 68040)
   FPU        Amiga FPU for -m (default: 68881)
@@ -68,6 +70,13 @@ case "$PISTORM3D_ROOT" in
     /*) ;;
     *) PISTORM3D_ROOT=$(CDPATH= cd -- "$PISTORM3D_ROOT" && pwd -P) ;;
 esac
+
+[ -d "$OGLES2_ROOT" ] || fail "ogles2 SDK not found: $OGLES2_ROOT (set OGLES2_SDK)"
+case "$OGLES2_ROOT" in
+    /*) ;;
+    *) OGLES2_ROOT=$(CDPATH= cd -- "$OGLES2_ROOT" && pwd -P) ;;
+esac
+[ -f "$OGLES2_ROOT/include/proto/ogles2.h" ] || fail "missing $OGLES2_ROOT/include/proto/ogles2.h"
 
 SDK="$PISTORM3D_ROOT/SDK"
 [ -f "$SDK/lib/libminigl.a" ] || fail "missing $SDK/lib/libminigl.a"
@@ -177,7 +186,7 @@ if [ "$probe" = 1 ] || [ "$layout" = 1 ]; then
         tool=layout.sh
     fi
     if [ "$MODE" = native ]; then
-        REPO="$REPO" PISTORM3D="$PISTORM3D_ROOT" CPU="$CPU" FPU="$FPU" OPT="$OPT" JOBS="$JOBS" \
+        REPO="$REPO" PISTORM3D="$PISTORM3D_ROOT" OGLES2_SDK="$OGLES2_ROOT" CPU="$CPU" FPU="$FPU" OPT="$OPT" JOBS="$JOBS" \
             sh "$REPO/tools/amiga/$tool"
     else
         fix_ownership
@@ -186,9 +195,11 @@ if [ "$probe" = 1 ] || [ "$layout" = 1 ]; then
             -e HOME=/tmp \
             -e REPO=/src \
             -e PISTORM3D=/pistorm3d \
+            -e OGLES2_SDK=/ogles2 \
             -e CPU="$CPU" -e FPU="$FPU" -e OPT="$OPT" -e JOBS="$JOBS" \
             -v "$REPO":/src \
             -v "$PISTORM3D_ROOT":/pistorm3d:ro \
+            -v "$OGLES2_ROOT":/ogles2:ro \
             -w /src \
             "$IMAGE" \
             "sh" "/src/tools/amiga/$tool"
@@ -197,7 +208,7 @@ if [ "$probe" = 1 ] || [ "$layout" = 1 ]; then
 fi
 
 if [ "$MODE" = native ]; then
-    REPO="$REPO" PISTORM3D="$PISTORM3D_ROOT" CPU="$CPU" FPU="$FPU" OPT="$OPT" STACK="$STACK" JOBS="$JOBS" \
+    REPO="$REPO" PISTORM3D="$PISTORM3D_ROOT" OGLES2_SDK="$OGLES2_ROOT" CPU="$CPU" FPU="$FPU" OPT="$OPT" STACK="$STACK" JOBS="$JOBS" \
         MINIGL_TIMING="$MINIGL_TIMING" \
         sh "$REPO/tools/amiga/cmake-build.sh"
 else
@@ -207,10 +218,12 @@ else
         -e HOME=/tmp \
         -e REPO=/src \
         -e PISTORM3D=/pistorm3d \
+        -e OGLES2_SDK=/ogles2 \
         -e CPU="$CPU" -e FPU="$FPU" -e OPT="$OPT" -e STACK="$STACK" -e JOBS="$JOBS" \
         -e MINIGL_TIMING="$MINIGL_TIMING" \
         -v "$REPO":/src \
         -v "$PISTORM3D_ROOT":/pistorm3d:ro \
+        -v "$OGLES2_ROOT":/ogles2:ro \
         -w /src \
         "$IMAGE" \
         sh /src/tools/amiga/cmake-build.sh
