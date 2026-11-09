@@ -43,15 +43,20 @@ static inline void GfxTexel_RgbaToBgra(const uint8_t *src, uint8_t *dst, size_t 
     }
 }
 
-/* n bump texels of three bytes to R, G, B, A, as the host executors upload
-   them (gfx_gl.cpp): red = byte 2, green = byte 1, blue = byte 0, alpha 255. */
+/* n bump texels of three bytes (dU, dV, luminance: a 24-bit L8V8U8 word is the
+   bytes U, V, L) to R, G, B, A for an RGBA upload: red = dU, green = dV, blue =
+   luminance, alpha 255, which is what the fragment shader reads. The host
+   executors reach the same texel by uploading these bytes as BGRA with the
+   first and last byte swapped (gfx_gl.cpp), so copying their byte order into
+   an RGBA upload would swap dU and the luminance: the bump reflection
+   came out black. */
 static inline void GfxTexel_BumpToRgba(const uint8_t *src, uint8_t *dst, size_t n)
 {
     size_t i;
     for (i = 0; i < n; i++) {
-        dst[i * 4] = src[i * 3 + 2];
+        dst[i * 4] = src[i * 3];
         dst[i * 4 + 1] = src[i * 3 + 1];
-        dst[i * 4 + 2] = src[i * 3];
+        dst[i * 4 + 2] = src[i * 3 + 2];
         dst[i * 4 + 3] = 0xff;
     }
 }

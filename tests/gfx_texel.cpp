@@ -32,7 +32,7 @@ int main()
     const uint8_t bump[6] = { 1, 2, 3, 4, 5, 6 };
     uint8_t out[8];
     GfxTexel_BumpToRgba(bump, out, 2);
-    const uint8_t bumpExpect[8] = { 3, 2, 1, 0xff, 6, 5, 4, 0xff };
+    const uint8_t bumpExpect[8] = { 1, 2, 3, 0xff, 4, 5, 6, 0xff };   // dU, dV, luminance as R, G, B
     Check(std::memcmp(out, bumpExpect, 8) == 0, "bump to RGBA");
 
     const uint8_t pixel[4] = { 0x11, 0x22, 0x33, 0x80 };   // R, G, B, A
