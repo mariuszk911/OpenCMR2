@@ -91,8 +91,10 @@ struct GlTexture {
 };
 
 struct GlVertexBuffer {
-    GLuint buffer = 0;
+    GLuint buffer = 0;          // its own buffer (without the arena)
     uint32_t version = 0;
+    long baseVertex = -1;       // its first vertex in the arena, -1: not placed
+    size_t arenaIndex = 0;      // its place in Executor::arenaMembers
 };
 
 struct Program {
@@ -126,6 +128,13 @@ struct Executor : GfxExecutor {
     Gles2Display display = {};
     Program program3d, programTL, programBlit;
     GLuint vertexBuffer = 0, indexBuffer = 0, quadBuffer = 0;
+    // With base vertex draws, every static vertex buffer lives in one GL
+    // buffer, the arena, at its own first vertex: draws from different objects
+    // need no new BindBuffer and attribute pointers (7 calls a switch).
+    bool useArena = false;
+    GLuint arenaBuffer = 0;
+    size_t arenaCapacity = 0, arenaUsed = 0;     // in vertices
+    std::vector<GfxVertexBuffer *> arenaMembers;
     GLuint backFramebuffer = 0, backColor = 0, backDepth = 0;
     int backWidth = 0, backHeight = 0;
     GLuint white2D = 0, whiteCube = 0;
@@ -227,8 +236,8 @@ struct Executor : GfxExecutor {
         gl.DeleteTextures(3, textures);
         gl.DeleteRenderbuffers(1, &backDepth);
         gl.DeleteFramebuffers(1, &backFramebuffer);
-        GLuint buffers[] = { vertexBuffer, indexBuffer, quadBuffer };
-        gl.DeleteBuffers(3, buffers);
+        GLuint buffers[] = { vertexBuffer, indexBuffer, quadBuffer, arenaBuffer };
+        gl.DeleteBuffers(arenaBuffer != 0 ? 4 : 3, buffers);
         for (SpecialProgram *e : specials) {
             if (e->program.id != 0)
                 gl.DeleteProgram(e->program.id);
@@ -350,6 +359,7 @@ struct Executor : GfxExecutor {
                 (unsigned long)display.inputWindow);
         bcSupported = HasExtension("GL_EXT_texture_compression_s3tc") && Sys_GetOption("video.gles2_native_bc", 1) != 0;
         baseVertex = HasExtension("GL_OES_draw_elements_base_vertex");
+        useArena = baseVertex && Sys_GetOption("video.gles2_vertex_arena", 1) != 0;
         Sys_Log("gfx: gles2: S3TC %s, base vertex draws %s", bcSupported ? "native" : "decoded",
                 baseVertex ? "native" : "by attribute offsets");
 
@@ -708,9 +718,19 @@ struct Executor : GfxExecutor {
 
     // The two stages' textures: units 0 and 2 for 2D textures, 1 and 3 for
     // cubes (the white ones where the stage has none of that kind).
-    void BindTextures(const GfxDrawState &s)
+    // key: the specialised program's key (only the units its shader samples
+    // are bound), NULL for the general program (all four).
+    void BindTextures(const GfxDrawState &s, const Gles2FragmentKey *key)
     {
         for (int i = 0; i < 2; i++) {
+            int needed = 3;     // bit 0: the 2D unit, bit 1: the cube unit
+            if (key != NULL)
+                needed = key->colorOp[0] == 0 || key->colorOp[i] == 0 ? 0
+                         : key->kind[i] == GLES2_KIND_2D             ? 1
+                         : key->kind[i] == GLES2_KIND_CUBE           ? 2
+                                                                     : 0;
+            if (needed == 0)
+                continue;
             const GfxStageState &stage = s.stages[i];
             GfxTexture *t = Gfx_DrawnTexture(stage.texture);
             GlTexture *g = t != NULL ? Ensure(t) : NULL;
@@ -718,6 +738,8 @@ struct Executor : GfxExecutor {
             const GLuint textures[2] = { g != NULL && !cube ? g->texture : white2D,
                                          g != NULL && cube ? g->texture : whiteCube };
             for (int k = 0; k < 2; k++) {
+                if (!(needed & (1 << k)))
+                    continue;
                 const int unit = i * 2 + k;
                 const GLenum target = k == 0 ? GL_TEXTURE_2D : GL_TEXTURE_CUBE_MAP;
                 if (bound.textures[unit] != textures[k]) {
@@ -833,18 +855,20 @@ struct Executor : GfxExecutor {
                 drawUniforms[i].worldOffset = worldOffset;
                 drawUniforms[i].staticOffset = staticOffset;
             }
+            // The key and the fragment block depend on the state alone: worked
+            // out once for the draws that share a recorded state.
             if (c.state != keyState) {
                 Gles2Fragment_Key(s, TextureKind(s.stages[0]), TextureKind(s.stages[1]), &lastKey);
                 keyState = c.state;
+                float f[GLES2_FRAGMENT_VEC4 * 4];
+                Gles2Fragment_Uniforms(s, lastKey, f);
+                if (fragmentOffset < 0 || memcmp(f, fragment, sizeof(f)) != 0) {
+                    fragmentOffset = (long)fragmentData.size();
+                    fragmentData.insert(fragmentData.end(), f, f + GLES2_FRAGMENT_VEC4 * 4);
+                    memcpy(fragment, f, sizeof(f));
+                }
             }
             drawKeys[i] = lastKey;
-            float f[GLES2_FRAGMENT_VEC4 * 4];
-            Gles2Fragment_Uniforms(s, drawKeys[i], f);
-            if (fragmentOffset < 0 || memcmp(f, fragment, sizeof(f)) != 0) {
-                fragmentOffset = (long)fragmentData.size();
-                fragmentData.insert(fragmentData.end(), f, f + GLES2_FRAGMENT_VEC4 * 4);
-                memcpy(fragment, f, sizeof(f));
-            }
             drawUniforms[i].fragmentOffset = fragmentOffset;
         }
     }
@@ -976,9 +1000,70 @@ struct Executor : GfxExecutor {
         }
     }
 
+    // Makes room for `count` more vertices in the arena: a bigger arena, with
+    // the members laid out again from their CPU copies (which are current).
+    void GrowArena(size_t count)
+    {
+        size_t live = 0;
+        for (GfxVertexBuffer *b : arenaMembers)
+            live += b->vertices.size();
+        size_t capacity = std::max<size_t>(arenaCapacity * 2, 16384);
+        while (capacity < live + count)
+            capacity *= 2;
+        if (arenaBuffer == 0)
+            gl.GenBuffers(1, &arenaBuffer);
+        gl.BindBuffer(GL_ARRAY_BUFFER, arenaBuffer);
+        gl.BufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(capacity * sizeof(GfxVertex)), NULL, GL_STATIC_DRAW);
+        bound.vertices = ~0u;
+        size_t used = 0;
+        for (GfxVertexBuffer *b : arenaMembers) {
+            GlVertexBuffer *g = (GlVertexBuffer *)b->gpu;
+            g->baseVertex = (long)used;
+            if (!b->vertices.empty())
+                gl.BufferSubData(GL_ARRAY_BUFFER, (GLintptr)(used * sizeof(GfxVertex)),
+                                 (GLsizeiptr)(b->vertices.size() * sizeof(GfxVertex)), b->vertices.data());
+            g->version = b->version;
+            used += b->vertices.size();
+        }
+        arenaCapacity = capacity;
+        arenaUsed = used;
+        Sys_Log("gfx: gles2: vertex arena %u vertices (%u used by %u buffers)", (unsigned)capacity, (unsigned)used,
+                (unsigned)arenaMembers.size());
+    }
+
+    void UploadToArena(GfxVertexBuffer *b, GlVertexBuffer *g)
+    {
+        if (g->baseVertex < 0) {
+            const size_t count = b->vertices.size();
+            g->arenaIndex = arenaMembers.size();
+            arenaMembers.push_back(b);
+            if (arenaUsed + count > arenaCapacity) {
+                GrowArena(count);   // places every member, this one too
+                return;
+            }
+            g->baseVertex = (long)arenaUsed;
+            arenaUsed += count;
+        } else if (g->version == b->version) {
+            return;
+        }
+        if (!b->vertices.empty()) {
+            gl.BindBuffer(GL_ARRAY_BUFFER, arenaBuffer);
+            bound.vertices = ~0u;
+            gl.BufferSubData(GL_ARRAY_BUFFER, (GLintptr)(g->baseVertex * sizeof(GfxVertex)),
+                             (GLsizeiptr)(b->vertices.size() * sizeof(GfxVertex)), b->vertices.data());
+        }
+        g->version = b->version;
+    }
+
     void UploadVertexBuffers(const GfxFrame &frame)
     {
         for (GfxVertexBuffer *b : frame.buffers) {
+            if (useArena) {
+                if (b->gpu == NULL)
+                    b->gpu = new GlVertexBuffer;
+                UploadToArena(b, (GlVertexBuffer *)b->gpu);
+                continue;
+            }
             GlVertexBuffer *g = (GlVertexBuffer *)b->gpu;
             if (g == NULL) {
                 b->gpu = g = new GlVertexBuffer;
@@ -1000,7 +1085,13 @@ struct Executor : GfxExecutor {
         GlVertexBuffer *g = (GlVertexBuffer *)b->gpu;
         if (g == NULL)
             return;
-        if (open) {
+        if (g->baseVertex >= 0) {
+            // Its space stays unused until the arena grows next.
+            GfxVertexBuffer *last = arenaMembers.back();
+            arenaMembers[g->arenaIndex] = last;
+            ((GlVertexBuffer *)last->gpu)->arenaIndex = g->arenaIndex;
+            arenaMembers.pop_back();
+        } else if (open && g->buffer != 0) {
             if (bound.vertices == g->buffer)
                 bound.vertices = ~0u;
             gl.DeleteBuffers(1, &g->buffer);
@@ -1198,6 +1289,11 @@ struct Executor : GfxExecutor {
         bool keyTransformed = false;
         Gles2FragmentKey fragmentKey;
         Program *keyProgram = &program3d;
+        bool keyGeneric = true;
+        // The viewport of the last state seen, in target pixels.
+        uint32_t viewportState = ~0u;
+        GfxTexture *viewportTarget = NULL;
+        GfxViewport viewport = {};
         for (size_t i = 0; i < frame.commands.size(); i++) {
             const GfxCommand &c = frame.commands[i];
             if (c.type == GFX_CMD_TARGET) {
@@ -1233,22 +1329,36 @@ struct Executor : GfxExecutor {
                 keyState = c.state;
                 keyTransformed = c.transformed;
                 keyProgram = &ProgramFor(c.transformed, fragmentKey);
+                keyGeneric = keyProgram == &program3d || keyProgram == &programTL;
             }
             Program &p = *keyProgram;
             if (stats.enabled && (fragmentKey.kind[0] == GLES2_KIND_CUBE || fragmentKey.kind[1] == GLES2_KIND_CUBE))
                 stats.cubeDraws++;
             UseProgram(p);
             SetDrawState(s);
-            const GfxViewport viewport = ToTarget(s.viewport, s.screenW, s.screenH, target == NULL, targetW, targetH);
+            if (c.state != viewportState || target != viewportTarget) {
+                viewport = ToTarget(s.viewport, s.screenW, s.screenH, target == NULL, targetW, targetH);
+                viewportState = c.state;
+                viewportTarget = target;
+            }
             if (c.transformed)
                 SetViewport(0, 0, targetW, targetH, 0.0f, 1.0f);
             else
                 SetViewport(viewport.x, viewport.y, viewport.width, viewport.height, viewport.minZ, viewport.maxZ);
             SetScissor(viewport);
             GiveUniforms(p, drawUniforms[i], c.transformed);
-            BindTextures(s);
-            const GLuint buffer = c.buffer != NULL ? ((GlVertexBuffer *)c.buffer->gpu)->buffer : vertexBuffer;
-            const long firstVertex = (long)(c.firstVertexByte / (c.transformed ? sizeof(GfxTLVertex) : sizeof(GfxVertex)));
+            BindTextures(s, keyGeneric ? NULL : &fragmentKey);
+            GLuint buffer = vertexBuffer;
+            long firstVertex = (long)(c.firstVertexByte / (c.transformed ? sizeof(GfxTLVertex) : sizeof(GfxVertex)));
+            if (c.buffer != NULL) {
+                const GlVertexBuffer *g = (const GlVertexBuffer *)c.buffer->gpu;
+                if (g->baseVertex >= 0) {
+                    buffer = arenaBuffer;
+                    firstVertex += g->baseVertex;
+                } else {
+                    buffer = g->buffer;
+                }
+            }
             if (c.firstIndex != ~0u) {
                 if (baseVertex) {
                     BindVertices(buffer, c.transformed, 0);

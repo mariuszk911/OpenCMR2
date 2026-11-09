@@ -89,6 +89,16 @@ inline void Touch()
     s_stateDirty = true;
 }
 
+// Setting a value a state already holds does not start a new recorded state
+// (the game sets much of its state again for every object).
+template <typename T> inline void Set(T &field, const T &value)
+{
+    if (memcmp(&field, &value, sizeof(T)) != 0) {
+        field = value;
+        Touch();
+    }
+}
+
 uint32_t RecordState()
 {
     if (s_stateDirty || s_frame.states.empty()) {
@@ -533,8 +543,7 @@ extern "C" void Gfx_Clear(DWORD flags, DWORD color, float z)
 
 extern "C" void Gfx_SetViewport(const GfxViewport *viewport)
 {
-    s_state.viewport = *viewport;
-    Touch();
+    Set(s_state.viewport, *viewport);
 }
 
 extern "C" void Gfx_SetVirtualScreen(int width, int height)
@@ -592,6 +601,8 @@ extern "C" void Gfx_CaptureBackdrop(void)
 
 extern "C" void Gfx_SetDistanceFade(float start, float end)
 {
+    if (s_state.fadeStart == start && s_state.fadeEnd == end)
+        return;
     s_state.fadeStart = start;
     s_state.fadeEnd = end;
     Touch();
@@ -602,13 +613,12 @@ extern "C" void Gfx_SetDistanceFade(float start, float end)
 extern "C" void Gfx_SetTransform(int type, const GfxMatrix *matrix)
 {
     switch (type) {
-    case GFX_TRANSFORM_WORLD: s_state.world = *matrix; break;
-    case GFX_TRANSFORM_VIEW: s_state.view = *matrix; break;
-    case GFX_TRANSFORM_PROJECTION: s_state.projection = *matrix; break;
-    case GFX_TRANSFORM_TEXTURE0: s_state.texture[0] = *matrix; break;
-    case GFX_TRANSFORM_TEXTURE1: s_state.texture[1] = *matrix; break;
+    case GFX_TRANSFORM_WORLD: Set(s_state.world, *matrix); break;
+    case GFX_TRANSFORM_VIEW: Set(s_state.view, *matrix); break;
+    case GFX_TRANSFORM_PROJECTION: Set(s_state.projection, *matrix); break;
+    case GFX_TRANSFORM_TEXTURE0: Set(s_state.texture[0], *matrix); break;
+    case GFX_TRANSFORM_TEXTURE1: Set(s_state.texture[1], *matrix); break;
     }
-    Touch();
 }
 
 extern "C" void Gfx_GetTransform(int type, GfxMatrix *matrix)
@@ -625,10 +635,8 @@ extern "C" void Gfx_GetTransform(int type, GfxMatrix *matrix)
 
 extern "C" void Gfx_SetLight(int index, const GfxLight *light)
 {
-    if (index >= 0 && index < 8) {
-        s_state.lights[index] = *light;
-        Touch();
-    }
+    if (index >= 0 && index < 8)
+        Set(s_state.lights[index], *light);
 }
 
 extern "C" void Gfx_GetLight(int index, GfxLight *light)
@@ -639,7 +647,7 @@ extern "C" void Gfx_GetLight(int index, GfxLight *light)
 
 extern "C" void Gfx_EnableLight(int index, BOOL enable)
 {
-    if (index >= 0 && index < 8) {
+    if (index >= 0 && index < 8 && s_state.lightEnabled[index] != (enable != 0)) {
         s_state.lightEnabled[index] = enable != 0;
         Touch();
     }
@@ -647,13 +655,14 @@ extern "C" void Gfx_EnableLight(int index, BOOL enable)
 
 extern "C" void Gfx_SetMaterial(const GfxMaterial *material)
 {
-    s_state.material = *material;
-    Touch();
+    Set(s_state.material, *material);
 }
 
 #define SETTER(name, type, field)       \
     extern "C" void name(type value)    \
     {                                   \
+        if (s_state.field == value)     \
+            return;                     \
         s_state.field = value;          \
         Touch();                        \
     }
@@ -679,6 +688,8 @@ SETTER(Gfx_SetTextureFactor, DWORD, textureFactor)
 #define BOOL_SETTER(name, field)        \
     extern "C" void name(BOOL value)    \
     {                                   \
+        if (s_state.field == (value != 0)) \
+            return;                     \
         s_state.field = value != 0;     \
         Touch();                        \
     }
@@ -698,7 +709,7 @@ BOOL_SETTER(Gfx_SetAlphaTest, alphaTest)
     extern "C" void name(int stage, type value)     \
     {                                               \
         GfxStageState *s = Stage(stage);            \
-        if (s != NULL) {                            \
+        if (s != NULL && !(s->field == value)) {    \
             s->field = value;                       \
             Touch();                                \
         }                                           \
@@ -724,7 +735,7 @@ STAGE_SETTER(Gfx_SetStageBumpEnvLOffset, float, bumpLumOffset)
 extern "C" void Gfx_SetStageBumpEnvMat(int stage, int index, float value)
 {
     GfxStageState *s = Stage(stage);
-    if (s != NULL && index >= 0 && index < 4) {
+    if (s != NULL && index >= 0 && index < 4 && s->bumpMat[index] != value) {
         s->bumpMat[index] = value;
         Touch();
     }
