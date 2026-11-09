@@ -149,12 +149,13 @@ struct Executor : GfxExecutor {
         bool enabled = false;
         double lastPresent = 0, upload = 0, build = 0, draw = 0, present = 0, period = 0;
         long frames = 0, draws = 0, draws3d = 0, vertexUploads = 0, worldUploads = 0, fragmentUploads = 0,
-             programSwitches = 0, textureBinds = 0, vertexBinds = 0, unitSwitches = 0, targets = 0, cubeDraws = 0;
+             programSwitches = 0, textureBinds = 0, vertexBinds = 0, unitSwitches = 0, targets = 0, cubeDraws = 0, targetDraws = 0;
     } stats;
 
     // [video] gles2_dump = N: every Nth frame with 3D draws, as RAM:cmr2-frame-00..15.ppm (the last 16 are kept),
     // read with glReadPixels: the way to see what the renderer draws, as a
     // full-screen ogles2 screen cannot be captured from outside.
+    GfxTexture *dumpCube = NULL;   // the last cube map drawn into, dumped with the frame
     int dumpEvery = 0, dumped = 0, frameDraws3d = 0;   // only frames with 3D draws are counted and dumped
     long dumpFrame = 0;
 
@@ -182,6 +183,28 @@ struct Executor : GfxExecutor {
         }
         fclose(f);
         Sys_Log("gfx: gles2: wrote %s (3D frame %ld)", path, dumpFrame);
+        if (dumpCube != NULL && dumpCube->gpu != NULL && dumped % 4 == 0) {
+            // The six faces of the last cube map drawn into, side by side.
+            const int size = dumpCube->width;
+            std::vector<uint8_t> faces((size_t)size * 6 * size * 3), face((size_t)size * size * 4);
+            for (int fc = 0; fc < 6; fc++) {
+                BindFramebuffer(FramebufferFor(dumpCube, fc));
+                gl.ReadPixels(0, 0, size, size, GL_RGBA, GL_UNSIGNED_BYTE, face.data());
+                for (int y = 0; y < size; y++)
+                    for (int x = 0; x < size; x++)
+                        for (int ch = 0; ch < 3; ch++)
+                            faces[((size_t)y * 6 * size + fc * size + x) * 3 + ch] = face[((size_t)y * size + x) * 4 + ch];
+            }
+            BindFramebuffer(backFramebuffer);
+            snprintf(path, sizeof(path), "RAM:cmr2-cube-%02d.ppm", dumped % 16);
+            FILE *cf = fopen(path, "wb");
+            if (cf != NULL) {
+                fprintf(cf, "P6\n%d %d\n255\n", size * 6, size);
+                fwrite(faces.data(), 1, faces.size(), cf);
+                fclose(cf);
+                Sys_Log("gfx: gles2: wrote %s", path);
+            }
+        }
     }
 
     struct Bound {
@@ -1183,6 +1206,10 @@ struct Executor : GfxExecutor {
             if (c.type == GFX_CMD_BACKDROP)
                 continue;   // no distance fade on this renderer
             const GfxDrawState &s = frame.states[c.state];
+            if (target != NULL) {
+                stats.targetDraws++;
+                dumpCube = target->cube != NULL ? target->cube : (target->flags & GFX_TEXTURE_CUBE ? target : NULL);
+            }
             if (c.state != keyState || c.transformed != keyTransformed ||
                 !Gles2Fragment_SameKey(fragmentKey, drawKeys[i])) {
                 fragmentKey = drawKeys[i];
@@ -1323,12 +1350,12 @@ struct Executor : GfxExecutor {
         Sys_Log("gfx: gles2 stats, %ld frames, ms/frame: period %.2f = upload %.2f + uniforms %.2f + draw loop %.2f + "
                 "present %.2f + other %.2f; per frame: draws %.0f (3D %.0f), uniform blocks static %.0f world %.0f "
                 "fragment %.0f, program switches %.0f, texture binds %.0f, vertex binds %.0f, unit switches %.0f, "
-                "render targets %.0f, draws with a cube map %.0f",
+                "render-target switches %.2f, draws into render targets %.1f, draws with a cube map %.1f",
                 stats.frames, stats.period / n, stats.upload / n, stats.build / n, stats.draw / n, stats.present / n,
                 (stats.period - stats.upload - stats.build - stats.draw - stats.present) / n, stats.draws / n,
                 stats.draws3d / n, stats.vertexUploads / n, stats.worldUploads / n, stats.fragmentUploads / n,
                 stats.programSwitches / n, stats.textureBinds / n, stats.vertexBinds / n, stats.unitSwitches / n,
-                stats.targets / n, stats.cubeDraws / n);
+                stats.targets / n, stats.targetDraws / n, stats.cubeDraws / n);
         const bool enabled = stats.enabled;
         stats = Stats();
         stats.enabled = enabled;
