@@ -77,6 +77,56 @@ inline bool Gles2Fragment_SameKey(const Gles2FragmentKey &a, const Gles2Fragment
     return memcmp(&a, &b, sizeof(a)) == 0;
 }
 
+// The fragment uniforms a program built from key reads, and nothing else: the
+// operations, kinds, alpha function, fog and specular flags come from the key
+// itself, and values the key does not use (the texture factor without a
+// TFACTOR argument, the alpha reference without an alpha test, the fog colour
+// without fog, the bump matrix without a bump stage) are left zero. Draws that
+// look the same then have the same block, which is uploaded once.
+inline void Gles2Fragment_Uniforms(const GfxDrawState &s, const Gles2FragmentKey &k, float *u)
+{
+    memset(u, 0, sizeof(float) * 4 * GLES2_FRAGMENT_VEC4);
+    for (int i = 0; i < 2; i++) {
+        float *a = u + GLES2_SLOT(2 * i);
+        float *b = u + GLES2_SLOT(2 * i + 1);
+        a[0] = (float)k.colorOp[i];
+        a[1] = (float)k.colorArg1[i];
+        a[2] = (float)k.colorArg2[i];
+        a[3] = (float)k.alphaOp[i];
+        b[0] = (float)k.alphaArg1[i];
+        b[1] = (float)k.alphaArg2[i];
+        b[2] = (float)k.kind[i];
+    }
+    bool factor = false;
+    for (int i = 0; i < 2; i++) {
+        if (k.colorOp[i] == 0)
+            continue;
+        const int args[4] = { k.colorArg1[i], k.colorArg2[i], k.alphaArg1[i], k.alphaArg2[i] };
+        for (int a = 0; a < 4; a++)
+            factor = factor || (args[a] & 0xf) == GFX_TA_TFACTOR;
+    }
+    if (factor)
+        Gles2U_Color(s.textureFactor, u + GLES2_SLOT(4));
+    if (k.alphaTest) {
+        u[GLES2_SLOT(5) + 0] = 1.0f;
+        u[GLES2_SLOT(5) + 1] = (float)k.alphaTest;
+        u[GLES2_SLOT(6) + 0] = (s.alphaRef & 0xff) / 255.0f;
+    }
+    if (k.fog) {
+        Gles2U_Color(s.fogColor, u + GLES2_SLOT(7));
+        u[GLES2_SLOT(8) + 0] = 1.0f;
+        u[GLES2_SLOT(8) + 1] = k.fog == 2 ? 3.0f : 0.0f;
+        u[GLES2_SLOT(9) + 0] = s.fogStart;
+        u[GLES2_SLOT(9) + 1] = s.fogEnd;
+    }
+    u[GLES2_SLOT(8) + 2] = k.specular ? 1.0f : 0.0f;
+    if (k.colorOp[0] >= GFX_TOP_BUMPENVMAP) {
+        memcpy(u + GLES2_SLOT(10), s.stages[0].bumpMat, sizeof(s.stages[0].bumpMat));
+        u[GLES2_SLOT(11) + 0] = s.stages[0].bumpLumScale;
+        u[GLES2_SLOT(11) + 1] = s.stages[0].bumpLumOffset;
+    }
+}
+
 namespace Gles2Fragment {
 
 inline std::string Arg(int arg, const char *current, const char *texel)

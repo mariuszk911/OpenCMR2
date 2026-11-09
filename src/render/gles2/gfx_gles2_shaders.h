@@ -69,6 +69,149 @@ vec4 TexCoord(float mode, float transform, mat4 textureMatrix, vec3 eyePosition,
     return tc;
 }
 
+// One light: the arguments are constants, so every access to u_v has a
+// constant index (a loop-computed index read wrong data on the target).
+void Light(int b, vec3 eyePosition, vec3 n, vec3 toEye, inout vec3 ambient, inout vec3 diffuseSum,
+           inout vec3 specularSum)
+{
+    vec4 lSpot = u_v[b + 6];
+    if (lSpot.z < 0.5)
+        return;
+    vec4 lPosition = u_v[b + 3];
+    vec4 lDirection = u_v[b + 4];
+    vec4 lAtten = u_v[b + 5];
+    vec3 L;
+    float atten = 1.0;
+    float spotFactor = 1.0;
+    if (lPosition.w > 2.5 && lPosition.w < 3.5) {
+        L = normalize(-lDirection.xyz);
+    } else {
+        vec3 toLight = lPosition.xyz - eyePosition;
+        float d = length(toLight);
+        if (d > lDirection.w)
+            return;
+        L = d > 0.0 ? toLight / d : vec3(0.0, 0.0, 1.0);
+        float denom = lAtten.x + lAtten.y * d + lAtten.z * d * d;
+        atten = denom > 0.0 ? 1.0 / denom : 1.0;
+        if (lPosition.w > 1.5 && lPosition.w < 2.5) {
+            float rho = dot(-L, normalize(lDirection.xyz));
+            if (rho <= lSpot.y)
+                spotFactor = 0.0;
+            else if (rho < lSpot.x)
+                spotFactor = pow((rho - lSpot.y) / max(lSpot.x - lSpot.y, 1e-6), lAtten.w);
+        }
+    }
+    float scale = atten * spotFactor;
+    ambient += u_v[b + 2].rgb * scale;
+    float nDotL = max(dot(n, L), 0.0);
+    diffuseSum += u_v[b].rgb * nDotL * scale;
+    if (u_v[77].z > 0.5 && nDotL > 0.0) {
+        vec3 h = normalize(toEye + L);
+        specularSum += u_v[b + 1].rgb * pow(max(dot(n, h), 0.0), u_v[20].w) * scale;
+    }
+}
+
+void main()
+{
+    vec4 color1 = aDiffuse.yzwx;
+    vec4 color2 = aSpecular.yzwx;
+    mat4 worldView = mat4(u_v[0], u_v[1], u_v[2], u_v[3]);
+    mat4 projection = mat4(u_v[4], u_v[5], u_v[6], u_v[7]);
+    vec4 eye = worldView * vec4(aPosition, 1.0);
+    vec3 n = mat3(worldView[0].xyz, worldView[1].xyz, worldView[2].xyz) * aNormal;
+    if (u_v[79].y > 0.5 && dot(n, n) > 0.0)
+        n = normalize(n);
+
+    vec4 diffuse = color1;
+    vec4 specular = color2;
+    if (u_v[77].x > 0.5) {
+        vec4 matDiffuse = MaterialColor(u_v[78].x, u_v[16], color1, color2);
+        vec4 matSpecular = MaterialColor(u_v[78].y, u_v[18], color1, color2);
+        vec4 matAmbient = MaterialColor(u_v[78].z, u_v[17], color1, color2);
+        vec4 matEmissive = MaterialColor(u_v[78].w, u_v[19], color1, color2);
+        vec3 ambient = u_v[20].rgb;
+        vec3 diffuseSum = vec3(0.0);
+        vec3 specularSum = vec3(0.0);
+        vec3 toEye = u_v[77].w > 0.5 ? normalize(-eye.xyz) : vec3(0.0, 0.0, -1.0);
+        Light(21, eye.xyz, n, toEye, ambient, diffuseSum, specularSum);
+        Light(28, eye.xyz, n, toEye, ambient, diffuseSum, specularSum);
+        Light(35, eye.xyz, n, toEye, ambient, diffuseSum, specularSum);
+        Light(42, eye.xyz, n, toEye, ambient, diffuseSum, specularSum);
+        Light(49, eye.xyz, n, toEye, ambient, diffuseSum, specularSum);
+        Light(56, eye.xyz, n, toEye, ambient, diffuseSum, specularSum);
+        Light(63, eye.xyz, n, toEye, ambient, diffuseSum, specularSum);
+        Light(70, eye.xyz, n, toEye, ambient, diffuseSum, specularSum);
+        diffuse = vec4(clamp(matEmissive.rgb + ambient * matAmbient.rgb + diffuseSum * matDiffuse.rgb, 0.0, 1.0),
+                       matDiffuse.a);
+        specular = vec4(clamp(specularSum * matSpecular.rgb, 0.0, 1.0), color2.a);
+    }
+
+    vDiffuse = diffuse;
+    vSpecular = specular;
+    vTex0 = TexCoord(u_v[81].x, u_v[81].z, mat4(u_v[8], u_v[9], u_v[10], u_v[11]), eye.xyz, n);
+    vTex1 = TexCoord(u_v[81].y, u_v[81].w, mat4(u_v[12], u_v[13], u_v[14], u_v[15]), eye.xyz, n);
+    float fog = u_v[79].z > 0.5 ? color2.a : 1.0;
+    if (abs(u_v[79].x - 3.0) < 0.5) {
+        float range = u_v[80].y - u_v[80].x;
+        fog = range != 0.0 ? clamp((u_v[80].y - eye.z) / range, 0.0, 1.0) : 1.0;
+    }
+    vFog = vec2(fog, eye.z);
+
+    vec4 clip = projection * eye;
+    clip.xy += u_v[82].zw * clip.w;
+    clip.y = -clip.y;
+    clip.z = 2.0 * clip.z - clip.w;
+    gl_Position = clip;
+    gl_PointSize = 1.0;
+}
+)GLSL";
+
+/* The light loop with a computed index: the first version, kept to compare. */
+static const char kGles2Vertex3DLoop[] = R"GLSL(
+attribute vec3 aPosition;
+attribute vec3 aNormal;
+attribute vec4 aDiffuse;
+attribute vec4 aSpecular;
+attribute vec2 aTex0;
+attribute vec2 aTex1;
+
+uniform vec4 u_v[83];
+
+varying vec4 vDiffuse;
+varying vec4 vSpecular;
+varying vec4 vTex0;
+varying vec4 vTex1;
+varying vec2 vFog;
+
+vec4 MaterialColor(float source, vec4 material, vec4 color1, vec4 color2)
+{
+    if (u_v[77].y > 0.5) {
+        if (abs(source - 1.0) < 0.5)
+            return color1;
+        if (abs(source - 2.0) < 0.5)
+            return color2;
+    }
+    return material;
+}
+
+vec4 TexCoord(float mode, float transform, mat4 textureMatrix, vec3 eyePosition, vec3 eyeNormal)
+{
+    vec4 tc;
+    if (mode > 1.5) {
+        vec3 e = normalize(-eyePosition);
+        tc = vec4(2.0 * dot(e, eyeNormal) * eyeNormal - e, 1.0);
+    } else if (mode > 0.5) {
+        tc = vec4(aTex1, 1.0, 0.0);
+    } else {
+        tc = vec4(aTex0, 1.0, 0.0);
+    }
+    if (transform > 0.5) {
+        vec4 t = textureMatrix * vec4(tc.xyz, 1.0);
+        tc = vec4(t.xyz, 1.0);
+    }
+    return tc;
+}
+
 void main()
 {
     vec4 color1 = aDiffuse.yzwx;
@@ -102,7 +245,7 @@ void main()
             vec3 L;
             float atten = 1.0;
             float spotFactor = 1.0;
-            if (lPosition.w > 2.5) {
+            if (lPosition.w > 2.5 && lPosition.w < 3.5) {
                 L = normalize(-lDirection.xyz);
             } else {
                 vec3 toLight = lPosition.xyz - eye.xyz;
@@ -112,7 +255,7 @@ void main()
                 L = d > 0.0 ? toLight / d : vec3(0.0, 0.0, 1.0);
                 float denom = lAtten.x + lAtten.y * d + lAtten.z * d * d;
                 atten = denom > 0.0 ? 1.0 / denom : 1.0;
-                if (lPosition.w > 1.5) {
+                if (lPosition.w > 1.5 && lPosition.w < 2.5) {
                     float rho = dot(-L, normalize(lDirection.xyz));
                     if (rho <= lSpot.y)
                         spotFactor = 0.0;

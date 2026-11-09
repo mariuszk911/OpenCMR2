@@ -12,6 +12,7 @@ void Check(bool condition, const char *what)
         ++failures;
     }
 }
+bool Near(float a, float b) { return a - b < 1e-5f && b - a < 1e-5f; }
 bool Has(const std::string &text, const char *part) { return text.find(part) != std::string::npos; }
 }
 
@@ -85,6 +86,34 @@ int main()
     Check(Has(bump, "SignedByte") && Has(bump, "bumpOffset") && Has(bump, "texel.rgb *= luminance;") &&
               Has(bump, "texture2D(tex1, vTex1.xy + bumpOffset)"),
           "bump stage");
+
+    // The uniforms follow the key: unused values stay zero, so draws that look the same share them.
+    {
+        static float a[GLES2_FRAGMENT_VEC4 * 4], b[GLES2_FRAGMENT_VEC4 * 4];
+        GfxDrawState u = s;
+        u.textureFactor = 0x11223344;
+        u.fogColor = 0x55667788;
+        u.alphaRef = 99;
+        u.stages[0].bumpMat[0] = 0.5f;
+        Gles2Fragment_Uniforms(s, k, a);
+        Gles2Fragment_Uniforms(u, k, b);
+        Check(memcmp(a, b, sizeof(a)) == 0, "values the key does not use do not reach the uniforms");
+        Check(a[GLES2_SLOT(0)] == (float)GFX_TOP_MODULATE && a[GLES2_SLOT(1) + 2] == 1.0f, "operations and kinds come from the key");
+        GfxDrawState f = s;
+        f.stages[0].colorArg2 = GFX_TA_TFACTOR;
+        f.textureFactor = 0xff804020;
+        Gles2FragmentKey fk;
+        Gles2Fragment_Key(f, GLES2_KIND_2D, GLES2_KIND_NONE, &fk);
+        Gles2Fragment_Uniforms(f, fk, a);
+        Check(Near(a[GLES2_SLOT(4) + 0], 0x80 / 255.0f), "a TFACTOR argument brings the factor");
+        f = s;
+        f.alphaTest = true;
+        f.alphaFunc = GFX_CMP_GREATER;
+        f.alphaRef = 0x40;
+        Gles2Fragment_Key(f, GLES2_KIND_2D, GLES2_KIND_NONE, &fk);
+        Gles2Fragment_Uniforms(f, fk, a);
+        Check(a[GLES2_SLOT(5)] == 1.0f && a[GLES2_SLOT(5) + 1] == 5.0f && Near(a[GLES2_SLOT(6)], 0x40 / 255.0f), "an alpha test brings its reference");
+    }
 
     // Distinct states, distinct keys.
     t = s;

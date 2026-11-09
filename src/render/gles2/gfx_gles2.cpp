@@ -21,6 +21,7 @@
 #include "render/presentation.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <algorithm>
@@ -134,12 +135,14 @@ struct Executor : GfxExecutor {
     int activeUnit = -1;        // the texture unit last made active
     std::vector<float> worldData, staticData, tlData, fragmentData;
     std::vector<DrawUniforms> drawUniforms;
+    std::vector<Gles2FragmentKey> drawKeys;   // per command (draws only)
     std::vector<SpecialProgram *> specials;
     bool genericFragment = false;   // [video] gles2_generic_fragment: the general shader for every draw
-    bool simpleVertex = false;
+    bool simpleVertex = false, lightLoop = false;
+    const char *vertex3D = kGles2Vertex3D;   // [video] gles2_light_loop = 1: the loop with a computed index
 
     // [video] gles2_stats = 1: where a frame's time goes, logged every 120
-    // frames (milliseconds per frame). "other" is what the game and gfx_core
+    // frames (milliseconds per frame); writing the log costs a few milliseconds. "other" is what the game and gfx_core
     // spend between two presents.
     struct Stats {
         bool enabled = false;
@@ -147,6 +150,38 @@ struct Executor : GfxExecutor {
         long frames = 0, draws = 0, draws3d = 0, vertexUploads = 0, worldUploads = 0, fragmentUploads = 0,
              programSwitches = 0, textureBinds = 0, vertexBinds = 0, unitSwitches = 0;
     } stats;
+
+    // [video] gles2_dump = N: every Nth frame with 3D draws, as RAM:cmr2-frame-00..15.ppm (the last 16 are kept),
+    // read with glReadPixels: the way to see what the renderer draws, as a
+    // full-screen ogles2 screen cannot be captured from outside.
+    int dumpEvery = 0, dumped = 0, frameDraws3d = 0;   // only frames with 3D draws are counted and dumped
+    long dumpFrame = 0;
+
+    void DumpFrame()
+    {
+        std::vector<uint8_t> rgba((size_t)backWidth * backHeight * 4);
+        gl.ReadPixels(0, 0, backWidth, backHeight, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        char path[64];
+        snprintf(path, sizeof(path), "RAM:cmr2-frame-%02d.ppm", dumped % 16);
+        FILE *f = fopen(path, "wb");
+        if (f == NULL) {
+            Sys_Log("gfx: gles2: cannot write %s", path);
+            return;
+        }
+        fprintf(f, "P6\n%d %d\n255\n", backWidth, backHeight);
+        std::vector<uint8_t> row((size_t)backWidth * 3);
+        for (int y = 0; y < backHeight; y++) {
+            const uint8_t *src = &rgba[(size_t)y * backWidth * 4];
+            for (int x = 0; x < backWidth; x++) {
+                row[x * 3] = src[x * 4];
+                row[x * 3 + 1] = src[x * 4 + 1];
+                row[x * 3 + 2] = src[x * 4 + 2];
+            }
+            fwrite(row.data(), 1, row.size(), f);
+        }
+        fclose(f);
+        Sys_Log("gfx: gles2: wrote %s (3D frame %ld)", path, dumpFrame);
+    }
 
     struct Bound {
         GLuint program = 0, framebuffer = ~0u, vertices = ~0u;
@@ -284,11 +319,12 @@ struct Executor : GfxExecutor {
         }
         open = true;
         stats.enabled = Sys_GetOption("video.gles2_stats", 0) != 0;
+        dumpEvery = Sys_GetOption("video.gles2_dump", 0);
         AmigaSys_SetWindow(display.inputWindow);
         Sys_Log("gfx: gles2: %s (%s), screen %ux%u, input window %lx", (const char *)gl.GetString(GL_RENDERER),
                 (const char *)gl.GetString(GL_VERSION), display.width, display.height,
                 (unsigned long)display.inputWindow);
-        bcSupported = HasExtension("GL_EXT_texture_compression_s3tc");
+        bcSupported = HasExtension("GL_EXT_texture_compression_s3tc") && Sys_GetOption("video.gles2_native_bc", 1) != 0;
         baseVertex = HasExtension("GL_OES_draw_elements_base_vertex");
         Sys_Log("gfx: gles2: S3TC %s, base vertex draws %s", bcSupported ? "native" : "decoded",
                 baseVertex ? "native" : "by attribute offsets");
@@ -297,12 +333,14 @@ struct Executor : GfxExecutor {
         static const char *const attributesTL[4] = { "aPosition", "aDiffuse", "aSpecular", "aTex" };
         static const char *const attributesBlit[1] = { "aPosition" };
         simpleVertex = Sys_GetOption("video.gles2_simple_vertex", 0) != 0;
+        lightLoop = Sys_GetOption("video.gles2_light_loop", 0) != 0;
+        vertex3D = lightLoop ? kGles2Vertex3DLoop : kGles2Vertex3D;
         genericFragment = Sys_GetOption("video.gles2_generic_fragment", 0) != 0;
         const bool simpleFragment = Sys_GetOption("video.gles2_simple_fragment", 0) != 0;
         if (simpleVertex || simpleFragment)
             Sys_Log("gfx: gles2: DIAGNOSTIC shaders: simple vertex %d, simple fragment %d", (int)simpleVertex,
                     (int)simpleFragment);
-        if (!Link(program3d, simpleVertex ? kGles2Vertex3DSimple : kGles2Vertex3D,
+        if (!Link(program3d, simpleVertex ? kGles2Vertex3DSimple : vertex3D,
                   simpleFragment ? kGles2FragmentSimple : kGles2Fragment, attributes3D, 6, GLES2_VERTEX_VEC4) ||
             !Link(programTL, kGles2VertexTL, kGles2Fragment, attributesTL, 4, GLES2_TL_VEC4) ||
             !Link(programBlit, kGles2VertexBlit, kGles2FragmentBlit, attributesBlit, 1, 0))
@@ -703,13 +741,16 @@ struct Executor : GfxExecutor {
         tlData.clear();
         fragmentData.clear();
         drawUniforms.assign(frame.commands.size(), DrawUniforms());
+        drawKeys.resize(frame.commands.size());
         GfxTexture *target = NULL;
         const GfxDrawState *staticState = NULL, *worldState = NULL, *tlState = NULL;
         int staticW = 0, staticH = 0, tlW = 0, tlH = 0;
         bool staticScaled = false, tlScaled = false;
         long worldOffset = -1, staticOffset = -1, tlOffset = -1, fragmentOffset = -1;
         float fragment[GLES2_FRAGMENT_VEC4 * 4];
-        int lastKind0 = -1, lastKind1 = -1;
+        uint32_t keyState = ~0u;
+        Gles2FragmentKey lastKey;
+        memset(&lastKey, 0, sizeof(lastKey));
         for (size_t i = 0; i < frame.commands.size(); i++) {
             const GfxCommand &c = frame.commands[i];
             if (c.type == GFX_CMD_TARGET) {
@@ -766,16 +807,17 @@ struct Executor : GfxExecutor {
                 drawUniforms[i].worldOffset = worldOffset;
                 drawUniforms[i].staticOffset = staticOffset;
             }
-            const int kind0 = TextureKind(s.stages[0]), kind1 = TextureKind(s.stages[1]);
+            if (c.state != keyState) {
+                Gles2Fragment_Key(s, TextureKind(s.stages[0]), TextureKind(s.stages[1]), &lastKey);
+                keyState = c.state;
+            }
+            drawKeys[i] = lastKey;
             float f[GLES2_FRAGMENT_VEC4 * 4];
-            Gles2U_FillFragment(s, kind0, kind1, f);
-            if (fragmentOffset < 0 || kind0 != lastKind0 || kind1 != lastKind1 ||
-                memcmp(f, fragment, sizeof(f)) != 0) {
+            Gles2Fragment_Uniforms(s, drawKeys[i], f);
+            if (fragmentOffset < 0 || memcmp(f, fragment, sizeof(f)) != 0) {
                 fragmentOffset = (long)fragmentData.size();
                 fragmentData.insert(fragmentData.end(), f, f + GLES2_FRAGMENT_VEC4 * 4);
                 memcpy(fragment, f, sizeof(f));
-                lastKind0 = kind0;
-                lastKind1 = kind1;
             }
             drawUniforms[i].fragmentOffset = fragmentOffset;
         }
@@ -800,7 +842,7 @@ struct Executor : GfxExecutor {
         static const char *const attributesTL[4] = { "aPosition", "aDiffuse", "aSpecular", "aTex" };
         const double t0 = Sys_GetTicksPrecise();
         e->failed = !(transformed ? Link(e->program, kGles2VertexTL, source.c_str(), attributesTL, 4, GLES2_TL_VEC4)
-                                  : Link(e->program, simpleVertex ? kGles2Vertex3DSimple : kGles2Vertex3D,
+                                  : Link(e->program, simpleVertex ? kGles2Vertex3DSimple : vertex3D,
                                          source.c_str(), attributes3D, 6, GLES2_VERTEX_VEC4));
         Sys_Log("gfx: gles2: %s shader variant %u %s in %.0f ms (kinds %d %d, ops %d/%d, alpha test %d, fog %d)",
                 transformed ? "2D" : "3D", (unsigned)specials.size() + 1, e->failed ? "FAILED" : "built",
@@ -1090,8 +1132,9 @@ struct Executor : GfxExecutor {
             if (c.type == GFX_CMD_BACKDROP)
                 continue;   // no distance fade on this renderer
             const GfxDrawState &s = frame.states[c.state];
-            if (c.state != keyState || c.transformed != keyTransformed) {
-                Gles2Fragment_Key(s, TextureKind(s.stages[0]), TextureKind(s.stages[1]), &fragmentKey);
+            if (c.state != keyState || c.transformed != keyTransformed ||
+                !Gles2Fragment_SameKey(fragmentKey, drawKeys[i])) {
+                fragmentKey = drawKeys[i];
                 keyState = c.state;
                 keyTransformed = c.transformed;
                 keyProgram = &ProgramFor(c.transformed, fragmentKey);
@@ -1124,6 +1167,10 @@ struct Executor : GfxExecutor {
                 gl.DrawArrays(PrimitiveMode(c.primitive), (GLint)firstVertex, (GLsizei)c.vertexCount);
             }
         }
+        if (dumpEvery > 0)
+            for (const GfxCommand &c : frame.commands)
+                if (c.type == GFX_CMD_DRAW && !c.transformed)
+                    frameDraws3d++;
         if (stats.enabled) {
             const double t3 = Sys_GetTicksPrecise();
             stats.upload += t1 - t0;
@@ -1160,6 +1207,13 @@ struct Executor : GfxExecutor {
             readback.readyHeight = h;
             readback.ready = true;
             readback.requested = false;
+        }
+        if (dumpEvery > 0) {
+            if (frameDraws3d > 0 && ++dumpFrame % dumpEvery == 0) {
+                DumpFrame();
+                dumped++;
+            }
+            frameDraws3d = 0;
         }
         const int interval = vsyncWanted ? 1 : 0;
         if (vsync != interval) {
@@ -1205,7 +1259,7 @@ struct Executor : GfxExecutor {
             if (stats.lastPresent != 0.0)
                 stats.period += now - stats.lastPresent;
             stats.lastPresent = now;
-            if (++stats.frames % 120 == 0)
+            if (++stats.frames % 480 == 0)
                 LogStats();
         }
     }
@@ -1214,8 +1268,8 @@ struct Executor : GfxExecutor {
     {
         const double n = (double)stats.frames;
         Sys_Log("gfx: gles2 stats, %ld frames, ms/frame: period %.2f = upload %.2f + uniforms %.2f + draw loop %.2f + "
-                "present %.2f + other %.2f; per frame: draws %.0f (3D %.0f), uniform blocks v %.0f f %.0f, "
-                "program switches %.0f, texture binds %.0f",
+                "present %.2f + other %.2f; per frame: draws %.0f (3D %.0f), uniform blocks static %.0f world %.0f "
+                "fragment %.0f, program switches %.0f, texture binds %.0f, vertex binds %.0f, unit switches %.0f",
                 stats.frames, stats.period / n, stats.upload / n, stats.build / n, stats.draw / n, stats.present / n,
                 (stats.period - stats.upload - stats.build - stats.draw - stats.present) / n, stats.draws / n,
                 stats.draws3d / n, stats.vertexUploads / n, stats.worldUploads / n, stats.fragmentUploads / n,
