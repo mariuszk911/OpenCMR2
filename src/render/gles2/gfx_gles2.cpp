@@ -835,7 +835,8 @@ struct Executor : GfxExecutor {
                 // the world*view matrix that changes with every object.
                 bool newWorld = false;
                 if (staticState == NULL || staticW != targetW || staticH != targetH || staticScaled != scaled ||
-                    (staticState != &s && !Gles2U_SameStatic(*staticState, s))) {
+                    (staticState != &s && staticState->vertexSerial != s.vertexSerial &&
+                     !Gles2U_SameStatic(*staticState, s))) {
                     staticOffset = (long)staticData.size();
                     staticData.resize(staticData.size() + GLES2_VERTEX_VEC4 * 4);
                     Gles2U_FillStatic(s, targetW, targetH,

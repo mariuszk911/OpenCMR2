@@ -775,3 +775,11 @@ add_test(NAME gles2_uniforms COMMAND gles2_uniforms_test)
 add_executable(gles2_fragment_test gles2_fragment.cpp)
 target_include_directories(gles2_fragment_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME gles2_fragment COMMAND gles2_fragment_test)
+
+# gfx_core's recorded states: no-op setters and GfxDrawState::vertexSerial
+# (which the GLES2 executor trusts instead of comparing states).
+add_executable(gfx_core_serial_test gfx_core_serial.cpp
+    ${PROJECT_SOURCE_DIR}/src/diagnostics/observer.cpp ${PROJECT_SOURCE_DIR}/src/render/gfx_core.cpp)
+target_include_directories(gfx_core_serial_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(gfx_core_serial_test PRIVATE SDL3::SDL3)
+add_test(NAME gfx_core_serial COMMAND gfx_core_serial_test)

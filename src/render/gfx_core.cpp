@@ -58,6 +58,33 @@ uint32_t s_record = 1;              // recordings run (presented or flushed)
 // Frames a vertex buffer stays out of locks before draws refer to it.
 const uint32_t kStaticAfterFrames = 4;
 
+uint32_t s_vertexSerial = 1;
+
+// A state change. It also gives the state a new vertexSerial (gfx_internal.h),
+// except through TouchOther: the changes that leave the 3D vertex uniforms
+// alone (the world matrix, textures and stage operations, blending, depth,
+// alpha test, fog colour), which the game makes for every object.
+inline void TouchOther()
+{
+    s_stateDirty = true;
+}
+
+inline void Touch()
+{
+    s_stateDirty = true;
+    s_state.vertexSerial = ++s_vertexSerial;
+}
+
+// Setting a value a state already holds does not start a new recorded state
+// (the game sets much of its state again for every object).
+template <typename T> inline void Set(T &field, const T &value, void (*touch)() = Touch)
+{
+    if (memcmp(&field, &value, sizeof(T)) != 0) {
+        field = value;
+        touch();
+    }
+}
+
 GfxMatrix Identity()
 {
     GfxMatrix m;
@@ -81,22 +108,7 @@ void ResetState()
     s_state.viewport.height = s_height;
     s_state.viewport.minZ = 0.0f;
     s_state.viewport.maxZ = 1.0f;
-    s_stateDirty = true;
-}
-
-inline void Touch()
-{
-    s_stateDirty = true;
-}
-
-// Setting a value a state already holds does not start a new recorded state
-// (the game sets much of its state again for every object).
-template <typename T> inline void Set(T &field, const T &value)
-{
-    if (memcmp(&field, &value, sizeof(T)) != 0) {
-        field = value;
-        Touch();
-    }
+    Touch();
 }
 
 uint32_t RecordState()
@@ -605,7 +617,7 @@ extern "C" void Gfx_SetDistanceFade(float start, float end)
         return;
     s_state.fadeStart = start;
     s_state.fadeEnd = end;
-    Touch();
+    TouchOther();
 }
 
 // ---- fixed-function state --------------------------------------------------------------
@@ -613,7 +625,7 @@ extern "C" void Gfx_SetDistanceFade(float start, float end)
 extern "C" void Gfx_SetTransform(int type, const GfxMatrix *matrix)
 {
     switch (type) {
-    case GFX_TRANSFORM_WORLD: Set(s_state.world, *matrix); break;
+    case GFX_TRANSFORM_WORLD: Set(s_state.world, *matrix, TouchOther); break;
     case GFX_TRANSFORM_VIEW: Set(s_state.view, *matrix); break;
     case GFX_TRANSFORM_PROJECTION: Set(s_state.projection, *matrix); break;
     case GFX_TRANSFORM_TEXTURE0: Set(s_state.texture[0], *matrix); break;
@@ -658,86 +670,86 @@ extern "C" void Gfx_SetMaterial(const GfxMaterial *material)
     Set(s_state.material, *material);
 }
 
-#define SETTER(name, type, field)       \
+#define SETTER(name, type, field, touch) \
     extern "C" void name(type value)    \
     {                                   \
         if (s_state.field == value)     \
             return;                     \
         s_state.field = value;          \
-        Touch();                        \
+        touch();                        \
     }
 
-SETTER(Gfx_SetAmbient, DWORD, ambient)
-SETTER(Gfx_SetDiffuseMaterialSource, int, diffuseSource)
-SETTER(Gfx_SetSpecularMaterialSource, int, specularSource)
-SETTER(Gfx_SetAmbientMaterialSource, int, ambientSource)
-SETTER(Gfx_SetEmissiveMaterialSource, int, emissiveSource)
-SETTER(Gfx_SetFogColor, DWORD, fogColor)
-SETTER(Gfx_SetFogVertexMode, int, fogVertexMode)
-SETTER(Gfx_SetFogTableMode, int, fogTableMode)
-SETTER(Gfx_SetFogStart, float, fogStart)
-SETTER(Gfx_SetFogEnd, float, fogEnd)
-SETTER(Gfx_SetDepthFunc, int, depthFunc)
-SETTER(Gfx_SetCullMode, int, cull)
-SETTER(Gfx_SetSrcBlend, int, srcBlend)
-SETTER(Gfx_SetDestBlend, int, destBlend)
-SETTER(Gfx_SetAlphaFunc, int, alphaFunc)
-SETTER(Gfx_SetAlphaRef, DWORD, alphaRef)
-SETTER(Gfx_SetTextureFactor, DWORD, textureFactor)
+SETTER(Gfx_SetAmbient, DWORD, ambient, Touch)
+SETTER(Gfx_SetDiffuseMaterialSource, int, diffuseSource, Touch)
+SETTER(Gfx_SetSpecularMaterialSource, int, specularSource, Touch)
+SETTER(Gfx_SetAmbientMaterialSource, int, ambientSource, Touch)
+SETTER(Gfx_SetEmissiveMaterialSource, int, emissiveSource, Touch)
+SETTER(Gfx_SetFogColor, DWORD, fogColor, TouchOther)
+SETTER(Gfx_SetFogVertexMode, int, fogVertexMode, Touch)
+SETTER(Gfx_SetFogTableMode, int, fogTableMode, Touch)
+SETTER(Gfx_SetFogStart, float, fogStart, Touch)
+SETTER(Gfx_SetFogEnd, float, fogEnd, Touch)
+SETTER(Gfx_SetDepthFunc, int, depthFunc, TouchOther)
+SETTER(Gfx_SetCullMode, int, cull, TouchOther)
+SETTER(Gfx_SetSrcBlend, int, srcBlend, TouchOther)
+SETTER(Gfx_SetDestBlend, int, destBlend, TouchOther)
+SETTER(Gfx_SetAlphaFunc, int, alphaFunc, TouchOther)
+SETTER(Gfx_SetAlphaRef, DWORD, alphaRef, TouchOther)
+SETTER(Gfx_SetTextureFactor, DWORD, textureFactor, TouchOther)
 
-#define BOOL_SETTER(name, field)        \
+#define BOOL_SETTER(name, field, touch) \
     extern "C" void name(BOOL value)    \
     {                                   \
         if (s_state.field == (value != 0)) \
             return;                     \
         s_state.field = value != 0;     \
-        Touch();                        \
+        touch();                        \
     }
 
-BOOL_SETTER(Gfx_SetLighting, lighting)
-BOOL_SETTER(Gfx_SetSpecular, specular)
-BOOL_SETTER(Gfx_SetLocalViewer, localViewer)
-BOOL_SETTER(Gfx_SetNormalizeNormals, normalizeNormals)
-BOOL_SETTER(Gfx_SetColorVertex, colorVertex)
-BOOL_SETTER(Gfx_SetFog, fog)
-BOOL_SETTER(Gfx_SetDepthTest, depthTest)
-BOOL_SETTER(Gfx_SetDepthWrite, depthWrite)
-BOOL_SETTER(Gfx_SetAlphaBlend, alphaBlend)
-BOOL_SETTER(Gfx_SetAlphaTest, alphaTest)
+BOOL_SETTER(Gfx_SetLighting, lighting, Touch)
+BOOL_SETTER(Gfx_SetSpecular, specular, Touch)
+BOOL_SETTER(Gfx_SetLocalViewer, localViewer, Touch)
+BOOL_SETTER(Gfx_SetNormalizeNormals, normalizeNormals, Touch)
+BOOL_SETTER(Gfx_SetColorVertex, colorVertex, Touch)
+BOOL_SETTER(Gfx_SetFog, fog, Touch)
+BOOL_SETTER(Gfx_SetDepthTest, depthTest, TouchOther)
+BOOL_SETTER(Gfx_SetDepthWrite, depthWrite, TouchOther)
+BOOL_SETTER(Gfx_SetAlphaBlend, alphaBlend, TouchOther)
+BOOL_SETTER(Gfx_SetAlphaTest, alphaTest, TouchOther)
 
-#define STAGE_SETTER(name, type, field)             \
+#define STAGE_SETTER(name, type, field, touch)      \
     extern "C" void name(int stage, type value)     \
     {                                               \
         GfxStageState *s = Stage(stage);            \
         if (s != NULL && !(s->field == value)) {    \
             s->field = value;                       \
-            Touch();                                \
+            touch();                                \
         }                                           \
     }
 
-STAGE_SETTER(Gfx_SetTexture, GfxTexture *, texture)
-STAGE_SETTER(Gfx_SetStageColorOp, int, colorOp)
-STAGE_SETTER(Gfx_SetStageColorArg1, int, colorArg1)
-STAGE_SETTER(Gfx_SetStageColorArg2, int, colorArg2)
-STAGE_SETTER(Gfx_SetStageAlphaOp, int, alphaOp)
-STAGE_SETTER(Gfx_SetStageAlphaArg1, int, alphaArg1)
-STAGE_SETTER(Gfx_SetStageAlphaArg2, int, alphaArg2)
-STAGE_SETTER(Gfx_SetStageAddress, int, address)
-STAGE_SETTER(Gfx_SetStageMinFilter, int, minFilter)
-STAGE_SETTER(Gfx_SetStageMagFilter, int, magFilter)
-STAGE_SETTER(Gfx_SetStageMipFilter, int, mipFilter)
-STAGE_SETTER(Gfx_SetStageMaxMipLevel, int, maxMipLevel)
-STAGE_SETTER(Gfx_SetStageTexCoordIndex, DWORD, texCoordIndex)
-STAGE_SETTER(Gfx_SetStageTextureTransform, int, textureTransform)
-STAGE_SETTER(Gfx_SetStageBumpEnvLScale, float, bumpLumScale)
-STAGE_SETTER(Gfx_SetStageBumpEnvLOffset, float, bumpLumOffset)
+STAGE_SETTER(Gfx_SetTexture, GfxTexture *, texture, TouchOther)
+STAGE_SETTER(Gfx_SetStageColorOp, int, colorOp, TouchOther)
+STAGE_SETTER(Gfx_SetStageColorArg1, int, colorArg1, TouchOther)
+STAGE_SETTER(Gfx_SetStageColorArg2, int, colorArg2, TouchOther)
+STAGE_SETTER(Gfx_SetStageAlphaOp, int, alphaOp, TouchOther)
+STAGE_SETTER(Gfx_SetStageAlphaArg1, int, alphaArg1, TouchOther)
+STAGE_SETTER(Gfx_SetStageAlphaArg2, int, alphaArg2, TouchOther)
+STAGE_SETTER(Gfx_SetStageAddress, int, address, TouchOther)
+STAGE_SETTER(Gfx_SetStageMinFilter, int, minFilter, TouchOther)
+STAGE_SETTER(Gfx_SetStageMagFilter, int, magFilter, TouchOther)
+STAGE_SETTER(Gfx_SetStageMipFilter, int, mipFilter, TouchOther)
+STAGE_SETTER(Gfx_SetStageMaxMipLevel, int, maxMipLevel, TouchOther)
+STAGE_SETTER(Gfx_SetStageTexCoordIndex, DWORD, texCoordIndex, Touch)
+STAGE_SETTER(Gfx_SetStageTextureTransform, int, textureTransform, Touch)
+STAGE_SETTER(Gfx_SetStageBumpEnvLScale, float, bumpLumScale, TouchOther)
+STAGE_SETTER(Gfx_SetStageBumpEnvLOffset, float, bumpLumOffset, TouchOther)
 
 extern "C" void Gfx_SetStageBumpEnvMat(int stage, int index, float value)
 {
     GfxStageState *s = Stage(stage);
     if (s != NULL && index >= 0 && index < 4 && s->bumpMat[index] != value) {
         s->bumpMat[index] = value;
-        Touch();
+        TouchOther();
     }
 }
 

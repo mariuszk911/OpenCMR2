@@ -104,6 +104,12 @@ struct GfxDrawState {
     GfxStageState stages[2];
     GfxViewport viewport;
     int screenW = 0, screenH = 0;   // Gfx_SetVirtualScreen (0: the back buffer's size)
+    // Changed (to a value never used before) by gfx_core whenever anything but
+    // the world matrix, the textures and stage operations, blending, depth,
+    // alpha test and fog colour changes: two states with the same serial have
+    // the same 3D vertex uniforms apart from world*view (the GLES2 executor
+    // skips comparing them).
+    uint32_t vertexSerial = 0;
 };
 
 enum GfxCommandType {
