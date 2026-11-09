@@ -74,6 +74,131 @@ const GfxBackend s_gles2 = {
 
 const GfxBackend *s_active = NULL;
 
+// [video] frame_stats = 1: the same frame timing for either renderer, logged
+// every 480 frames: the period between presents, the time inside Present and
+// inside the draw calls (MiniGL submits there, gfx_core records), and the rest
+// (the game, state calls). Frames with 3D draws are summed apart. Done by
+// replacing the Present and Draw entries of a copy of the backend's table, so
+// it costs nothing when off; each timed call reads the E-clock twice (its cost
+// is logged too).
+GfxBackend s_timed;
+const GfxBackend *s_inner;
+
+struct FrameStats {
+    double lastPresent = 0, period = 0, present = 0, draw = 0;
+    double period3d = 0, present3d = 0, draw3d = 0;
+    double frameDraw = 0;
+    long frames = 0, frames3d = 0, draws = 0, draws3d = 0, frameDraws3d = 0;
+} s_fs;
+
+struct DrawTimer {
+    double t0;
+    DrawTimer(bool is3d)
+    {
+        s_fs.draws++;
+        if (is3d) {
+            s_fs.draws3d++;
+            s_fs.frameDraws3d++;
+        }
+        t0 = Sys_GetTicksPrecise();
+    }
+    ~DrawTimer() { s_fs.frameDraw += Sys_GetTicksPrecise() - t0; }
+};
+
+void LogFrameStats()
+{
+    const double t0 = Sys_GetTicksPrecise();
+    for (int i = 0; i < 1000; i++)
+        Sys_GetTicksPrecise();
+    const double clockUs = (Sys_GetTicksPrecise() - t0);   // ms per 1000 = us per call
+    const double n = (double)s_fs.frames, n3 = s_fs.frames3d > 0 ? (double)s_fs.frames3d : 1.0;
+    Sys_Log("gfx: frame stats %s, %ld frames: ms/frame period %.2f = present %.2f + draw calls %.2f + other %.2f; "
+            "%ld 3D frames: period %.2f = present %.2f + draw calls %.2f + other %.2f, 3D draws %.0f; "
+            "draws/frame %.0f; clock read %.1f us",
+            s_inner->name, s_fs.frames, s_fs.period / n, s_fs.present / n, s_fs.draw / n,
+            (s_fs.period - s_fs.present - s_fs.draw) / n, s_fs.frames3d, s_fs.period3d / n3, s_fs.present3d / n3,
+            s_fs.draw3d / n3, (s_fs.period3d - s_fs.present3d - s_fs.draw3d) / n3, s_fs.draws3d / n3,
+            s_fs.draws / n, clockUs);
+    s_fs = FrameStats();
+    s_fs.lastPresent = Sys_GetTicksPrecise();
+}
+
+void TimedPresent(void (*present)(int), int vsync)
+{
+    const double p0 = Sys_GetTicksPrecise();
+    present(vsync);
+    const double now = Sys_GetTicksPrecise();
+    if (s_fs.lastPresent != 0.0) {
+        const double period = now - s_fs.lastPresent, inPresent = now - p0;
+        s_fs.frames++;
+        s_fs.period += period;
+        s_fs.present += inPresent;
+        s_fs.draw += s_fs.frameDraw;
+        if (s_fs.frameDraws3d > 0) {
+            s_fs.frames3d++;
+            s_fs.period3d += period;
+            s_fs.present3d += inPresent;
+            s_fs.draw3d += s_fs.frameDraw;
+        }
+    }
+    s_fs.lastPresent = now;
+    s_fs.frameDraw = 0;
+    s_fs.frameDraws3d = 0;
+    if (s_fs.frames > 0 && s_fs.frames % 480 == 0)
+        LogFrameStats();
+}
+
+void Timed_Present(int vsync) { TimedPresent(s_inner->Gfx_Present, vsync); }
+void Timed_PresentStretched(int vsync) { TimedPresent(s_inner->Gfx_PresentStretched, vsync); }
+void Timed_DrawPrimitiveVB(int p, GfxVertexBuffer *b, uint32_t f, uint32_t n)
+{
+    DrawTimer t(true);
+    s_inner->Gfx_DrawPrimitiveVB(p, b, f, n);
+}
+void Timed_DrawIndexedPrimitiveVB(int p, GfxVertexBuffer *b, uint32_t f, uint32_t n, const uint16_t *i, uint32_t ni)
+{
+    DrawTimer t(true);
+    s_inner->Gfx_DrawIndexedPrimitiveVB(p, b, f, n, i, ni);
+}
+void Timed_DrawPrimitive(int p, const GfxVertex *v, uint32_t n)
+{
+    DrawTimer t(true);
+    s_inner->Gfx_DrawPrimitive(p, v, n);
+}
+void Timed_DrawIndexedPrimitive(int p, const GfxVertex *v, uint32_t n, const uint16_t *i, uint32_t ni)
+{
+    DrawTimer t(true);
+    s_inner->Gfx_DrawIndexedPrimitive(p, v, n, i, ni);
+}
+void Timed_DrawPrimitiveTL(int p, const GfxTLVertex *v, uint32_t n)
+{
+    DrawTimer t(false);
+    s_inner->Gfx_DrawPrimitiveTL(p, v, n);
+}
+void Timed_DrawIndexedPrimitiveTL(int p, const GfxTLVertex *v, uint32_t n, const uint16_t *i, uint32_t ni)
+{
+    DrawTimer t(false);
+    s_inner->Gfx_DrawIndexedPrimitiveTL(p, v, n, i, ni);
+}
+
+const GfxBackend *WithFrameStats(const GfxBackend *backend)
+{
+    if (!Sys_GetOption("video.frame_stats", 0))
+        return backend;
+    s_inner = backend;
+    s_timed = *backend;
+    s_timed.Gfx_Present = &Timed_Present;
+    s_timed.Gfx_PresentStretched = &Timed_PresentStretched;
+    s_timed.Gfx_DrawPrimitiveVB = &Timed_DrawPrimitiveVB;
+    s_timed.Gfx_DrawIndexedPrimitiveVB = &Timed_DrawIndexedPrimitiveVB;
+    s_timed.Gfx_DrawPrimitive = &Timed_DrawPrimitive;
+    s_timed.Gfx_DrawIndexedPrimitive = &Timed_DrawIndexedPrimitive;
+    s_timed.Gfx_DrawPrimitiveTL = &Timed_DrawPrimitiveTL;
+    s_timed.Gfx_DrawIndexedPrimitiveTL = &Timed_DrawIndexedPrimitiveTL;
+    Sys_Log("gfx: frame stats on (%s)", backend->name);
+    return &s_timed;
+}
+
 void SelectBackend()
 {
     const char *text = Sys_GetOptionText("video.renderer", "minigl");
@@ -105,6 +230,7 @@ void SelectBackend()
     (void)chosen;
 #endif
     Sys_Log("gfx: renderer %s", s_active->name);
+    s_active = WithFrameStats(s_active);
 }
 
 inline const GfxBackend *Active()

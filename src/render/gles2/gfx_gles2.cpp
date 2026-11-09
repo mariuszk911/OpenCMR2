@@ -149,7 +149,7 @@ struct Executor : GfxExecutor {
         bool enabled = false;
         double lastPresent = 0, upload = 0, build = 0, draw = 0, present = 0, period = 0;
         long frames = 0, draws = 0, draws3d = 0, vertexUploads = 0, worldUploads = 0, fragmentUploads = 0,
-             programSwitches = 0, textureBinds = 0, vertexBinds = 0, unitSwitches = 0, targets = 0, cubeDraws = 0, targetDraws = 0;
+             programSwitches = 0, states = 0, textureBinds = 0, vertexBinds = 0, unitSwitches = 0, targets = 0, cubeDraws = 0, targetDraws = 0;
     } stats;
 
     // [video] gles2_dump = N: every Nth frame with 3D draws, as RAM:cmr2-frame-00..15.ppm (the last 16 are kept),
@@ -1273,6 +1273,7 @@ struct Executor : GfxExecutor {
             stats.upload += t1 - t0;
             stats.build += t2 - t1;
             stats.draw += t3 - t2;
+            stats.states += (long)frame.states.size();
             for (const GfxCommand &c : frame.commands)
                 if (c.type == GFX_CMD_DRAW) {
                     stats.draws++;
@@ -1366,12 +1367,12 @@ struct Executor : GfxExecutor {
         const double n = (double)stats.frames;
         Sys_Log("gfx: gles2 stats, %ld frames, ms/frame: period %.2f = upload %.2f + uniforms %.2f + draw loop %.2f + "
                 "present %.2f + other %.2f; per frame: draws %.0f (3D %.0f), uniform blocks static %.0f world %.0f "
-                "fragment %.0f, program switches %.0f, texture binds %.0f, vertex binds %.0f, unit switches %.0f, "
+                "fragment %.0f, recorded states %.0f, program switches %.0f, texture binds %.0f, vertex binds %.0f, unit switches %.0f, "
                 "render-target switches %.2f, draws into render targets %.1f, draws with a cube map %.1f",
                 stats.frames, stats.period / n, stats.upload / n, stats.build / n, stats.draw / n, stats.present / n,
                 (stats.period - stats.upload - stats.build - stats.draw - stats.present) / n, stats.draws / n,
                 stats.draws3d / n, stats.vertexUploads / n, stats.worldUploads / n, stats.fragmentUploads / n,
-                stats.programSwitches / n, stats.textureBinds / n, stats.vertexBinds / n, stats.unitSwitches / n,
+                stats.states / n, stats.programSwitches / n, stats.textureBinds / n, stats.vertexBinds / n, stats.unitSwitches / n,
                 stats.targets / n, stats.targetDraws / n, stats.cubeDraws / n);
         const bool enabled = stats.enabled;
         stats = Stats();
