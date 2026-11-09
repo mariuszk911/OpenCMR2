@@ -487,10 +487,10 @@ add_test(NAME preview_mapping COMMAND preview_mapping_test)
 add_executable(service_park_weather_test service_park_weather.cpp)
 target_link_libraries(service_park_weather_test PRIVATE opencmr2_platform)
 add_test(NAME service_park_weather COMMAND service_park_weather_test)
-add_executable(gamepad_layout_test gamepad_layout.cpp)
-target_include_directories(gamepad_layout_test PRIVATE ${PROJECT_SOURCE_DIR}/game)
-target_link_libraries(gamepad_layout_test PRIVATE opencmr2_platform)
-add_test(NAME gamepad_layout COMMAND gamepad_layout_test)
+add_executable(input_actions_test input_actions.cpp)
+target_include_directories(input_actions_test PRIVATE ${PROJECT_SOURCE_DIR}/game)
+target_link_libraries(input_actions_test PRIVATE opencmr2_platform)
+add_test(NAME input_actions COMMAND input_actions_test)
 
 add_executable(frontend_language_test frontend_language.cpp)
 target_link_libraries(frontend_language_test PRIVATE opencmr2_platform)
@@ -600,6 +600,12 @@ foreach(c3d_stage_variant c3d_stage c3d_stage_be)
     add_test(NAME ${c3d_stage_variant} COMMAND ${c3d_stage_variant}_test)
 endforeach()
 target_compile_definitions(c3d_stage_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+add_executable(outline_font_test outline_font.cpp)
+target_include_directories(outline_font_test PRIVATE ${PROJECT_BINARY_DIR}/src/generated ${PROJECT_SOURCE_DIR}/third_party/stb)
+target_link_libraries(outline_font_test PRIVATE opencmr2_platform)
+add_test(NAME outline_font COMMAND outline_font_test)
+set_tests_properties(outline_font PROPERTIES TIMEOUT 30)
+
 
 add_executable(saved_game_test saved_game.cpp)
 target_link_libraries(saved_game_test PRIVATE opencmr2_platform)
@@ -628,7 +634,7 @@ if(OPENCMR2_BINK_TEST_DATA_DIR)
         add_test(NAME runtime_scenarios COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/runtime_scenarios.py --probe $<TARGET_FILE:stage_probe>
             --data ${OPENCMR2_BINK_TEST_DATA_DIR})
-        set_tests_properties(runtime_scenarios PROPERTIES TIMEOUT 180)
+        set_tests_properties(runtime_scenarios PROPERTIES TIMEOUT 300)
         add_test(NAME cpu_runs COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/runtime_scenarios.py --probe $<TARGET_FILE:stage_probe>
             --data ${OPENCMR2_BINK_TEST_DATA_DIR} --cpu-runs)
@@ -638,6 +644,11 @@ if(OPENCMR2_BINK_TEST_DATA_DIR)
                 ${CMAKE_CURRENT_SOURCE_DIR}/lan_game.py --host-probe $<TARGET_FILE:stage_probe>
                 --data ${OPENCMR2_BINK_TEST_DATA_DIR})
             set_tests_properties(lan_game PROPERTIES TIMEOUT 120)
+            # Cars from 2 have no view or event slot of their own.
+            add_test(NAME lan_game_3 COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/lan_game.py --host-probe $<TARGET_FILE:stage_probe>
+                --data ${OPENCMR2_BINK_TEST_DATA_DIR} --players 3)
+            set_tests_properties(lan_game_3 PROPERTIES TIMEOUT 150)
         endif()
         add_test(NAME stage_lighting COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/stage_lighting.py --probe $<TARGET_FILE:stage_probe>

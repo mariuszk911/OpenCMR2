@@ -162,11 +162,10 @@
     X(SysStepClock_last, offsetof(SysStepClock, last)) \
     X(SysStepClock_remainder, offsetof(SysStepClock, remainder)) \
     X(SysStepClock_started, offsetof(SysStepClock, started)) \
-    X(InputJoystickState_size, sizeof(InputJoystickState)) \
-    X(InputJoystickState_align, alignof(InputJoystickState)) \
-    X(InputJoystickState_lX, offsetof(InputJoystickState, lX)) \
-    X(InputJoystickState_rgdwPOV, offsetof(InputJoystickState, rgdwPOV)) \
-    X(InputJoystickState_rgbButtons, offsetof(InputJoystickState, rgbButtons))
+    X(InputMouseState_size, sizeof(InputMouseState)) \
+    X(InputMouseState_align, alignof(InputMouseState)) \
+    X(InputMouseState_lX, offsetof(InputMouseState, lX)) \
+    X(InputMouseState_rgbButtons, offsetof(InputMouseState, rgbButtons))
 
 #define OPENCMR2_VALUE(name, expression) (unsigned long)(expression),
 #define OPENCMR2_NAME(name, expression) #name,

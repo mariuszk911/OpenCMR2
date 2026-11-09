@@ -678,11 +678,11 @@ void CGraphics::RemapTextureAlpha(Texture *pTexture, WORD from0, WORD to0, WORD 
         skip = (unsigned int)(desc.pitch - width * 4) >> 2;
         p32 = (DWORD *)desc.pixels;
         f0 = from0;
-        t0 = to0;
         f1 = from1;
+        t0 = to0;
         t1 = to1;
-        f2 = from2;
         t2 = to2;
+        f2 = from2;
         for (y = 0; y < height; y++) {
             for (x = 0; x < width; x++) {
                 // PORT: AMIGA: texels are B,G,R,A bytes; read and write them explicitly.
@@ -742,8 +742,8 @@ void CGraphics::BlendPixel(Texture *pTexture, unsigned int x, unsigned int y, BY
     WORD *p16;
     DWORD *p32;
 
-    r = pColour[0];
     g = pColour[1];
+    r = pColour[0];
     b = pColour[2];
     if (x >= (unsigned int)pTexture->width || y >= (unsigned int)pTexture->height)
         return;
@@ -1334,7 +1334,7 @@ HRESULT CGraphics::EnumTextureFormatsCallback(int gfxFormat, GfxPixelFormat *pdd
         aBits = (BYTE)count;
     aBits = aBits;
 
-        if (rBits <= 0 || gBits < 1 || bBits < 1)
+        if (rBits < 1 || gBits < 1 || bBits < 1)
             return result;
 
         bits = pddpf->redMask;
@@ -5539,7 +5539,9 @@ void Particle_UpdateAll(SceneNode *pView)
             Particle_Kill(p);
             continue;
         }
-        if (pType->update == NULL) {
+        if (pType->update != NULL) {
+            pType->update(p, pType, pView);
+        } else {
             if (pType->drag > 0) {
                 keep = 0x10000 - FixMul(pType->drag, 0x290);
                 FixVecScale(&wind, &g_particleWind, 0x1999);
@@ -5618,8 +5620,6 @@ void Particle_UpdateAll(SceneNode *pView)
                 }
             }
             p->vector0x28 = p->sourceVector;
-        } else {
-            pType->update(p, pType, pView);
         }
         if (pType->postUpdate != NULL)
             pType->postUpdate(p, pType, pView);
@@ -5636,18 +5636,23 @@ void Particle_Interpolate(int t)
     FixVector d;
     int i;
 
-    for (i = 0, p = g_particles; i < g_particleCount; i++, p++) {
-        if (p->active != 0) {
-            d.x = p->vector0x28.x - p->vector0x10.x;
-            d.y = p->vector0x28.y - p->vector0x10.y;
-            d.z = p->vector0x28.z - p->vector0x10.z;
-            FixVecScale(&d, &d, t);
-            p->vector0x1c.x = p->vector0x10.x + d.x;
-            p->vector0x1c.y = p->vector0x10.y;
-            p->vector0x1c.y += d.y;
-            p->vector0x1c.z = p->vector0x10.z + d.z;
-            p->type0x53 = (BYTE)((p->type0x52 * 0x10000 + FixMul((p->type0x56 - p->type0x52) * 0x10000, t)) >> 16);
-        }
+    i = 0;
+    if (g_particleCount > 0) {
+        p = g_particles;
+        do {
+            if (p->active != 0) {
+                d.x = p->vector0x28.x - p->vector0x10.x;
+                d.y = p->vector0x28.y - p->vector0x10.y;
+                d.z = p->vector0x28.z - p->vector0x10.z;
+                FixVecScale(&d, &d, t);
+                p->vector0x1c.x = p->vector0x10.x + d.x;
+                p->vector0x1c.y = p->vector0x10.y + d.y;
+                p->vector0x1c.z = p->vector0x10.z + d.z;
+                p->type0x53 = (BYTE)((p->type0x52 * 0x10000 + FixMul((p->type0x56 - p->type0x52) * 0x10000, t)) >> 16);
+            }
+            i++;
+            p++;
+        } while (i < g_particleCount);
     }
 }
 
@@ -5676,7 +5681,7 @@ void Particle_DrawAll(SceneNode *pCamera, BYTE view)
 
     def.flags &= 0xfe;
     mask = 1 << view;
-    if (g_particleCount > 0) {
+    if (0 < g_particleCount) {
         pb = (BYTE *)g_particles + offsetof(Particle, field0x55);
         for (i = 0; i < g_particleCount; i++, pb += sizeof(Particle)) {
             if (DRAW_PARTICLE.active == 0 || (DRAW_PARTICLE.field0x55 & mask) == 0)

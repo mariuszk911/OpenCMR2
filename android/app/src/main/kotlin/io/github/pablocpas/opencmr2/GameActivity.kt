@@ -1,15 +1,18 @@
 package io.github.pablocpas.opencmr2
 
+import android.content.res.Configuration
 import android.os.Bundle
-import androidx.annotation.Keep
+import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import androidx.annotation.Keep
 import org.libsdl.app.SDLActivity
 import org.libsdl.app.SDLControllerManager
 
 /** The game: SDL runs SDL_main from libmain.so, with the on-screen controls over it. */
 class GameActivity : SDLActivity() {
     private var controls: TouchControls? = null
+    private var textEntry: TextEntry? = null
 
     // Called by input_sdl.cpp before opening a controller.
     @Keep
@@ -19,6 +22,26 @@ class GameActivity : SDLActivity() {
     @Keep
     fun useTouchControlsOnly(): Boolean = ControllerProfiles.touchOnly(this)
 
+    // Called by input_sdl.cpp: the controls pages list the keyboard players
+    // only with a physical keyboard; the touch controls are edited here.
+    @Keep
+    fun hasHardwareKeyboard(): Boolean = resources.configuration.keyboard == Configuration.KEYBOARD_QWERTY
+
+    // Called by sys.cpp, on the game's thread: the game starts editing a text
+    // entry without a physical keyboard, or the entry's chip asked for it again.
+    @Keep
+    fun openTextEntry(label: String, text: String, maxLength: Int) =
+        runOnUiThread { textEntry?.open(label, text, maxLength) }
+
+    // Called by sys.cpp: the game is on an entry it selects by itself (the
+    // lobby's chat line): only the chip shows, to open the bar.
+    @Keep
+    fun offerTextEntry(label: String) = runOnUiThread { textEntry?.offer(label) }
+
+    // Called by sys.cpp: the game left the entry.
+    @Keep
+    fun endTextEntry() = runOnUiThread { textEntry?.end() }
+
     override fun getLibraries() = arrayOf("SDL3", "main")
 
     override fun getArguments() = arrayOf("--data", GameData.directory(this).absolutePath)
@@ -26,8 +49,10 @@ class GameActivity : SDLActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // SDLActivity shows its own error when the libraries do not load.
-        if (!mBrokenLibraries && mLayout != null)
+        if (!mBrokenLibraries && mLayout != null) {
             controls = TouchControls(this, mLayout)
+            textEntry = TextEntry(this, mLayout) { open -> controls?.setSuspended(open) }
+        }
     }
 
     // Back (the button or the gesture) is the game's Escape. Android sends its
@@ -35,6 +60,18 @@ class GameActivity : SDLActivity() {
     // so the release is held back long enough for it to see the press.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         controls?.onInput(event.source)
+        if (textEntry?.isOpen == true && SDLControllerManager.isDeviceSDLJoystick(event.deviceId)) {
+            // Keep SDL's pressed/released state balanced even when the editor
+            // consumes A/B. Forward releases before closing the modal editor.
+            val handled = when (event.action) {
+                KeyEvent.ACTION_DOWN -> SDLControllerManager.onNativePadDown(event.deviceId, event.keyCode, event.scanCode)
+                KeyEvent.ACTION_UP -> SDLControllerManager.onNativePadUp(event.deviceId, event.keyCode, event.scanCode)
+                else -> false
+            }
+            if (textEntry?.onKey(event) == true || handled) return true
+        }
+        if (textEntry?.onKey(event) == true)
+            return true
         if (event.keyCode != KeyEvent.KEYCODE_BACK || mBrokenLibraries ||
             SDLControllerManager.isDeviceSDLJoystick(event.deviceId))
             return super.dispatchKeyEvent(event)
@@ -52,6 +89,10 @@ class GameActivity : SDLActivity() {
 
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
         controls?.onInput(event.source)
+        if (textEntry?.isOpen == true && event.isFromSource(InputDevice.SOURCE_JOYSTICK)) {
+            SDLControllerManager.handleJoystickMotionEvent(event)
+            return true
+        }
         return super.dispatchGenericMotionEvent(event)
     }
 
@@ -60,7 +101,14 @@ class GameActivity : SDLActivity() {
         super.onPause()
     }
 
+    override fun onResume() {
+        super.onResume()
+        controls?.reloadLayout()
+    }
+
     override fun onDestroy() {
+        textEntry?.end()
+        textEntry = null
         controls?.close()
         controls = null
         super.onDestroy()

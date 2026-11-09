@@ -284,6 +284,7 @@ target_sources(opencmr2_platform PRIVATE
     ${ICON_HEADER}
     audio/audio_sdl.cpp
     audio/msadpcm.cpp
+    input/bindings.cpp
     input/input_sdl.cpp
     video/movie.cpp
     net/net_api.cpp)

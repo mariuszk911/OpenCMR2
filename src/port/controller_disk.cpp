@@ -125,7 +125,7 @@ int ControllerMappingScore(const ControllerData *records)
     int j;
 
     for (i = 0; i < CONTROLLER_DISK_RECORDS; i++) {
-        const unsigned short *mapping = &records[i].field_0x128;
+        const unsigned short *mapping = records[i].actionMasks; // 10 masks, then field_0x13c
         for (j = 0; j < 11; j++) {
             if (mapping[j] < 256)
                 score++;

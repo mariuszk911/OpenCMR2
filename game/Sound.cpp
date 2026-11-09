@@ -7,6 +7,7 @@
 #include "Sprite.h"
 #include "Game.h"
 #include "Sound.h"
+#include "PcmWaveHeader.h"
 #include "main.h"
 #include "InstallInfo.h"
 #include "GameInfo.h"
@@ -721,7 +722,6 @@ BOOL Sound_FindADPCMDriver(void);
 // Creates the DirectSound device and sets the format of the primary buffer
 // (16-bit PCM at sampleRate; mono when the speakers are mono). bits and
 // unused are ignored: the original always uses 16 bits.
-// match 76%: below the 90% bar; kept as FUNCTION on purpose so reccmp measures it (see CONVENCIONES)
 // FUNCTION: CMR2 0x004a1d60
 // PORT: opens the audio output (stereo; there is no speaker query).
 BOOL Sound_InitDevice(int sampleRate, int channels, int bits, int unused)
@@ -755,24 +755,25 @@ BOOL Sound_CopyBufferData(AudioBuffer *pBuffer, DWORD offset, void *pData, DWORD
 // FUNCTION: CMR2 0x004a1f50
 BOOL Sound_LoadWave(char *name, BYTE flags, GenericFile *pFile)
 {
-    BYTE *pWave;
+    PcmWaveHeader *pWave;
     BYTE inArchive;
     int channels, bits;
     DWORD rate;
     BYTE *pData;
     int slot;
 
-    pWave = (BYTE *)CGenericFileLoader::FindFile(pFile, name, &inArchive, NULL, 0);
+    pWave = (PcmWaveHeader *)CGenericFileLoader::FindFile(pFile, name, &inArchive, NULL, 0);
     if (pWave == NULL)
         return FALSE;
 
     if (strncmp((char *)pWave + 8, g_strWave, 4) == 0) {
         // PORT: AMIGA: the canonical WAV fields are little-endian on disk.
-        channels = ReadLE16(pWave + 0x16);
-        rate = ReadLE32(pWave + 0x18);
-        bits = ReadLE16(pWave + 0x22);
-        pData = pWave + 0x2c;
-        DWORD dataSize = ReadLE32(pWave + 0x28);
+        const BYTE *pBytes = (const BYTE *)pWave;
+        channels = ReadLE16(pBytes + 0x16);
+        rate = ReadLE32(pBytes + 0x18);
+        bits = ReadLE16(pBytes + 0x22);
+        pData = (BYTE *)pWave + 0x2c;
+        DWORD dataSize = ReadLE32(pBytes + 0x28);
         if ((flags & 1) == 0 || !g_sound3DEnabled) {
             if (!Sound_CreatePcmSampleBuffer(g_unk0x005a2844, &g_soundBuffers[Sound_GetLoadedSampleCount()], rate, bits, channels, 0,
                               dataSize))

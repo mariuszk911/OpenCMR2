@@ -22,7 +22,7 @@
 //                       +0x0c  flags     (u32 BE, must be zero in version 1)
 //
 //                     The opaque car and controller records (playerCars,
-//                     playerControllers) are the game's in-memory bytes, which
+//                     playerCarSetups) are the game's in-memory bytes, which
 //                     is the 68k byte order on the target the format is meant
 //                     for. A PC file has no signature, so it can never be
 //                     mistaken for an Amiga one.

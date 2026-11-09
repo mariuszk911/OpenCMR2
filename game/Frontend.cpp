@@ -78,13 +78,10 @@ char CFrontend::m_strFrontEndTexturesCmr2TGA[32] = "%s\\FrontEnd\\Textures\\cmr2
 
 Texture* CFrontend::m_pAr640ATexture;
 Texture* CFrontend::m_pAr640DTexture;
-Texture* CFrontend::m_pLgMatrixTexture;
+Texture* CFrontend::m_matrixTextures[4];
 Texture* CFrontend::m_pSmMatrixTexture;
 Texture* CFrontend::m_pSetupRepBanners[8];
 Texture* CFrontend::m_pTinyFlags[8];
-Texture* CFrontend::m_pTBronze;
-Texture* CFrontend::m_pTSilver;
-Texture* CFrontend::m_pTGold;
 
 Texture* CFrontend::m_unk0x00817ebc;
 Texture* CFrontend::m_unk0x00817fd0;
@@ -509,8 +506,8 @@ char **CFrontend::m_textStrings;
 int CFrontend::m_textFirstId;
 int CFrontend::m_textCount;
 char CFrontend::m_strInvalidTextString[20] = "INVALID TEXT STRING";
-BYTE CFrontend::m_unk0x0065aa70;
-BYTE CFrontend::m_unk0x0065aa71;
+BYTE CFrontend::m_textLanguage;
+BYTE CFrontend::m_textLanguageCount;
 
 // Looks up one of the loaded text strings; out-of-range ids fall back to the
 // "INVALID TEXT STRING" placeholder.
@@ -518,8 +515,8 @@ BYTE CFrontend::m_unk0x0065aa71;
 // FUNCTION: CMR2 0x004a3c30
 void Frontend_SelectTextLanguage(int language)
 {
-    if (language < CFrontend::m_unk0x0065aa71) {
-        CFrontend::m_unk0x0065aa70 = language;
+    if (language < CFrontend::m_textLanguageCount) {
+        CFrontend::m_textLanguage = language;
         CFrontend::m_textFirstId = CFrontend::m_textCount * language;
     }
 }
@@ -535,8 +532,8 @@ void CFrontend::BuildLocalizedTextStringTable(int languages, int count, BYTE **p
     int row;
     BYTE *p;
 
-    m_unk0x0065aa71 = (BYTE)languages;
-    m_unk0x0065aa70 = 0;
+    m_textLanguageCount = (BYTE)languages;
+    m_textLanguage = 0;
     m_textFirstId = 0;
     m_textCount = count;
     m_textStrings = (char **)CFileBuffer::AllocateLockedBuffer(languages * count * sizeof(char *));
@@ -686,9 +683,9 @@ void FrontendDraw_AnimatedMatrixBackground(short x0, short y0, char *pMap)
     g_matrixPhase2 = (short)(((CMain::GetFrameDelta() + 1) * -0x3000) / 360);
     // PORT: retain the original matrix, palette and per-dot ripple exactly;
     // only the circular sprite's enlarged edge is evaluated as geometry.
-    Gfx_VectorizeMenuDot(CFrontend::m_pLgMatrixTexture->pSurface);
-    g_frontendDrawRect[2] = CFrontend::m_pLgMatrixTexture->width;
-    g_frontendDrawRect[3] = CFrontend::m_pLgMatrixTexture->height;
+    Gfx_VectorizeMenuDot(CFrontend::m_matrixTextures[FRONTEND_LG_MATRIX]->pSurface);
+    g_frontendDrawRect[2] = CFrontend::m_matrixTextures[FRONTEND_LG_MATRIX]->width;
+    g_frontendDrawRect[3] = CFrontend::m_matrixTextures[FRONTEND_LG_MATRIX]->height;
     for (i = 0; i < 0x12; i++) {
         pCell = pMap + i;
         for (j = 0; j < 0xc; j++) {
@@ -705,11 +702,11 @@ void FrontendDraw_AnimatedMatrixBackground(short x0, short y0, char *pMap)
             // PORT: AMIGA: the packed colour supplies the BGRA bytes.
             Gfx_UnpackArgbToBgra(g_matrixColours[*pCell], colour);
             brightness = wave / 4 + 0xc000;
-            colour[0] = FixMulShift32((int)FTOI(__int64, X87S_MUL(colour[0], CGraphics::m_65536)), brightness);
+            colour[0] = (FixMul((int)FTOI(__int64, X87S_MUL(colour[0], CGraphics::m_65536)), brightness) >> 16);
             colour[1] = FixMulShift32((int)FTOI(__int64, X87S_MUL(colour[1], CGraphics::m_65536)), brightness);
             colour[2] = FixMulShift32((int)FTOI(__int64, X87S_MUL(colour[2], CGraphics::m_65536)), brightness);
-            Sprite_Queue((SpriteRect *)&CFrontend::m_pLgMatrixTexture->field_0x11c, (SpriteRect *)g_frontendDrawRect,
-                         CFrontend::m_pLgMatrixTexture, 1, 0, NULL, NULL, colour, 8);
+            Sprite_Queue((SpriteRect *)&CFrontend::m_matrixTextures[FRONTEND_LG_MATRIX]->field_0x11c, (SpriteRect *)g_frontendDrawRect,
+                         CFrontend::m_matrixTextures[FRONTEND_LG_MATRIX], 1, 0, NULL, NULL, colour, 8);
             pCell += 0x12;
         }
     }
@@ -755,9 +752,9 @@ void CFrontend::FreeLocalizedTextStrings(void)
     if (m_textStrings != NULL) {
         CFileBuffer::FreeGenericFileBuffer(m_textStrings);
         m_textStrings = NULL;
-        m_unk0x0065aa70 = 0;
+        m_textLanguage = 0;
         m_textFirstId = 0;
-        m_unk0x0065aa71 = 0;
+        m_textLanguageCount = 0;
         m_textCount = 0;
     }
 }

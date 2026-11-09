@@ -1643,6 +1643,17 @@ extern "C" int AmigaSys_IsKeyDown(int dik)
     return (s_keyState[dik] & 0x80) != 0;
 }
 
+// The keyboard is always present on AmigaOS: nothing to open or offer.
+extern "C" void Sys_RequestTextInput(const char *label, const char *text, int maxLength)
+{
+    (void)label; (void)text; (void)maxLength;
+}
+
+extern "C" void Sys_OfferTextInput(const char *label, const char *text, int maxLength)
+{
+    (void)label; (void)text; (void)maxLength;
+}
+
 extern "C" int Sys_WaitEvent(SysEvent *event)
 {
     if (event == NULL)

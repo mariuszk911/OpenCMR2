@@ -145,6 +145,10 @@ SDL_GPUPrimitiveType PrimitiveType(int d3d)
 struct GpuTexture {
     SDL_GPUTexture *texture = nullptr;
     SDL_GPUTexture *depth = nullptr;       // render targets
+    // A cube render target's faces are drawn in these 2D targets and copied
+    // into the cube, which is then only sampled. Drawing in the cube's layers
+    // directly broke the whole picture on the Adreno 840 (#46).
+    SDL_GPUTexture *faces[6] = {};
     SDL_GPUTextureFormat format;
     bool cpuDecode = false;                // BC data decoded on the CPU (no BC support)
 };
@@ -202,21 +206,29 @@ struct Executor : GfxExecutor {
     bool presentModeVsync = true;
     int anisotropy = 1, smoothScaling = 1;    // video.anisotropy, video.smooth_scaling
     Uint32 presentWidth = 0, presentHeight = 0; // the window's pixels, as last logged
-    // The back buffer read of the last presented frame (the lens flare test):
-    // it runs with that frame, and CollectReadback waits for it only when the
-    // game reads the pixels, during the next frame.
-    SDL_GPUTransferBuffer *readbackBuffer = nullptr;
-    uint32_t readbackCapacity = 0;
-    SDL_GPUFence *readbackFence = nullptr;
-    int readbackWidth = 0, readbackHeight = 0;
+    // Back buffer reads of recently presented frames (the lens flare test).
+    // The game gets the newest one the GPU has finished, a frame or two old:
+    // waiting for the last frame instead stopped the CPU from working ahead
+    // of the GPU, which halved the frame rate on phones with the sun in view.
+    struct Readback {
+        SDL_GPUTransferBuffer *buffer = nullptr;
+        uint32_t capacity = 0;
+        SDL_GPUFence *fence = nullptr;
+        uint64_t serial = 0;
+        int width = 0, height = 0;
+    };
+    Readback readbacks[3];
+    uint64_t readbackSerial = 0;
 
     ~Executor() override
     {
         if (device == NULL)
             return;
         SDL_WaitForGPUIdle(device);
-        SDL_ReleaseGPUFence(device, readbackFence);
-        SDL_ReleaseGPUTransferBuffer(device, readbackBuffer);
+        for (Readback &r : readbacks) {
+            SDL_ReleaseGPUFence(device, r.fence);
+            SDL_ReleaseGPUTransferBuffer(device, r.buffer);
+        }
         for (auto &p : pipelines)
             SDL_ReleaseGPUGraphicsPipeline(device, p.second);
         for (auto &s : samplers)
@@ -421,6 +433,12 @@ struct Executor : GfxExecutor {
         SDL_GPUTextureUsageFlags usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
         if (target)
             usage |= SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+        if (cube && target) {
+            usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+            for (int f = 0; f < 6; f++)
+                g->faces[f] = CreateTexture(SDL_GPU_TEXTURETYPE_2D, g->format, t->width, t->height, 1, 1,
+                                            SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
+        }
         g->texture = CreateTexture(cube ? SDL_GPU_TEXTURETYPE_CUBE : SDL_GPU_TEXTURETYPE_2D, g->format, t->width,
                                    t->height, cube ? 6 : 1, t->mipLevels, usage);
         if (target)
@@ -546,6 +564,8 @@ struct Executor : GfxExecutor {
             return;
         SDL_ReleaseGPUTexture(device, g->texture);
         SDL_ReleaseGPUTexture(device, g->depth);
+        for (SDL_GPUTexture *face : g->faces)
+            SDL_ReleaseGPUTexture(device, face);
         delete g;
         t->gpu = NULL;
     }
@@ -683,6 +703,8 @@ struct Executor : GfxExecutor {
         info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
         info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
         info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+        // CreateDevice leaves depth clamping off, which needs depth clipping.
+        info.rasterizer_state.enable_depth_clip = true;
         info.depth_stencil_state.enable_depth_test = depth;
         info.depth_stencil_state.enable_depth_write = depth;
         info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_ALWAYS;
@@ -1065,8 +1087,10 @@ struct Executor : GfxExecutor {
         color.store_op = SDL_GPU_STOREOP_STORE;
         depth.load_op = SDL_GPU_LOADOP_LOAD;
         depth.store_op = SDL_GPU_STOREOP_STORE;
-        depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-        depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        // The stencil is kept too: with a combined depth-stencil format a
+        // discarded stencil may take the depth with it on some tilers.
+        depth.stencil_load_op = SDL_GPU_LOADOP_LOAD;
+        depth.stencil_store_op = SDL_GPU_STOREOP_STORE;
         if (target == NULL) {
             color.texture = backColor;
             depth.texture = backDepth;
@@ -1075,8 +1099,14 @@ struct Executor : GfxExecutor {
         } else {
             GfxTexture *root = target->cube != NULL ? target->cube : target;
             GpuTexture *g = Ensure(root);
-            color.texture = g->texture;
-            color.layer_or_depth_plane = target->cube != NULL ? target->face : 0;
+            // Face 0 of a cube is the cube itself.
+            int face = target->cube != NULL ? target->face : 0;
+            if (g->faces[face] != NULL) {
+                color.texture = g->faces[face];
+            } else {
+                color.texture = g->texture;
+                color.layer_or_depth_plane = target->cube != NULL ? target->face : 0;
+            }
             depth.texture = g->depth;
             w = root->width;
             h = root->height;
@@ -1100,6 +1130,27 @@ struct Executor : GfxExecutor {
             (*cleared)++;
         }
         return SDL_BeginGPURenderPass(cmd, &color, 1, &depth);
+    }
+
+    // Ends the render pass on target; a cube face's goes on into the cube.
+    void EndPass(SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *pass, GfxTexture *target)
+    {
+        SDL_EndGPURenderPass(pass);
+        if (target == NULL)
+            return;
+        // Face 0 of a cube is the cube itself.
+        GfxTexture *root = target->cube != NULL ? target->cube : target;
+        int face = target->cube != NULL ? target->face : 0;
+        GpuTexture *g = (GpuTexture *)root->gpu;
+        if (g == NULL || g->faces[face] == NULL || g->texture == NULL)
+            return;
+        SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
+        SDL_GPUTextureLocation src = {}, dst = {};
+        src.texture = g->faces[face];
+        dst.texture = g->texture;
+        dst.layer = (Uint32)face;
+        SDL_CopyGPUTextureToTexture(copy, &src, &dst, root->width, root->height, 1, false);
+        SDL_EndGPUCopyPass(copy);
     }
 
     void Execute(GfxFrame &frame, std::vector<GfxTexture *> &textures, GfxReadback &readback, bool present,
@@ -1136,131 +1187,148 @@ struct Executor : GfxExecutor {
         bool vertexUniformScaled = false;
         FragmentUniforms fragmentUniforms;
         bool fragmentUniformsSet = false;
-        for (size_t i = 0; i < frame.commands.size(); i++) {
-            const GfxCommand &c = frame.commands[i];
-            if (c.type == GFX_CMD_TARGET) {
-                if (pass != NULL) {
-                    SDL_EndGPURenderPass(pass);
-                    pass = NULL;
-                }
-                target = c.target;
-                continue;
-            }
-            if (c.type == GFX_CMD_BACKDROP) {
-                // A copy pass between render passes; the next draw starts a
-                // render pass that loads the back buffer as it is.
-                if (target != NULL)
-                    continue;
-                if (pass != NULL) {
-                    SDL_EndGPURenderPass(pass);
-                    pass = NULL;
-                }
-                SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
-                SDL_GPUTextureLocation src = {}, dst = {};
-                src.texture = backColor;
-                dst.texture = backdrop;
-                SDL_CopyGPUTextureToTexture(copy, &src, &dst, backWidth, backHeight, 1, false);
-                SDL_EndGPUCopyPass(copy);
-                continue;
-            }
-            if (pass == NULL) {
-                size_t cleared;
-                pass = BeginPass(cmd, target, targetW, targetH, frame.commands, i, &cleared);
-                bound = PassBindings();
-                if (cleared > 0) {
-                    i += cleared - 1;
+        // The drawing into textures (the car reflections' cube faces) runs
+        // first, then the back buffer's, so that the back buffer's render
+        // pass is not split by passes on other depth buffers mid-scene. With
+        // cubic environment mapping on, the Adreno 840 lost parts of the
+        // scenery after such a split in some sessions (#46). Nothing drawn
+        // on the back buffer is read by the drawing into textures.
+        GfxTexture *passTarget = NULL;
+        for (int phase = 0; phase < 2; phase++) {
+            target = NULL;
+            for (size_t i = 0; i < frame.commands.size(); i++) {
+                const GfxCommand &c = frame.commands[i];
+                if (c.type == GFX_CMD_TARGET) {
+                    // The back buffer's pass stays open over the texture
+                    // drawing skipped in its phase.
+                    if (pass != NULL && phase == 0) {
+                        EndPass(cmd, pass, passTarget);
+                        pass = NULL;
+                    }
+                    target = c.target;
                     continue;
                 }
-            }
-            if (c.type == GFX_CMD_CLEAR) {
-                bool colorClear = (c.clearFlags & GFX_CLEAR_TARGET) != 0;
-                bool depthClear = (c.clearFlags & GFX_CLEAR_ZBUFFER) != 0;
-                if (!colorClear && !depthClear)
+                if ((target != NULL) != (phase == 0))
                     continue;
-                SDL_GPUGraphicsPipeline *pipeline = ClearPipeline(colorClear, depthClear);
+                if (c.type == GFX_CMD_BACKDROP) {
+                    // A copy pass between render passes; the next draw starts a
+                    // render pass that loads the back buffer as it is.
+                    if (target != NULL)
+                        continue;
+                    if (pass != NULL) {
+                        SDL_EndGPURenderPass(pass);
+                        pass = NULL;
+                    }
+                    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
+                    SDL_GPUTextureLocation src = {}, dst = {};
+                    src.texture = backColor;
+                    dst.texture = backdrop;
+                    SDL_CopyGPUTextureToTexture(copy, &src, &dst, backWidth, backHeight, 1, false);
+                    SDL_EndGPUCopyPass(copy);
+                    continue;
+                }
+                if (pass == NULL) {
+                    size_t cleared;
+                    pass = BeginPass(cmd, target, targetW, targetH, frame.commands, i, &cleared);
+                    passTarget = target;
+                    bound = PassBindings();
+                    if (cleared > 0) {
+                        i += cleared - 1;
+                        continue;
+                    }
+                }
+                if (c.type == GFX_CMD_CLEAR) {
+                    bool colorClear = (c.clearFlags & GFX_CLEAR_TARGET) != 0;
+                    bool depthClear = (c.clearFlags & GFX_CLEAR_ZBUFFER) != 0;
+                    if (!colorClear && !depthClear)
+                        continue;
+                    SDL_GPUGraphicsPipeline *pipeline = ClearPipeline(colorClear, depthClear);
+                    if (pipeline != bound.pipeline) {
+                        SDL_BindGPUGraphicsPipeline(pass, pipeline);
+                        bound.pipeline = pipeline;
+                    }
+                    GfxViewport v = ToTarget(c.clearViewport, c.clearScreenW, c.clearScreenH, target == NULL, targetW,
+                                             targetH);
+                    SDL_GPUViewport vp = { (float)v.x, (float)v.y, (float)v.width, (float)v.height, 0.0f, 1.0f };
+                    SDL_Rect scissor = { (int)v.x, (int)v.y, (int)v.width, (int)v.height };
+                    SetViewport(pass, bound, vp, scissor);
+                    ClearUniforms u = {};
+                    Color(c.clearColor, u.color);
+                    u.depth[0] = c.clearZ;
+                    SDL_PushGPUVertexUniformData(cmd, 0, &u, sizeof(u));
+                    SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(u));
+                    vertexUniformState = NULL;
+                    fragmentUniformsSet = false;
+                    SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+                    continue;
+                }
+                const GfxDrawState &s = frame.states[c.state];
+                SDL_GPUGraphicsPipeline *pipeline = Pipeline(PipelineKey(c, s));
+                if (pipeline == NULL)
+                    continue;
                 if (pipeline != bound.pipeline) {
                     SDL_BindGPUGraphicsPipeline(pass, pipeline);
                     bound.pipeline = pipeline;
                 }
-                GfxViewport v = ToTarget(c.clearViewport, c.clearScreenW, c.clearScreenH, target == NULL, targetW,
-                                         targetH);
-                SDL_GPUViewport vp = { (float)v.x, (float)v.y, (float)v.width, (float)v.height, 0.0f, 1.0f };
-                SDL_Rect scissor = { (int)v.x, (int)v.y, (int)v.width, (int)v.height };
+                const bool scaled = target == NULL && s.screenW > 0 && s.screenH > 0;
+                const GfxViewport viewport = ToTarget(s.viewport, s.screenW, s.screenH, target == NULL, targetW, targetH);
+                SDL_GPUViewport vp;
+                if (c.transformed)
+                    vp = { 0.0f, 0.0f, (float)targetW, (float)targetH, 0.0f, 1.0f };
+                else
+                    vp = { (float)viewport.x, (float)viewport.y, (float)viewport.width, (float)viewport.height,
+                           viewport.minZ, viewport.maxZ };
+                SDL_Rect scissor = { (int)viewport.x, (int)viewport.y, (int)viewport.width, (int)viewport.height };
                 SetViewport(pass, bound, vp, scissor);
-                ClearUniforms u = {};
-                Color(c.clearColor, u.color);
-                u.depth[0] = c.clearZ;
-                SDL_PushGPUVertexUniformData(cmd, 0, &u, sizeof(u));
-                SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof(u));
-                vertexUniformState = NULL;
-                fragmentUniformsSet = false;
-                SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
-                continue;
-            }
-            const GfxDrawState &s = frame.states[c.state];
-            SDL_GPUGraphicsPipeline *pipeline = Pipeline(PipelineKey(c, s));
-            if (pipeline == NULL)
-                continue;
-            if (pipeline != bound.pipeline) {
-                SDL_BindGPUGraphicsPipeline(pass, pipeline);
-                bound.pipeline = pipeline;
-            }
-            const bool scaled = target == NULL && s.screenW > 0 && s.screenH > 0;
-            const GfxViewport viewport = ToTarget(s.viewport, s.screenW, s.screenH, target == NULL, targetW, targetH);
-            SDL_GPUViewport vp;
-            if (c.transformed)
-                vp = { 0.0f, 0.0f, (float)targetW, (float)targetH, 0.0f, 1.0f };
-            else
-                vp = { (float)viewport.x, (float)viewport.y, (float)viewport.width, (float)viewport.height,
-                       viewport.minZ, viewport.maxZ };
-            SDL_Rect scissor = { (int)viewport.x, (int)viewport.y, (int)viewport.width, (int)viewport.height };
-            SetViewport(pass, bound, vp, scissor);
-            if (vertexUniformState == NULL || vertexUniformW != targetW || vertexUniformH != targetH ||
-                vertexUniformScaled != scaled ||
-                (vertexUniformState != &s && !SameVertexUniforms(*vertexUniformState, s))) {
-                VertexUniforms vu;
-                FillVertexUniforms(c, s, targetW, targetH, viewport, scaled, vu);
-                SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
-                vertexUniformState = &s;
-                vertexUniformW = targetW;
-                vertexUniformH = targetH;
-                vertexUniformScaled = scaled;
-            }
-            FragmentUniforms fu;
-            FillFragmentUniforms(s, target == NULL && !c.transformed, fu);
-            if (!fragmentUniformsSet || memcmp(&fu, &fragmentUniforms, sizeof(fu)) != 0) {
-                SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-                fragmentUniforms = fu;
-                fragmentUniformsSet = true;
-            }
-            SDL_GPUTextureSamplerBinding textures[7];
-            TextureBindings(s, textures);
-            if (!bound.texturesSet || memcmp(textures, bound.textures, sizeof(textures)) != 0) {
-                SDL_BindGPUFragmentSamplers(pass, 0, textures, 7);
-                memcpy(bound.textures, textures, sizeof(textures));
-                bound.texturesSet = true;
-            }
-            // The buffer from its start; the draw gives its first vertex.
-            SDL_GPUBuffer *vertices = c.buffer != NULL ? ((GpuVertexBuffer *)c.buffer->gpu)->buffer : vertexBuffer;
-            uint32_t firstVertex = c.firstVertexByte / (c.transformed ? sizeof(GfxTLVertex) : sizeof(GfxVertex));
-            if (vertices != bound.vertices) {
-                SDL_GPUBufferBinding vb = { vertices, 0 };
-                SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
-                bound.vertices = vertices;
-            }
-            if (c.firstIndex != ~0u) {
-                if (!bound.indicesSet) {
-                    SDL_GPUBufferBinding ib = { indexBuffer, 0 };
-                    SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_16BIT);
-                    bound.indicesSet = true;
+                if (vertexUniformState == NULL || vertexUniformW != targetW || vertexUniformH != targetH ||
+                    vertexUniformScaled != scaled ||
+                    (vertexUniformState != &s && !SameVertexUniforms(*vertexUniformState, s))) {
+                    VertexUniforms vu;
+                    FillVertexUniforms(c, s, targetW, targetH, viewport, scaled, vu);
+                    SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
+                    vertexUniformState = &s;
+                    vertexUniformW = targetW;
+                    vertexUniformH = targetH;
+                    vertexUniformScaled = scaled;
                 }
-                SDL_DrawGPUIndexedPrimitives(pass, c.indexCount, 1, c.firstIndex, (Sint32)firstVertex, 0);
-            } else {
-                SDL_DrawGPUPrimitives(pass, c.vertexCount, 1, firstVertex, 0);
+                FragmentUniforms fu;
+                FillFragmentUniforms(s, target == NULL && !c.transformed, fu);
+                if (!fragmentUniformsSet || memcmp(&fu, &fragmentUniforms, sizeof(fu)) != 0) {
+                    SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+                    fragmentUniforms = fu;
+                    fragmentUniformsSet = true;
+                }
+                SDL_GPUTextureSamplerBinding textures[7];
+                TextureBindings(s, textures);
+                if (!bound.texturesSet || memcmp(textures, bound.textures, sizeof(textures)) != 0) {
+                    SDL_BindGPUFragmentSamplers(pass, 0, textures, 7);
+                    memcpy(bound.textures, textures, sizeof(textures));
+                    bound.texturesSet = true;
+                }
+                // The buffer from its start; the draw gives its first vertex.
+                SDL_GPUBuffer *vertices = c.buffer != NULL ? ((GpuVertexBuffer *)c.buffer->gpu)->buffer : vertexBuffer;
+                uint32_t firstVertex = c.firstVertexByte / (c.transformed ? sizeof(GfxTLVertex) : sizeof(GfxVertex));
+                if (vertices != bound.vertices) {
+                    SDL_GPUBufferBinding vb = { vertices, 0 };
+                    SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
+                    bound.vertices = vertices;
+                }
+                if (c.firstIndex != ~0u) {
+                    if (!bound.indicesSet) {
+                        SDL_GPUBufferBinding ib = { indexBuffer, 0 };
+                        SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_16BIT);
+                        bound.indicesSet = true;
+                    }
+                    SDL_DrawGPUIndexedPrimitives(pass, c.indexCount, 1, c.firstIndex, (Sint32)firstVertex, 0);
+                } else {
+                    SDL_DrawGPUPrimitives(pass, c.vertexCount, 1, firstVertex, 0);
+                }
+            }
+            if (pass != NULL) {
+                EndPass(cmd, pass, passTarget);
+                pass = NULL;
             }
         }
-        if (pass != NULL)
-            SDL_EndGPURenderPass(pass);
 
         if (!present) {
             SDL_SubmitGPUCommandBuffer(cmd);
@@ -1269,16 +1337,17 @@ struct Executor : GfxExecutor {
 
         // Read back before the frame is shown (the lens flare test).
         CollectReadback(readback);
-        bool reading = false;
+        Readback *reading = NULL;
         if (readback.requested && readback.width > 0 && readback.height > 0) {
             int x = std::max(0, std::min(readback.x, backWidth - 1));
             int y = std::max(0, std::min(readback.y, backHeight - 1));
             int w = std::min(readback.width, backWidth - x), h = std::min(readback.height, backHeight - y);
-            if ((uint32_t)(w * h * 4) > readbackCapacity) {
-                SDL_ReleaseGPUTransferBuffer(device, readbackBuffer);
-                readbackCapacity = (uint32_t)(w * h * 4);
-                SDL_GPUTransferBufferCreateInfo tbi = { SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, readbackCapacity, 0 };
-                readbackBuffer = SDL_CreateGPUTransferBuffer(device, &tbi);
+            reading = FreeReadback(readback);
+            if ((uint32_t)(w * h * 4) > reading->capacity) {
+                SDL_ReleaseGPUTransferBuffer(device, reading->buffer);
+                reading->capacity = (uint32_t)(w * h * 4);
+                SDL_GPUTransferBufferCreateInfo tbi = { SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, reading->capacity, 0 };
+                reading->buffer = SDL_CreateGPUTransferBuffer(device, &tbi);
             }
             SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
             SDL_GPUTextureRegion src = {};
@@ -1288,13 +1357,12 @@ struct Executor : GfxExecutor {
             src.w = w;
             src.h = h;
             src.d = 1;
-            SDL_GPUTextureTransferInfo dst = { readbackBuffer, 0, 0, 0 };
+            SDL_GPUTextureTransferInfo dst = { reading->buffer, 0, 0, 0 };
             SDL_DownloadFromGPUTexture(copy, &src, &dst);
             SDL_EndGPUCopyPass(copy);
-            readbackWidth = w;
-            readbackHeight = h;
+            reading->width = w;
+            reading->height = h;
             readback.requested = false;
-            reading = true;
         }
 
         if (vsync != presentModeVsync) {
@@ -1331,26 +1399,58 @@ struct Executor : GfxExecutor {
             SDL_BlitGPUTexture(cmd, &blit);
         }
 
-        if (reading)
-            readbackFence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
-        else
+        if (reading != NULL) {
+            reading->fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+            reading->serial = ++readbackSerial;
+        } else {
             SDL_SubmitGPUCommandBuffer(cmd);
+        }
         HashFrame();
     }
 
+    // Takes the reads the GPU has finished, oldest first, so the newest
+    // stays. Frame hashing waits for them all: its frames must not depend on
+    // the GPU's timing.
     void CollectReadback(GfxReadback &readback) override
     {
-        if (readbackFence == NULL)
-            return;
-        SDL_WaitForGPUFences(device, true, &readbackFence, 1);
-        SDL_ReleaseGPUFence(device, readbackFence);
-        readbackFence = NULL;
-        const uint32_t *map = (const uint32_t *)SDL_MapGPUTransferBuffer(device, readbackBuffer, false);
-        readback.pixels.assign(map, map + (size_t)readbackWidth * readbackHeight);
-        SDL_UnmapGPUTransferBuffer(device, readbackBuffer);
-        readback.readyWidth = readbackWidth;
-        readback.readyHeight = readbackHeight;
+        bool wait = Gfx_FrameHashWanted();
+        for (;;) {
+            Readback *oldest = NULL;
+            for (Readback &r : readbacks)
+                if (r.fence != NULL && (oldest == NULL || r.serial < oldest->serial))
+                    oldest = &r;
+            if (oldest == NULL || (!wait && !SDL_QueryGPUFence(device, oldest->fence)))
+                return;
+            FinishReadback(*oldest, readback);
+        }
+    }
+
+    void FinishReadback(Readback &r, GfxReadback &readback)
+    {
+        SDL_WaitForGPUFences(device, true, &r.fence, 1);
+        SDL_ReleaseGPUFence(device, r.fence);
+        r.fence = NULL;
+        const uint32_t *map = (const uint32_t *)SDL_MapGPUTransferBuffer(device, r.buffer, false);
+        readback.pixels.assign(map, map + (size_t)r.width * r.height);
+        SDL_UnmapGPUTransferBuffer(device, r.buffer);
+        readback.readyWidth = r.width;
+        readback.readyHeight = r.height;
         readback.ready = true;
+    }
+
+    // A slot for a new read. With all of them in flight, the GPU is far
+    // behind: the oldest is finished first.
+    Readback *FreeReadback(GfxReadback &readback)
+    {
+        Readback *oldest = NULL;
+        for (Readback &r : readbacks) {
+            if (r.fence == NULL)
+                return &r;
+            if (oldest == NULL || r.serial < oldest->serial)
+                oldest = &r;
+        }
+        FinishReadback(*oldest, readback);
+        return oldest;
     }
 
     // The back buffer's pixels for Gfx_HashFrame.

@@ -18,7 +18,7 @@ static_assert(offsetof(SavedGameImage, drivers) == 0x34, "saved-game drivers off
 static_assert(offsetof(SavedGameImage, playerSetup) == 0xb4, "saved-game setup offset");
 static_assert(offsetof(SavedGameImage, playerIdentifiers) == 0xc4, "saved-game identifiers offset");
 static_assert(offsetof(SavedGameImage, playerCars) == 0xf4, "saved-game cars offset");
-static_assert(offsetof(SavedGameImage, playerControllers) == 0x614, "saved-game controllers offset");
+static_assert(offsetof(SavedGameImage, playerCarSetups) == 0x614, "saved-game controllers offset");
 static_assert(offsetof(SavedGameImage, settingPairs) == 0x630, "saved-game pairs offset");
 static_assert(offsetof(SavedGameImage, primaryValues) == 0x6d0, "saved-game primary offset");
 static_assert(offsetof(SavedGameImage, selectionFlags) == 0x720, "saved-game flags offset");

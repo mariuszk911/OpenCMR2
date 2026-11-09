@@ -68,20 +68,20 @@ static void FillRecord(unsigned char *file, int record)
     int i;
 
     memset(p, 0, sizeof(ControllerData));
-    PutLE32(p + offsetof(ControllerData, field_0x0), 0x11000000u + (unsigned)record);
-    PutLE32(p + offsetof(ControllerData, field_0x4), 0x22000000u + (unsigned)record);
-    PutLE32(p + offsetof(ControllerData, field_0x10c), 0x33110000u + (unsigned)record);
+    PutLE32(p + offsetof(ControllerData, textureForce), 0x11000000u + (unsigned)record);
+    PutLE32(p + offsetof(ControllerData, effectsForce), 0x22000000u + (unsigned)record);
+    PutLE32(p + offsetof(ControllerData, hasAxes), 0x33110000u + (unsigned)record);
     PutLE32(p + offsetof(ControllerData, field_0x124), 0x44220000u + (unsigned)record);
-    PutLE16(p + offsetof(ControllerData, field_0x128), 0x10u + (unsigned)record);
+    PutLE16(p + offsetof(ControllerData, actionMasks), 0x10u + (unsigned)record);
     PutLE16(p + offsetof(ControllerData, field_0x13c), 0x20u + (unsigned)record);
     for (i = 0; i < 9; i++)
         p[offsetof(ControllerData, field_0x13e) + i] = (unsigned char)(0x40 + record * 9 + i);
     p[offsetof(ControllerData, name)] = 'K';
     p[offsetof(ControllerData, index)] = (unsigned char)record;
-    PutLE32(p + offsetof(ControllerData, field_0x210) +
+    PutLE32(p + offsetof(ControllerData, axisBindings) +
                 (size_t)3 * sizeof(ControllerDataUnk0x210) +
                 offsetof(ControllerDataUnk0x210, present), 1);
-    PutLE16(p + offsetof(ControllerData, field_0x2d8) + (size_t)4 * sizeof(unsigned short), 0x9abcu);
+    PutLE16(p + offsetof(ControllerData, axisIndices) + (size_t)4 * sizeof(unsigned short), 0x9abcu);
 }
 
 static void FillFile(unsigned char *file, unsigned int mapping0, unsigned int mapping1)
@@ -100,18 +100,18 @@ static int CheckRecords(const ControllerData *records)
     int i;
 
     for (i = 0; i < CONTROLLER_DISK_RECORDS; i++) {
-        CHECK(records[i].field_0x0 == 0x11000000u + (unsigned)i);
-        CHECK(records[i].field_0x4 == 0x22000000u + (unsigned)i);
-        CHECK(records[i].field_0x10c == 0x33110000u + (unsigned)i);
+        CHECK(records[i].textureForce == 0x11000000u + (unsigned)i);
+        CHECK(records[i].effectsForce == 0x22000000u + (unsigned)i);
+        CHECK(records[i].hasAxes == 0x33110000u + (unsigned)i);
         CHECK(records[i].field_0x124 == 0x44220000u + (unsigned)i);
-        CHECK(records[i].field_0x128 == (unsigned short)(0x10u + (unsigned)i));
+        CHECK(records[i].actionMasks[0] == (unsigned short)(0x10u + (unsigned)i));
         CHECK(records[i].field_0x13c == (unsigned short)(0x20u + (unsigned)i));
         CHECK(records[i].field_0x13e[0] == (unsigned char)(0x40 + i * 9));
         CHECK(records[i].field_0x13e[8] == (unsigned char)(0x40 + i * 9 + 8));
         CHECK(records[i].name[0] == 'K');
         CHECK(records[i].index == (unsigned char)i);
-        CHECK(records[i].field_0x210[3].present == 1);
-        CHECK(records[i].field_0x2d8[4] == 0x9abc);
+        CHECK(records[i].axisBindings[3].present == 1);
+        CHECK(records[i].axisIndices[4] == 0x9abc);
     }
     return 0;
 }
@@ -154,7 +154,7 @@ int main(void)
     CHECK(ControllerDisk_Decode(records, mapping, file, sizeof(file)) == 0);
     CHECK(mapping[0] == 0x5a5a && mapping[1] == 0x5a5a);
     for (i = 0; i < CONTROLLER_DISK_RECORDS; i++)
-        CHECK(records[i].field_0x0 == 0);
+        CHECK(records[i].textureForce == 0);
 
     FillFile(file, CONTROLLER_DISK_RECORDS, 0);
     CHECK(ControllerDisk_Decode(records, mapping, file, sizeof(file)) == 0);

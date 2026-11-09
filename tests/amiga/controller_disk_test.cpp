@@ -55,17 +55,17 @@ static void FillSynthetic(unsigned char *file)
     memset(file, 0, CONTROLLER_DISK_FILE_SIZE);
     for (i = 0; i < CONTROLLER_DISK_RECORDS; i++) {
         unsigned char *p = file + (size_t)i * sizeof(ControllerData);
-        PutLE32(p + offsetof(ControllerData, field_0x0), 0x11000000u + (unsigned)i);
-        PutLE32(p + offsetof(ControllerData, field_0x4), 0x22000000u + (unsigned)i);
-        PutLE32(p + offsetof(ControllerData, field_0x10c), 0x33110000u + (unsigned)i);
-        PutLE16(p + offsetof(ControllerData, field_0x128), 0x10u + (unsigned)i);
+        PutLE32(p + offsetof(ControllerData, textureForce), 0x11000000u + (unsigned)i);
+        PutLE32(p + offsetof(ControllerData, effectsForce), 0x22000000u + (unsigned)i);
+        PutLE32(p + offsetof(ControllerData, hasAxes), 0x33110000u + (unsigned)i);
+        PutLE16(p + offsetof(ControllerData, actionMasks), 0x10u + (unsigned)i);
         PutLE16(p + offsetof(ControllerData, field_0x13c), 0x20u + (unsigned)i);
         p[offsetof(ControllerData, name)] = 'K';
         p[offsetof(ControllerData, index)] = (unsigned char)i;
-        PutLE32(p + offsetof(ControllerData, field_0x210) +
+        PutLE32(p + offsetof(ControllerData, axisBindings) +
                     (size_t)3 * sizeof(ControllerDataUnk0x210) +
                     offsetof(ControllerDataUnk0x210, present), 1);
-        PutLE16(p + offsetof(ControllerData, field_0x2d8) + (size_t)4 * sizeof(unsigned short), 0x9abcu);
+        PutLE16(p + offsetof(ControllerData, axisIndices) + (size_t)4 * sizeof(unsigned short), 0x9abcu);
     }
     PutLE16(file + 0x11a0, 0);
     PutLE16(file + 0x11a2, 1);
@@ -76,15 +76,15 @@ static int CheckRecords(const ControllerData *records)
     int i;
 
     for (i = 0; i < CONTROLLER_DISK_RECORDS; i++) {
-        CHECK(records[i].field_0x0 == 0x11000000u + (unsigned)i);
-        CHECK(records[i].field_0x4 == 0x22000000u + (unsigned)i);
-        CHECK(records[i].field_0x10c == 0x33110000u + (unsigned)i);
-        CHECK(records[i].field_0x128 == (unsigned short)(0x10u + (unsigned)i));
+        CHECK(records[i].textureForce == 0x11000000u + (unsigned)i);
+        CHECK(records[i].effectsForce == 0x22000000u + (unsigned)i);
+        CHECK(records[i].hasAxes == 0x33110000u + (unsigned)i);
+        CHECK(records[i].actionMasks[0] == (unsigned short)(0x10u + (unsigned)i));
         CHECK(records[i].field_0x13c == (unsigned short)(0x20u + (unsigned)i));
         CHECK(records[i].name[0] == 'K');
         CHECK(records[i].index == (unsigned char)i);
-        CHECK(records[i].field_0x210[3].present == 1);
-        CHECK(records[i].field_0x2d8[4] == 0x9abc);
+        CHECK(records[i].axisBindings[3].present == 1);
+        CHECK(records[i].axisIndices[4] == 0x9abc);
     }
     return 0;
 }
@@ -121,9 +121,9 @@ int main(int argc, char **argv)
     } else {
         // The captured file was written by the pre-fix big-endian build;
         // ControllerDisk_DecodeAuto must migrate it.
-        CHECK(records[0].field_0x0 == 0x8000);
+        CHECK(records[0].textureForce == 0x8000);
         CHECK(records[0].name[0] == 'K');
-        CHECK(records[1].field_0x0 == 0x8000);
+        CHECK(records[1].textureForce == 0x8000);
         CHECK(records[1].name[0] == 'K');
     }
 
@@ -149,7 +149,7 @@ int main(int argc, char **argv)
     mapping[0] = mapping[1] = 0x5a5a;
     CHECK(ControllerDisk_Decode(records, mapping, file, sizeof(file)) == 0);
     CHECK(mapping[0] == 0x5a5a && mapping[1] == 0x5a5a);
-    CHECK(records[0].field_0x0 == 0);
+    CHECK(records[0].textureForce == 0);
 
     printf("controller_disk: OK\n");
     return 0;

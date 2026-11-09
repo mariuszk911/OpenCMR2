@@ -59,8 +59,8 @@ void Fill(SavedGameImage &image)
         image.playerIdentifiers[i].counters[3] = (BYTE)(0x40 + i);
         for (int j = 0; j < (int)sizeof(image.playerCars[i].data); ++j)
             image.playerCars[i].data[j] = (BYTE)(i * 7 + j);
-        for (int j = 0; j < (int)sizeof(image.playerControllers[i].data); ++j)
-            image.playerControllers[i].data[j] = (BYTE)(i * 3 + j);
+        for (int j = 0; j < (int)sizeof(image.playerCarSetups[i]); ++j)
+            ((BYTE *)&image.playerCarSetups[i])[j] = (BYTE)(i * 3 + j);
     }
     for (int i = 0; i < 20; ++i) {
         image.settingPairs[i][0] = 0x01020304 + i;
@@ -111,8 +111,8 @@ void Compare(const SavedGameImage &a, const SavedGameImage &b)
               "identifier.counters");
         Check(memcmp(a.playerCars[i].data, b.playerCars[i].data, sizeof(a.playerCars[i].data)) == 0,
               "playerCars");
-        Check(memcmp(a.playerControllers[i].data, b.playerControllers[i].data,
-                     sizeof(a.playerControllers[i].data)) == 0,
+        Check(memcmp(&a.playerCarSetups[i], &b.playerCarSetups[i],
+                     sizeof(a.playerCarSetups[i])) == 0,
               "playerControllers");
     }
     Check(memcmp(a.settingPairs, b.settingPairs, sizeof(a.settingPairs)) == 0, "settingPairs");

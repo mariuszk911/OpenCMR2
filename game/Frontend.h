@@ -5,6 +5,14 @@
 #include "Texture.h"
 
 // TODO: no idea if this is the right thing to call this
+// Entries of CFrontend::m_matrixTextures: the trophies are at their place.
+enum {
+    FRONTEND_LG_MATRIX = 0,
+    FRONTEND_TROPHY_BRONZE = 1,
+    FRONTEND_TROPHY_SILVER = 2,
+    FRONTEND_TROPHY_GOLD = 3
+};
+
 class CFrontend
 {
 public:
@@ -48,9 +56,9 @@ public:
     // GLOBAL: CMR2 0x00520b00
     static char m_strInvalidTextString[20];
     // GLOBAL: CMR2 0x0065aa70
-    static BYTE m_unk0x0065aa70;
+    static BYTE m_textLanguage;
     // GLOBAL: CMR2 0x0065aa71
-    static BYTE m_unk0x0065aa71;
+    static BYTE m_textLanguageCount;
 
     // GLOBAL: CMR2 0x00818200
     static GenericFile m_languageFiles[5];
@@ -115,8 +123,11 @@ public:
     // GLOBAL: CMR2 0x008185b8
     static Texture* m_pAr640DTexture;
 
+    // The large matrix texture, then the trophies by place (m_matrixTextures
+    // indices below). FrontendDraw_MatrixMedalRect picks a trophy with the
+    // place it was won in, as an index into this table.
     // GLOBAL: CMR2 0x008182b8
-    static Texture* m_pLgMatrixTexture;
+    static Texture* m_matrixTextures[4];
 
     // GLOBAL: CMR2 0x00818324
     static Texture* m_pSmMatrixTexture;
@@ -127,14 +138,8 @@ public:
     // GLOBAL: CMR2 0x00818348
     static Texture* m_pTinyFlags[8];
 
-    // GLOBAL: CMR2 0x008182bc
-    static Texture* m_pTBronze;
 
-    // GLOBAL: CMR2 0x008182c0
-    static Texture* m_pTSilver;
 
-    // GLOBAL: CMR2 0x008182c4
-    static Texture* m_pTGold;
 
     // GLOBAL: CMR2 0x00516c78
     static char m_strEsc[4];
