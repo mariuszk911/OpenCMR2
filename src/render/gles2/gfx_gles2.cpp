@@ -156,7 +156,7 @@ struct Executor : GfxExecutor {
     // spend between two presents.
     struct Stats {
         bool enabled = false;
-        double readback = 0;
+        double readback = 0, swap = 0;
         long readbacks = 0;
         double lastPresent = 0, upload = 0, build = 0, draw = 0, present = 0, period = 0;
         long frames = 0, draws = 0, draws3d = 0, vertexUploads = 0, worldUploads = 0, fragmentUploads = 0,
@@ -1460,7 +1460,10 @@ struct Executor : GfxExecutor {
         SetAttributeCount(1);
         bound.vertices = ~0u;
         gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        const double s0 = stats.enabled ? Sys_GetTicksPrecise() : 0.0;
         Gles2Display_Swap();
+        if (stats.enabled)
+            stats.swap += Sys_GetTicksPrecise() - s0;
         gl.Enable(GL_SCISSOR_TEST);
         bound.scissor[0] = -1;
         bound.framebuffer = 0;
@@ -1507,13 +1510,13 @@ struct Executor : GfxExecutor {
                 "present %.2f + other %.2f; per frame: draws %.0f (3D %.0f), uniform blocks static %.0f world %.0f "
                 "fragment %.0f, recorded states %.0f, program switches %.0f, texture binds %.0f, vertex binds %.0f, unit switches %.0f, "
                 "render-target switches %.2f, draws into render targets %.1f, draws with a cube map %.1f; "
-                "back buffer reads %.2f, %.2f ms (in other)",
+                "back buffer reads %.2f, %.2f ms (in other); aglSwapBuffers %.2f ms (in present)",
                 stats.frames, stats.period / n, stats.upload / n, stats.build / n, stats.draw / n, stats.present / n,
                 (stats.period - stats.upload - stats.build - stats.draw - stats.present) / n, stats.draws / n,
                 stats.draws3d / n, stats.vertexUploads / n, stats.worldUploads / n, stats.fragmentUploads / n,
                 stats.states / n, stats.programSwitches / n, stats.textureBinds / n, stats.vertexBinds / n, stats.unitSwitches / n,
                 stats.targets / n, stats.targetDraws / n, stats.cubeDraws / n,
-                stats.readbacks / n, stats.readback / n);
+                stats.readbacks / n, stats.readback / n, stats.swap / n);
         const bool enabled = stats.enabled;
         stats = Stats();
         stats.enabled = enabled;
