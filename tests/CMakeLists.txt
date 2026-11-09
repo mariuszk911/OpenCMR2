@@ -783,3 +783,10 @@ add_executable(gfx_core_serial_test gfx_core_serial.cpp
 target_include_directories(gfx_core_serial_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(gfx_core_serial_test PRIVATE SDL3::SDL3)
 add_test(NAME gfx_core_serial COMMAND gfx_core_serial_test)
+
+# [video] cube_faces_per_frame: one cube face per pass, in turn.
+add_executable(gfx_core_cube_test gfx_core_cube.cpp
+    ${PROJECT_SOURCE_DIR}/src/diagnostics/observer.cpp ${PROJECT_SOURCE_DIR}/src/render/gfx_core.cpp)
+target_include_directories(gfx_core_cube_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(gfx_core_cube_test PRIVATE SDL3::SDL3)
+add_test(NAME gfx_core_cube COMMAND gfx_core_cube_test)

@@ -27,6 +27,7 @@ struct GfxTexture {
     bool renderedTo;            // the GPU copy is newer (render targets)
     void *gpu;                  // executor's object
     GfxTexture *replacement;    // drawn instead (Gfx_SetTextureReplacement)
+    uint32_t cubePasses = 0;    // a cube render target: passes over its faces begun
 };
 
 // The texture a draw reads for t: its cube, or its replacement.

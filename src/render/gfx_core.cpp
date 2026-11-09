@@ -50,6 +50,9 @@ GfxReadback s_readback;
 std::vector<GfxTexture *> s_textures;     // every live texture (not face views)
 int s_width = 640, s_height = 480;
 GfxTexture *s_target;
+// Drawing into a cube face that this pass leaves out ([video]
+// cube_faces_per_frame): its clears and draws are not recorded.
+bool s_skipTarget;
 std::vector<std::pair<GfxDrawState, GfxTexture *>> s_savedStates;
 std::vector<std::pair<int, int>> s_modes;
 uint32_t s_presentedFrames = 1;     // frames presented (vertex buffer ages)
@@ -174,7 +177,7 @@ void RecordDraw(int primitive, bool transformed, const void *vertices, DWORD ver
                         s_state.stages[0].texture ? s_state.stages[0].texture->width : 0, s_state.stages[0].texture ? s_state.stages[0].texture->height : 0);
             }
     }
-    if (vertexCount == 0 || s_executor == NULL)
+    if (vertexCount == 0 || s_executor == NULL || s_skipTarget)
         return;
     std::vector<uint16_t> fan;
     if (primitive == GFX_TRIANGLEFAN) {
@@ -521,6 +524,7 @@ static void Present(BOOL vsync, bool stretch)
     s_stateDirty = true;
     // A frame always starts on the back buffer.
     s_target = NULL;
+    s_skipTarget = false;
     if (Diagnostics::observer)
         Diagnostics::observer->EndPresent();
 }
@@ -542,6 +546,8 @@ static void Flush(void)
 
 extern "C" void Gfx_Clear(DWORD flags, DWORD color, float z)
 {
+    if (s_skipTarget)
+        return;
     GfxCommand cmd = {};
     cmd.type = GFX_CMD_CLEAR;
     cmd.clearFlags = flags;
@@ -591,8 +597,44 @@ extern "C" void Gfx_PopState(void)
         Gfx_SetRenderTarget(saved.second);
 }
 
+// [video] cube_faces_per_frame (1-6): how many faces of a cube render target are
+// drawn each time the game redraws all six (a pass begins when it targets face
+// 0), the others in turn on the following passes. The game redraws a car's
+// cube map every frame: about 1,300 draws, which on the Amiga took a Cubic race
+// to about 8 frames a second. 6, all faces, is the original; the Amiga default is 1
+// (each face is then up to 6 passes old).
+static bool SkipCubeFace(GfxTexture *target)
+{
+    static int perPass = -1;
+    if (perPass < 0) {
+#ifdef OPENCMR2_AMIGA
+        perPass = Platform_GetSettingInt("video.cube_faces_per_frame", 1);
+#else
+        perPass = Platform_GetSettingInt("video.cube_faces_per_frame", 6);
+#endif
+        perPass = std::min(std::max(perPass, 1), 6);
+    }
+    if (target == NULL || perPass >= 6)
+        return false;
+    GfxTexture *cube = Root(target);
+    if (!(cube->flags & GFX_TEXTURE_CUBE))
+        return false;
+    const int face = target->cube != NULL ? target->face : 0;
+    // A new pass, unless the face is targeted again (a flush, a pop).
+    if (face == 0 && Root(s_target) != cube)
+        cube->cubePasses++;
+    const int first = (int)(cube->cubePasses * (uint32_t)perPass % 6);
+    return (face - first + 6) % 6 >= perPass;
+}
+
 extern "C" void Gfx_SetRenderTarget(GfxTexture *target)
 {
+    const bool skip = SkipCubeFace(target);
+    s_skipTarget = skip;
+    if (skip) {
+        s_target = target;
+        return;
+    }
     GfxCommand cmd = {};
     cmd.type = GFX_CMD_TARGET;
     cmd.target = target;
