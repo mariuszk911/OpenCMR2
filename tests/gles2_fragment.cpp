@@ -115,6 +115,31 @@ int main()
         Check(a[GLES2_SLOT(5)] == 1.0f && a[GLES2_SLOT(5) + 1] == 5.0f && Near(a[GLES2_SLOT(6)], 0x40 / 255.0f), "an alpha test brings its reference");
     }
 
+    // A key survives its text line; bad lines are refused.
+    {
+        GfxDrawState b = s;
+        b.stages[0].colorOp = GFX_TOP_BUMPENVMAPLUMINANCE;
+        b.stages[1].colorOp = GFX_TOP_MODULATE;
+        b.stages[1].colorArg2 = GFX_TA_TFACTOR | GFX_TA_COMPLEMENT;
+        b.alphaTest = true;
+        b.alphaFunc = GFX_CMP_GREATEREQUAL;
+        b.fog = true;
+        b.specular = true;
+        Gles2FragmentKey original, back;
+        Gles2Fragment_Key(b, GLES2_KIND_NONE, GLES2_KIND_CUBE, &original);
+        const std::string line = Gles2Fragment_KeyText(true, original);
+        bool transformed = false;
+        Check(Gles2Fragment_ParseKey(line.c_str(), &transformed, &back) && transformed &&
+                  Gles2Fragment_SameKey(original, back),
+              "a key round-trips through its line");
+        Check(Gles2Fragment::Source(original) == Gles2Fragment::Source(back), "and gives the same shader text");
+        Check(!Gles2Fragment_ParseKey("v2 0 1", &transformed, &back), "another version is refused");
+        Check(!Gles2Fragment_ParseKey((line + " 7").c_str(), &transformed, &back), "extra fields are refused");
+        Check(!Gles2Fragment_ParseKey("v1 0 1 2", &transformed, &back), "a short line is refused");
+        Check(!Gles2Fragment_ParseKey("v1 0 9 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0", &transformed, &back), "a value out of range is refused");
+        Check(!Gles2Fragment_ParseKey("", &transformed, &back), "an empty line is refused");
+    }
+
     // Distinct states, distinct keys.
     t = s;
     t.stages[0].colorOp = GFX_TOP_ADD;

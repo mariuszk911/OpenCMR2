@@ -20,6 +20,8 @@
 #include "render/gfx_internal.h"
 #include "render/gles2/gles2_uniforms.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <string>
@@ -75,6 +77,68 @@ inline void Gles2Fragment_Key(const GfxDrawState &s, int kind0, int kind1, Gles2
 inline bool Gles2Fragment_SameKey(const Gles2FragmentKey &a, const Gles2FragmentKey &b)
 {
     return memcmp(&a, &b, sizeof(a)) == 0;
+}
+
+// A key as one text line, to remember the shaders a game used and compile them
+// at the next start instead of in the middle of a loading screen (a
+// two-stage 3D shader takes 13 s to compile the first time). "v1" is the
+// version of the line; a shader text change needs no new version, the
+// compiled programs are found by the text's hash.
+// The key's fields in the order of a line, with the largest value each may have.
+inline int Gles2Fragment_Fields(Gles2FragmentKey &k, int **field, int *limit)
+{
+    int *const f[17] = { &k.kind[0], &k.kind[1], &k.colorOp[0], &k.colorOp[1], &k.colorArg1[0], &k.colorArg1[1],
+                         &k.colorArg2[0], &k.colorArg2[1], &k.alphaOp[0], &k.alphaOp[1], &k.alphaArg1[0],
+                         &k.alphaArg1[1], &k.alphaArg2[0], &k.alphaArg2[1], &k.alphaTest, &k.fog, &k.specular };
+    static const int l[17] = { 2, 2, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 8, 2, 1 };
+    for (int i = 0; i < 17; i++) {
+        field[i] = f[i];
+        limit[i] = l[i];
+    }
+    return 17;
+}
+
+inline std::string Gles2Fragment_KeyText(bool transformed, const Gles2FragmentKey &key)
+{
+    Gles2FragmentKey k = key;
+    int *field[17], limit[17];
+    const int n = Gles2Fragment_Fields(k, field, limit);
+    std::string line = transformed ? "v1 1" : "v1 0";
+    char number[16];
+    for (int i = 0; i < n; i++) {
+        snprintf(number, sizeof(number), " %d", *field[i]);
+        line += number;
+    }
+    return line;
+}
+
+// Parses a line of Gles2Fragment_KeyText; false for anything else or values
+// outside what a key can hold.
+inline bool Gles2Fragment_ParseKey(const char *line, bool *transformed, Gles2FragmentKey *key)
+{
+    Gles2FragmentKey k;
+    memset(&k, 0, sizeof(k));
+    int *field[17], limit[17];
+    const int n = Gles2Fragment_Fields(k, field, limit);
+    if (strncmp(line, "v1 ", 3) != 0 || (line[3] != '0' && line[3] != '1'))
+        return false;
+    const bool t = line[3] == '1';
+    const char *p = line + 4;
+    for (int i = 0; i < n; i++) {
+        char *end = NULL;
+        const long value = strtol(p, &end, 10);
+        if (end == p || value < 0 || value > limit[i])
+            return false;
+        *field[i] = (int)value;
+        p = end;
+    }
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+        p++;
+    if (*p != '\0')
+        return false;
+    *key = k;
+    *transformed = t;
+    return true;
 }
 
 // The fragment uniforms a program built from key reads, and nothing else: the

@@ -137,6 +137,7 @@ struct Executor : GfxExecutor {
     std::vector<DrawUniforms> drawUniforms;
     std::vector<Gles2FragmentKey> drawKeys;   // per command (draws only)
     std::vector<SpecialProgram *> specials;
+    bool prewarming = false;        // compiling the remembered variants at startup
     bool genericFragment = false;   // [video] gles2_generic_fragment: the general shader for every draw
     bool simpleVertex = false, lightLoop = false;
     const char *vertex3D = kGles2Vertex3D;   // [video] gles2_light_loop = 1: the loop with a computed index
@@ -148,7 +149,7 @@ struct Executor : GfxExecutor {
         bool enabled = false;
         double lastPresent = 0, upload = 0, build = 0, draw = 0, present = 0, period = 0;
         long frames = 0, draws = 0, draws3d = 0, vertexUploads = 0, worldUploads = 0, fragmentUploads = 0,
-             programSwitches = 0, textureBinds = 0, vertexBinds = 0, unitSwitches = 0;
+             programSwitches = 0, textureBinds = 0, vertexBinds = 0, unitSwitches = 0, targets = 0, cubeDraws = 0;
     } stats;
 
     // [video] gles2_dump = N: every Nth frame with 3D draws, as RAM:cmr2-frame-00..15.ppm (the last 16 are kept),
@@ -365,6 +366,7 @@ struct Executor : GfxExecutor {
         const GLenum error = gl.GetError();
         if (error != GL_NO_ERROR)
             Sys_Log("gfx: gles2: error %#x setting up", (unsigned)error);
+        PrewarmVariants();
         return true;
     }
 
@@ -463,6 +465,7 @@ struct Executor : GfxExecutor {
         InvalidateTextureBinding();
         t->gpu = g;
         if (t->flags & GFX_TEXTURE_RENDER_TARGET) {
+            Sys_Log("gfx: gles2: render target %dx%d%s", t->width, t->height, (t->flags & GFX_TEXTURE_CUBE) ? " (cube map)" : "");
             // Storage now, so that it can be drawn into before any upload.
             Upload(t, g);
             gl.GenRenderbuffers(1, &g->depth);
@@ -849,7 +852,53 @@ struct Executor : GfxExecutor {
                 Sys_GetTicksPrecise() - t0, key.kind[0], key.kind[1], key.colorOp[0], key.colorOp[1], key.alphaTest,
                 key.fog);
         specials.push_back(e);
+        if (!e->failed && !prewarming)
+            RememberVariant(transformed, key);
         return e->failed ? generic : e->program;
+    }
+
+    // The shader variants a game used are listed in PROGDIR:gles2_shaders.lst and
+    // built at the next start, while the game is loading: a two-stage 3D shader
+    // takes seconds to compile the first time, which froze the screen between
+    // the menu and a race. Compiled programs are cached by ogles2, so a start
+    // with a list costs a few milliseconds a variant.
+    static const char *VariantFile() { return "PROGDIR:gles2_shaders.lst"; }
+
+    void RememberVariant(bool transformed, const Gles2FragmentKey &key)
+    {
+        FILE *f = fopen(VariantFile(), "ab");
+        if (f == NULL)
+            return;
+        const std::string line = Gles2Fragment_KeyText(transformed, key) + "\n";
+        fwrite(line.data(), 1, line.size(), f);
+        fclose(f);
+    }
+
+    void PrewarmVariants()
+    {
+        if (genericFragment)
+            return;
+        FILE *f = fopen(VariantFile(), "rb");
+        if (f == NULL)
+            return;
+        const double t0 = Sys_GetTicksPrecise();
+        char line[256];
+        int count = 0, bad = 0;
+        prewarming = true;
+        while (fgets(line, sizeof(line), f) != NULL) {
+            bool transformed = false;
+            Gles2FragmentKey key;
+            if (!Gles2Fragment_ParseKey(line, &transformed, &key)) {
+                bad++;
+                continue;
+            }
+            ProgramFor(transformed, key);   // a variant already built is found, not built again
+            count++;
+        }
+        prewarming = false;
+        fclose(f);
+        Sys_Log("gfx: gles2: %d shader variants listed (%d bad lines), %u built, %.0f ms", count, bad,
+                (unsigned)specials.size(), Sys_GetTicksPrecise() - t0);
     }
 
     void ResetUniformCache()
@@ -1113,6 +1162,8 @@ struct Executor : GfxExecutor {
             const GfxCommand &c = frame.commands[i];
             if (c.type == GFX_CMD_TARGET) {
                 target = c.target;
+                if (target != NULL)
+                    stats.targets++;
                 if (target == NULL) {
                     BindFramebuffer(backFramebuffer);
                     targetW = backWidth;
@@ -1140,6 +1191,8 @@ struct Executor : GfxExecutor {
                 keyProgram = &ProgramFor(c.transformed, fragmentKey);
             }
             Program &p = *keyProgram;
+            if (stats.enabled && (fragmentKey.kind[0] == GLES2_KIND_CUBE || fragmentKey.kind[1] == GLES2_KIND_CUBE))
+                stats.cubeDraws++;
             UseProgram(p);
             SetDrawState(s);
             const GfxViewport viewport = ToTarget(s.viewport, s.screenW, s.screenH, target == NULL, targetW, targetH);
@@ -1269,11 +1322,13 @@ struct Executor : GfxExecutor {
         const double n = (double)stats.frames;
         Sys_Log("gfx: gles2 stats, %ld frames, ms/frame: period %.2f = upload %.2f + uniforms %.2f + draw loop %.2f + "
                 "present %.2f + other %.2f; per frame: draws %.0f (3D %.0f), uniform blocks static %.0f world %.0f "
-                "fragment %.0f, program switches %.0f, texture binds %.0f, vertex binds %.0f, unit switches %.0f",
+                "fragment %.0f, program switches %.0f, texture binds %.0f, vertex binds %.0f, unit switches %.0f, "
+                "render targets %.0f, draws with a cube map %.0f",
                 stats.frames, stats.period / n, stats.upload / n, stats.build / n, stats.draw / n, stats.present / n,
                 (stats.period - stats.upload - stats.build - stats.draw - stats.present) / n, stats.draws / n,
                 stats.draws3d / n, stats.vertexUploads / n, stats.worldUploads / n, stats.fragmentUploads / n,
-                stats.programSwitches / n, stats.textureBinds / n, stats.vertexBinds / n, stats.unitSwitches / n);
+                stats.programSwitches / n, stats.textureBinds / n, stats.vertexBinds / n, stats.unitSwitches / n,
+                stats.targets / n, stats.cubeDraws / n);
         const bool enabled = stats.enabled;
         stats = Stats();
         stats.enabled = enabled;
