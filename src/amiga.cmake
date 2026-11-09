@@ -3,6 +3,23 @@
 
 set(MINIGL_INCLUDE_DIR "${PISTORM3D}/SDK/minigl-shared-library/include")
 set(MINIGL_LIBRARY_DIR "${PISTORM3D}/SDK/lib")
+set(OGLES2_INCLUDE_DIR "${OGLES2_SDK}/include")
+add_compile_definitions(OPENCMR2_GLES2_RENDERER)
+# Sources that include <proto/ogles2.h>. They get the SDK's include directory
+# on their own (not the whole target), as MiniGL's and ogles2's headers differ.
+set(OGLES2_SOURCES
+    render/gles2/ogles2_glue.c
+    render/gles2/ogles2_display.c
+    render/gles2/ogles2_runtime.c)
+set_source_files_properties(${OGLES2_SOURCES}
+    PROPERTIES INCLUDE_DIRECTORIES "${OGLES2_INCLUDE_DIR};${CMAKE_CURRENT_SOURCE_DIR}")
+# The GLES2 renderer itself: shares port/types.h with the game, so it never
+# sees the NDK headers; it takes only the GL headers.
+set(GLES2_RENDERER_SOURCES
+    render/gfx_core.cpp
+    render/gles2/gfx_gles2.cpp)
+set_source_files_properties(render/gles2/gfx_gles2.cpp render/gfx_dispatch_amiga.cpp
+    PROPERTIES INCLUDE_DIRECTORIES "${OGLES2_INCLUDE_DIR};${CMAKE_CURRENT_SOURCE_DIR}")
 
 # libnix swapstack.o plus the __stack size. The Shell stack is too small for the
 # C++ game and the STL-heavy Sys layer; the reference Amiga port uses the same
@@ -78,6 +95,9 @@ add_library(opencmr2_platform OBJECT
     platform/amiga/amiga_sys.cpp
     platform/amiga/amiga_platform.cpp
     render/minigl/gfx_minigl.cpp
+    render/gfx_dispatch_amiga.cpp
+    ${GLES2_RENDERER_SOURCES}
+    ${OGLES2_SOURCES}
     input/input_amiga.cpp
     audio/audio_ahi.cpp
     audio/mixer.cpp
@@ -137,6 +157,13 @@ target_include_directories(amiga_smoke PRIVATE
 target_link_directories(amiga_smoke PRIVATE ${MINIGL_LIBRARY_DIR})
 target_link_libraries(amiga_smoke PRIVATE minigl)
 
+# ogles2.library smoke test: the glue, a 32-bit mode and a full-screen context
+# with no game code (Domain B, target only, not staged).
+add_executable(amiga_ogles2_smoke_test ${PROJECT_SOURCE_DIR}/tests/amiga/ogles2_smoke_test.c
+    ${OGLES2_SOURCES})
+target_include_directories(amiga_ogles2_smoke_test PRIVATE ${OGLES2_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+opencmr2_amiga_stack(amiga_ogles2_smoke_test)
+
 # MiniGL zero-area 2D rectangle reproducer for the option-screen separators.
 add_executable(amiga_minigl_tl_rects_test ${PROJECT_SOURCE_DIR}/tests/amiga/minigl_tl_rects_test.c)
 target_include_directories(amiga_minigl_tl_rects_test PRIVATE ${MINIGL_INCLUDE_DIR})
@@ -170,6 +197,10 @@ opencmr2_amiga_stack(amiga_minigl_movie_upload_test)
 # movie stream textures through it (Domain B, target only, not staged).
 add_executable(amiga_gfx_stream_texture_test ${PROJECT_SOURCE_DIR}/tests/amiga/gfx_stream_texture_test.cpp
     render/minigl/gfx_minigl.cpp
+    render/gfx_dispatch_amiga.cpp
+    ${GLES2_RENDERER_SOURCES}
+    ${OGLES2_SOURCES}
+    diagnostics/observer.cpp
     platform/amiga/amiga_sys.cpp
     platform/amiga/amiga_libfix.c)
 target_include_directories(amiga_gfx_stream_texture_test PRIVATE ${MINIGL_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})

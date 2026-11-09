@@ -1,7 +1,18 @@
 // The renderer's front end: the gfx.h state machine, CPU copies of textures
 // and vertex buffers, and the recording of each frame for the executor.
 
+#ifdef OPENCMR2_AMIGA
+// The AmigaOS build links this front end with the GLES2 executor next to the
+// MiniGL backend: its exports are Core_Gfx_* and render/gfx_dispatch_amiga.cpp
+// forwards to them. It has no SDL: the few SDL calls below are replaced by
+// the Amiga Sys layer's settings and plain C.
+#define OPENCMR2_GFX_PREFIX_CORE
+#include "render/gfx_api_prefix.h"
+#endif
+
+#ifndef OPENCMR2_AMIGA
 #include "platform/platform.h"
+#endif
 #include "port/sys.h"
 #include "port/diagnostics.h"
 #include "render/gfx_internal.h"
@@ -14,6 +25,21 @@
 
 #include <algorithm>
 
+#ifdef OPENCMR2_AMIGA
+#define SDL_getenv getenv
+#define Platform_GetSetting Sys_GetOptionText
+#define Platform_GetSettingInt Sys_GetOption
+static int Gfx_StrCaseCmp(const char *a, const char *b)
+{
+    for (;; a++, b++) {
+        const int x = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a, y = (*b >= 'A' && *b <= 'Z') ? *b + 32 : *b;
+        if (x != y || x == 0)
+            return x - y;
+    }
+}
+#define SDL_strcasecmp Gfx_StrCaseCmp
+#endif
+
 namespace {
 
 GfxExecutor *s_executor;
@@ -24,6 +50,9 @@ GfxReadback s_readback;
 std::vector<GfxTexture *> s_textures;     // every live texture (not face views)
 int s_width = 640, s_height = 480;
 GfxTexture *s_target;
+// Drawing into a cube face that this pass leaves out ([video]
+// cube_faces_per_frame): its clears and draws are not recorded.
+bool s_skipTarget;
 std::vector<std::pair<GfxDrawState, GfxTexture *>> s_savedStates;
 std::vector<std::pair<int, int>> s_modes;
 uint32_t s_presentedFrames = 1;     // frames presented (vertex buffer ages)
@@ -31,6 +60,33 @@ uint32_t s_record = 1;              // recordings run (presented or flushed)
 
 // Frames a vertex buffer stays out of locks before draws refer to it.
 const uint32_t kStaticAfterFrames = 4;
+
+uint32_t s_vertexSerial = 1;
+
+// A state change. It also gives the state a new vertexSerial (gfx_internal.h),
+// except through TouchOther: the changes that leave the 3D vertex uniforms
+// alone (the world matrix, textures and stage operations, blending, depth,
+// alpha test, fog colour), which the game makes for every object.
+inline void TouchOther()
+{
+    s_stateDirty = true;
+}
+
+inline void Touch()
+{
+    s_stateDirty = true;
+    s_state.vertexSerial = ++s_vertexSerial;
+}
+
+// Setting a value a state already holds does not start a new recorded state
+// (the game sets much of its state again for every object).
+template <typename T> inline void Set(T &field, const T &value, void (*touch)() = Touch)
+{
+    if (memcmp(&field, &value, sizeof(T)) != 0) {
+        field = value;
+        touch();
+    }
+}
 
 GfxMatrix Identity()
 {
@@ -55,12 +111,7 @@ void ResetState()
     s_state.viewport.height = s_height;
     s_state.viewport.minZ = 0.0f;
     s_state.viewport.maxZ = 1.0f;
-    s_stateDirty = true;
-}
-
-inline void Touch()
-{
-    s_stateDirty = true;
+    Touch();
 }
 
 uint32_t RecordState()
@@ -126,7 +177,7 @@ void RecordDraw(int primitive, bool transformed, const void *vertices, DWORD ver
                         s_state.stages[0].texture ? s_state.stages[0].texture->width : 0, s_state.stages[0].texture ? s_state.stages[0].texture->height : 0);
             }
     }
-    if (vertexCount == 0 || s_executor == NULL)
+    if (vertexCount == 0 || s_executor == NULL || s_skipTarget)
         return;
     std::vector<uint16_t> fan;
     if (primitive == GFX_TRIANGLEFAN) {
@@ -289,7 +340,7 @@ extern "C" void Gfx_GetPixelFormat(int format, GfxPixelFormat *out)
 
 namespace {
 
-enum Backend { BACKEND_NONE, BACKEND_NULL, BACKEND_GPU, BACKEND_GL };
+enum Backend { BACKEND_NONE, BACKEND_NULL, BACKEND_GPU, BACKEND_GL, BACKEND_GLES2 };
 
 // SDL_GPU (Vulkan, Direct3D 12, Metal) where the system has a hardware
 // device for it, otherwise OpenGL 3.3, for GPUs older than Vulkan; [video] graphics_api
@@ -303,6 +354,9 @@ Backend ChooseBackend()
     const char *headless = SDL_getenv("OPENCMR2_HEADLESS");
     if ((headless != NULL && *headless != '0') || Platform_GetSettingInt("video.headless", 0))
         return backend = BACKEND_NULL;
+#ifdef OPENCMR2_AMIGA
+    return backend = BACKEND_GLES2;
+#else
     const char *wanted = Platform_GetSetting("video.graphics_api", "auto");
 #ifdef OPENCMR2_RENDERER_GL
     if (SDL_strcasecmp(wanted, "opengl") == 0)
@@ -321,12 +375,16 @@ Backend ChooseBackend()
     backend = BACKEND_GPU;
 #endif
     return backend;
+#endif
 }
 
 } // namespace
 
 extern "C" unsigned long long Gfx_PrepareWindow(void)
 {
+#ifdef OPENCMR2_AMIGA
+    return 0;
+#endif
 #ifdef OPENCMR2_RENDERER_GL
     if (ChooseBackend() == BACKEND_GL)
         return Gfx_PrepareGlWindow();
@@ -336,6 +394,12 @@ extern "C" unsigned long long Gfx_PrepareWindow(void)
 
 extern "C" const char *Gfx_GetRendererName(void)
 {
+#ifdef OPENCMR2_AMIGA
+    // PORT: AMIGA: the game stores this name as the "graphics card" and resets
+    // its configuration when it changes. The GLES2 renderer keeps MiniGL's
+    // name so that switching [video] renderer does not reset the settings.
+    return "OpenCMR2 MiniGL";
+#endif
     return ChooseBackend() == BACKEND_GL ? "OpenCMR2 OpenGL" : "OpenCMR2 SDL_GPU";
 }
 
@@ -348,14 +412,25 @@ extern "C" BOOL Gfx_SetVideoMode(int width, int height, BOOL fullscreen)
         case BACKEND_NULL:
             s_executor = Gfx_CreateNullExecutor();
             break;
+#ifdef OPENCMR2_AMIGA
+        case BACKEND_GLES2:
+            s_executor = Gfx_CreateGles2Executor();
+            break;
+#endif
 #ifdef OPENCMR2_RENDERER_GL
         case BACKEND_GL:
             s_executor = Gfx_CreateGlExecutor();
             break;
 #endif
+#ifdef OPENCMR2_AMIGA
+        default:
+            s_executor = Gfx_CreateNullExecutor();
+            break;
+#else
         default:
             s_executor = Gfx_CreateGpuExecutor();
             break;
+#endif
         }
     }
     s_width = width;
@@ -395,6 +470,12 @@ extern "C" void Gfx_GetDefaultDisplayMode(int *width, int *height)
     // text, drawn in pixels for 640x480, stay readable: 720 lines, as
     // the game was played at 1024x768, and 540 on Android's small screens.
     // Higher modes stay available for a sharper 3D picture.
+#ifdef OPENCMR2_AMIGA
+    // MiniGL's default; the GLES2 renderer stretches it to the screen.
+    *width = 640;
+    *height = 480;
+    return;
+#endif
 #ifdef __ANDROID__
     const int lines = 540;
 #else
@@ -443,6 +524,7 @@ static void Present(BOOL vsync, bool stretch)
     s_stateDirty = true;
     // A frame always starts on the back buffer.
     s_target = NULL;
+    s_skipTarget = false;
     if (Diagnostics::observer)
         Diagnostics::observer->EndPresent();
 }
@@ -464,6 +546,8 @@ static void Flush(void)
 
 extern "C" void Gfx_Clear(DWORD flags, DWORD color, float z)
 {
+    if (s_skipTarget)
+        return;
     GfxCommand cmd = {};
     cmd.type = GFX_CMD_CLEAR;
     cmd.clearFlags = flags;
@@ -477,8 +561,7 @@ extern "C" void Gfx_Clear(DWORD flags, DWORD color, float z)
 
 extern "C" void Gfx_SetViewport(const GfxViewport *viewport)
 {
-    s_state.viewport = *viewport;
-    Touch();
+    Set(s_state.viewport, *viewport);
 }
 
 extern "C" void Gfx_SetVirtualScreen(int width, int height)
@@ -514,8 +597,44 @@ extern "C" void Gfx_PopState(void)
         Gfx_SetRenderTarget(saved.second);
 }
 
+// [video] cube_faces_per_frame (1-6): how many faces of a cube render target are
+// drawn each time the game redraws all six (a pass begins when it targets face
+// 0), the others in turn on the following passes. The game redraws a car's
+// cube map every frame: about 1,300 draws, which on the Amiga took a Cubic race
+// to about 8 frames a second. 6, all faces, is the original; the Amiga default is 1
+// (each face is then up to 6 passes old).
+static bool SkipCubeFace(GfxTexture *target)
+{
+    static int perPass = -1;
+    if (perPass < 0) {
+#ifdef OPENCMR2_AMIGA
+        perPass = Platform_GetSettingInt("video.cube_faces_per_frame", 1);
+#else
+        perPass = Platform_GetSettingInt("video.cube_faces_per_frame", 6);
+#endif
+        perPass = std::min(std::max(perPass, 1), 6);
+    }
+    if (target == NULL || perPass >= 6)
+        return false;
+    GfxTexture *cube = Root(target);
+    if (!(cube->flags & GFX_TEXTURE_CUBE))
+        return false;
+    const int face = target->cube != NULL ? target->face : 0;
+    // A new pass, unless the face is targeted again (a flush, a pop).
+    if (face == 0 && Root(s_target) != cube)
+        cube->cubePasses++;
+    const int first = (int)(cube->cubePasses * (uint32_t)perPass % 6);
+    return (face - first + 6) % 6 >= perPass;
+}
+
 extern "C" void Gfx_SetRenderTarget(GfxTexture *target)
 {
+    const bool skip = SkipCubeFace(target);
+    s_skipTarget = skip;
+    if (skip) {
+        s_target = target;
+        return;
+    }
     GfxCommand cmd = {};
     cmd.type = GFX_CMD_TARGET;
     cmd.target = target;
@@ -536,9 +655,11 @@ extern "C" void Gfx_CaptureBackdrop(void)
 
 extern "C" void Gfx_SetDistanceFade(float start, float end)
 {
+    if (s_state.fadeStart == start && s_state.fadeEnd == end)
+        return;
     s_state.fadeStart = start;
     s_state.fadeEnd = end;
-    Touch();
+    TouchOther();
 }
 
 // ---- fixed-function state --------------------------------------------------------------
@@ -546,13 +667,12 @@ extern "C" void Gfx_SetDistanceFade(float start, float end)
 extern "C" void Gfx_SetTransform(int type, const GfxMatrix *matrix)
 {
     switch (type) {
-    case GFX_TRANSFORM_WORLD: s_state.world = *matrix; break;
-    case GFX_TRANSFORM_VIEW: s_state.view = *matrix; break;
-    case GFX_TRANSFORM_PROJECTION: s_state.projection = *matrix; break;
-    case GFX_TRANSFORM_TEXTURE0: s_state.texture[0] = *matrix; break;
-    case GFX_TRANSFORM_TEXTURE1: s_state.texture[1] = *matrix; break;
+    case GFX_TRANSFORM_WORLD: Set(s_state.world, *matrix, TouchOther); break;
+    case GFX_TRANSFORM_VIEW: Set(s_state.view, *matrix); break;
+    case GFX_TRANSFORM_PROJECTION: Set(s_state.projection, *matrix); break;
+    case GFX_TRANSFORM_TEXTURE0: Set(s_state.texture[0], *matrix); break;
+    case GFX_TRANSFORM_TEXTURE1: Set(s_state.texture[1], *matrix); break;
     }
-    Touch();
 }
 
 extern "C" void Gfx_GetTransform(int type, GfxMatrix *matrix)
@@ -569,10 +689,8 @@ extern "C" void Gfx_GetTransform(int type, GfxMatrix *matrix)
 
 extern "C" void Gfx_SetLight(int index, const GfxLight *light)
 {
-    if (index >= 0 && index < 8) {
-        s_state.lights[index] = *light;
-        Touch();
-    }
+    if (index >= 0 && index < 8)
+        Set(s_state.lights[index], *light);
 }
 
 extern "C" void Gfx_GetLight(int index, GfxLight *light)
@@ -583,7 +701,7 @@ extern "C" void Gfx_GetLight(int index, GfxLight *light)
 
 extern "C" void Gfx_EnableLight(int index, BOOL enable)
 {
-    if (index >= 0 && index < 8) {
+    if (index >= 0 && index < 8 && s_state.lightEnabled[index] != (enable != 0)) {
         s_state.lightEnabled[index] = enable != 0;
         Touch();
     }
@@ -591,86 +709,89 @@ extern "C" void Gfx_EnableLight(int index, BOOL enable)
 
 extern "C" void Gfx_SetMaterial(const GfxMaterial *material)
 {
-    s_state.material = *material;
-    Touch();
+    Set(s_state.material, *material);
 }
 
-#define SETTER(name, type, field)       \
+#define SETTER(name, type, field, touch) \
     extern "C" void name(type value)    \
     {                                   \
+        if (s_state.field == value)     \
+            return;                     \
         s_state.field = value;          \
-        Touch();                        \
+        touch();                        \
     }
 
-SETTER(Gfx_SetAmbient, DWORD, ambient)
-SETTER(Gfx_SetDiffuseMaterialSource, int, diffuseSource)
-SETTER(Gfx_SetSpecularMaterialSource, int, specularSource)
-SETTER(Gfx_SetAmbientMaterialSource, int, ambientSource)
-SETTER(Gfx_SetEmissiveMaterialSource, int, emissiveSource)
-SETTER(Gfx_SetFogColor, DWORD, fogColor)
-SETTER(Gfx_SetFogVertexMode, int, fogVertexMode)
-SETTER(Gfx_SetFogTableMode, int, fogTableMode)
-SETTER(Gfx_SetFogStart, float, fogStart)
-SETTER(Gfx_SetFogEnd, float, fogEnd)
-SETTER(Gfx_SetDepthFunc, int, depthFunc)
-SETTER(Gfx_SetCullMode, int, cull)
-SETTER(Gfx_SetSrcBlend, int, srcBlend)
-SETTER(Gfx_SetDestBlend, int, destBlend)
-SETTER(Gfx_SetAlphaFunc, int, alphaFunc)
-SETTER(Gfx_SetAlphaRef, DWORD, alphaRef)
-SETTER(Gfx_SetTextureFactor, DWORD, textureFactor)
+SETTER(Gfx_SetAmbient, DWORD, ambient, Touch)
+SETTER(Gfx_SetDiffuseMaterialSource, int, diffuseSource, Touch)
+SETTER(Gfx_SetSpecularMaterialSource, int, specularSource, Touch)
+SETTER(Gfx_SetAmbientMaterialSource, int, ambientSource, Touch)
+SETTER(Gfx_SetEmissiveMaterialSource, int, emissiveSource, Touch)
+SETTER(Gfx_SetFogColor, DWORD, fogColor, TouchOther)
+SETTER(Gfx_SetFogVertexMode, int, fogVertexMode, Touch)
+SETTER(Gfx_SetFogTableMode, int, fogTableMode, Touch)
+SETTER(Gfx_SetFogStart, float, fogStart, Touch)
+SETTER(Gfx_SetFogEnd, float, fogEnd, Touch)
+SETTER(Gfx_SetDepthFunc, int, depthFunc, TouchOther)
+SETTER(Gfx_SetCullMode, int, cull, TouchOther)
+SETTER(Gfx_SetSrcBlend, int, srcBlend, TouchOther)
+SETTER(Gfx_SetDestBlend, int, destBlend, TouchOther)
+SETTER(Gfx_SetAlphaFunc, int, alphaFunc, TouchOther)
+SETTER(Gfx_SetAlphaRef, DWORD, alphaRef, TouchOther)
+SETTER(Gfx_SetTextureFactor, DWORD, textureFactor, TouchOther)
 
-#define BOOL_SETTER(name, field)        \
+#define BOOL_SETTER(name, field, touch) \
     extern "C" void name(BOOL value)    \
     {                                   \
+        if (s_state.field == (value != 0)) \
+            return;                     \
         s_state.field = value != 0;     \
-        Touch();                        \
+        touch();                        \
     }
 
-BOOL_SETTER(Gfx_SetLighting, lighting)
-BOOL_SETTER(Gfx_SetSpecular, specular)
-BOOL_SETTER(Gfx_SetLocalViewer, localViewer)
-BOOL_SETTER(Gfx_SetNormalizeNormals, normalizeNormals)
-BOOL_SETTER(Gfx_SetColorVertex, colorVertex)
-BOOL_SETTER(Gfx_SetFog, fog)
-BOOL_SETTER(Gfx_SetDepthTest, depthTest)
-BOOL_SETTER(Gfx_SetDepthWrite, depthWrite)
-BOOL_SETTER(Gfx_SetAlphaBlend, alphaBlend)
-BOOL_SETTER(Gfx_SetAlphaTest, alphaTest)
+BOOL_SETTER(Gfx_SetLighting, lighting, Touch)
+BOOL_SETTER(Gfx_SetSpecular, specular, Touch)
+BOOL_SETTER(Gfx_SetLocalViewer, localViewer, Touch)
+BOOL_SETTER(Gfx_SetNormalizeNormals, normalizeNormals, Touch)
+BOOL_SETTER(Gfx_SetColorVertex, colorVertex, Touch)
+BOOL_SETTER(Gfx_SetFog, fog, Touch)
+BOOL_SETTER(Gfx_SetDepthTest, depthTest, TouchOther)
+BOOL_SETTER(Gfx_SetDepthWrite, depthWrite, TouchOther)
+BOOL_SETTER(Gfx_SetAlphaBlend, alphaBlend, TouchOther)
+BOOL_SETTER(Gfx_SetAlphaTest, alphaTest, TouchOther)
 
-#define STAGE_SETTER(name, type, field)             \
+#define STAGE_SETTER(name, type, field, touch)      \
     extern "C" void name(int stage, type value)     \
     {                                               \
         GfxStageState *s = Stage(stage);            \
-        if (s != NULL) {                            \
+        if (s != NULL && !(s->field == value)) {    \
             s->field = value;                       \
-            Touch();                                \
+            touch();                                \
         }                                           \
     }
 
-STAGE_SETTER(Gfx_SetTexture, GfxTexture *, texture)
-STAGE_SETTER(Gfx_SetStageColorOp, int, colorOp)
-STAGE_SETTER(Gfx_SetStageColorArg1, int, colorArg1)
-STAGE_SETTER(Gfx_SetStageColorArg2, int, colorArg2)
-STAGE_SETTER(Gfx_SetStageAlphaOp, int, alphaOp)
-STAGE_SETTER(Gfx_SetStageAlphaArg1, int, alphaArg1)
-STAGE_SETTER(Gfx_SetStageAlphaArg2, int, alphaArg2)
-STAGE_SETTER(Gfx_SetStageAddress, int, address)
-STAGE_SETTER(Gfx_SetStageMinFilter, int, minFilter)
-STAGE_SETTER(Gfx_SetStageMagFilter, int, magFilter)
-STAGE_SETTER(Gfx_SetStageMipFilter, int, mipFilter)
-STAGE_SETTER(Gfx_SetStageMaxMipLevel, int, maxMipLevel)
-STAGE_SETTER(Gfx_SetStageTexCoordIndex, DWORD, texCoordIndex)
-STAGE_SETTER(Gfx_SetStageTextureTransform, int, textureTransform)
-STAGE_SETTER(Gfx_SetStageBumpEnvLScale, float, bumpLumScale)
-STAGE_SETTER(Gfx_SetStageBumpEnvLOffset, float, bumpLumOffset)
+STAGE_SETTER(Gfx_SetTexture, GfxTexture *, texture, TouchOther)
+STAGE_SETTER(Gfx_SetStageColorOp, int, colorOp, TouchOther)
+STAGE_SETTER(Gfx_SetStageColorArg1, int, colorArg1, TouchOther)
+STAGE_SETTER(Gfx_SetStageColorArg2, int, colorArg2, TouchOther)
+STAGE_SETTER(Gfx_SetStageAlphaOp, int, alphaOp, TouchOther)
+STAGE_SETTER(Gfx_SetStageAlphaArg1, int, alphaArg1, TouchOther)
+STAGE_SETTER(Gfx_SetStageAlphaArg2, int, alphaArg2, TouchOther)
+STAGE_SETTER(Gfx_SetStageAddress, int, address, TouchOther)
+STAGE_SETTER(Gfx_SetStageMinFilter, int, minFilter, TouchOther)
+STAGE_SETTER(Gfx_SetStageMagFilter, int, magFilter, TouchOther)
+STAGE_SETTER(Gfx_SetStageMipFilter, int, mipFilter, TouchOther)
+STAGE_SETTER(Gfx_SetStageMaxMipLevel, int, maxMipLevel, TouchOther)
+STAGE_SETTER(Gfx_SetStageTexCoordIndex, DWORD, texCoordIndex, Touch)
+STAGE_SETTER(Gfx_SetStageTextureTransform, int, textureTransform, Touch)
+STAGE_SETTER(Gfx_SetStageBumpEnvLScale, float, bumpLumScale, TouchOther)
+STAGE_SETTER(Gfx_SetStageBumpEnvLOffset, float, bumpLumOffset, TouchOther)
 
 extern "C" void Gfx_SetStageBumpEnvMat(int stage, int index, float value)
 {
     GfxStageState *s = Stage(stage);
-    if (s != NULL && index >= 0 && index < 4) {
+    if (s != NULL && index >= 0 && index < 4 && s->bumpMat[index] != value) {
         s->bumpMat[index] = value;
-        Touch();
+        TouchOther();
     }
 }
 
@@ -758,6 +879,41 @@ extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *ver
 }
 
 // ---- textures -------------------------------------------------------------------------
+
+#ifdef OPENCMR2_AMIGA
+// ---- stream textures (render/gfx_stream.h) ---------------------------------------------
+
+extern "C" GfxTexture *Core_GfxStream_Create(int width, int height)
+{
+    if (s_executor == NULL || width <= 0 || height <= 0 || width > 4096 || height > 4096)
+        return NULL;
+    GfxTexture *t = Gfx_CreateTexture(width, height, GFX_FORMAT_BGRX8, 1, GFX_TEXTURE_STREAM);
+    if (t == NULL)
+        return NULL;
+    // No CPU copy: the movie player keeps the frame, the executor uploads rows.
+    std::vector<uint8_t>().swap(t->levels[0][0]);
+    t->dirty = false;
+    return t;
+}
+
+extern "C" int Core_GfxStream_GetSize(const GfxTexture *t, int *glWidth, int *glHeight)
+{
+    if (t == NULL || !(t->flags & GFX_TEXTURE_STREAM) || glWidth == NULL || glHeight == NULL)
+        return 0;
+    *glWidth = t->width;
+    *glHeight = t->height;
+    return 1;
+}
+
+extern "C" int Core_GfxStream_UploadRows(GfxTexture *t, const uint8_t *rgba, int y0, int rows)
+{
+    if (s_executor == NULL || t == NULL || rgba == NULL || !(t->flags & GFX_TEXTURE_STREAM) || y0 < 0 || rows <= 0 ||
+        rows > t->height || y0 > t->height - rows)
+        return 0;
+    return s_executor->UploadStreamRows(t, rgba, y0, rows);
+}
+
+#endif
 
 extern "C" GfxTexture *Gfx_CreateTexture(int width, int height, int format, int mipLevels, DWORD flags)
 {
@@ -945,12 +1101,16 @@ std::vector<uint32_t> ToBGRA(GfxTexture *t)
     std::vector<uint32_t> out((size_t)t->width * t->height);
     const uint8_t *src = t->levels[0][0].data();
     switch (t->format) {
+    // The CPU copy holds the bytes B, G, R, A of a pixel in every byte order, so
+    // a pixel value (0xAARRGGBB) is built from its bytes, not read as a word:
+    // on a big-endian CPU a word read puts A where B is.
     case GFX_FORMAT_BGRX8:
         for (size_t i = 0; i < out.size(); i++)
-            out[i] = ((const uint32_t *)src)[i] | 0xff000000;
+            out[i] = src[i * 4] | src[i * 4 + 1] << 8 | src[i * 4 + 2] << 16 | 0xff000000u;
         break;
     case GFX_FORMAT_BGRA8:
-        memcpy(out.data(), src, out.size() * 4);
+        for (size_t i = 0; i < out.size(); i++)
+            out[i] = src[i * 4] | src[i * 4 + 1] << 8 | src[i * 4 + 2] << 16 | (uint32_t)src[i * 4 + 3] << 24;
         break;
     case GFX_FORMAT_BUMP_DUDVL:
         for (size_t i = 0; i < out.size(); i++)
@@ -1012,7 +1172,10 @@ extern "C" void Gfx_CopyTexture(GfxTexture *dst, GfxTexture *src)
                 out[i * 3 + 1] = (uint8_t)(p >> 8);
                 out[i * 3 + 2] = (uint8_t)(p >> 16);
             } else {
-                ((uint32_t *)out)[i] = p;
+                out[i * 4] = (uint8_t)p;
+                out[i * 4 + 1] = (uint8_t)(p >> 8);
+                out[i * 4 + 2] = (uint8_t)(p >> 16);
+                out[i * 4 + 3] = (uint8_t)(p >> 24);
             }
         }
     }
@@ -1161,6 +1324,7 @@ GfxExecutor *Gfx_CreateNullExecutor(void)
 
 // ---- shared by the executors -----------------------------------------------------------
 
+#ifndef OPENCMR2_AMIGA
 void Gfx_SetWindowMode(SDL_Window *window, bool fullscreen, int width, int height)
 {
     if (window == NULL)
@@ -1179,6 +1343,7 @@ void Gfx_SetWindowMode(SDL_Window *window, bool fullscreen, int width, int heigh
     SDL_SetWindowSize(window, width * scale, height * scale);
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
 }
+#endif
 
 bool Gfx_FrameHashWanted(void)
 {
@@ -1198,6 +1363,7 @@ void Gfx_HashFrame(const uint8_t *bgra, int width, int height)
     for (size_t i = 0; i < bytes; i++)
         h = (h ^ bgra[i]) * 1099511628211ull;
     fprintf(file, "%u %dx%d %016llx\n", frame, width, height, (unsigned long long)h);
+#ifndef OPENCMR2_AMIGA
     if (dump != NULL && every > 0 && frame % every == 0) {
         char path[1024];
         snprintf(path, sizeof(path), "%s/frame-%06u.bmp", dump, frame);
@@ -1207,5 +1373,9 @@ void Gfx_HashFrame(const uint8_t *bgra, int width, int height)
             SDL_DestroySurface(s);
         }
     }
+#else
+    (void)dump;
+    (void)every;
+#endif
     frame++;
 }

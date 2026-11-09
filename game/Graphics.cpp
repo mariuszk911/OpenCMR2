@@ -2477,7 +2477,12 @@ int Graphics_RenderNodeCubeMapFaces(SceneNode *pNode, int bit)
     farPlane = CGraphics::m_farPlaneFixed;
     pCurrent = &pNode->current;
     pNodeMesh = (Mesh *)pNode->pObject;
-    cubeIndex = (pNodeMesh->flags >> 15) & 7;
+    // PORT: AMIGA: m68k-amigaos-gcc 6.5.0b -O2 miscompiled this read: it turned it
+    // into a bit-field extract from pNode->pObject + 0x30, and reload put the
+    // 0x30 into the register that held pNode before using it, so the cube index
+    // came from absolute address 60 and the faces were never drawn. A volatile
+    // read keeps the mesh flags load a plain move.
+    cubeIndex = (*(volatile unsigned int *)&pNodeMesh->flags >> 15) & 7;
     if (CGraphics::m_pTextureManager->textureBuffer2[cubeIndex] == NULL)
         return 1;
     for (i = 0; i < 6; i++) {
@@ -2918,7 +2923,8 @@ void Mesh_DrawEnvMapped(Mesh *pMesh)
     count = 0;
     triangleCount = pMesh->triangleCount;
     currentTexture = -1;
-    if ((*(BYTE *)&g_pGraphics->field913_0x3bc & 0x80) != 0) {
+    // PORT: AMIGA: the flag word's low byte is not its first byte on a big-endian CPU.
+    if ((g_pGraphics->field913_0x3bc & 0x80) != 0) {
         if ((int)g_carReflectionCubeMaps[(pMesh->flags >> 15) & 7] < 0) {
             Graphics_DrawCubeMappedShadowTriangles(pMesh);
             return;
@@ -6817,7 +6823,9 @@ int Graphics_ReserveCubeMapsAndLoadEnvironment(char *name, int count, GenericFil
 
     CGraphics::m_cubeMapSize = size;
     memset(g_carReflectionCubeMaps, 0xff, sizeof(g_carReflectionCubeMaps));
-    if ((*(BYTE *)&g_pGraphics->field913_0x3bc & 0x80) != 0 && count > 0) {
+    // PORT: AMIGA: the flag word's low byte is not its first byte on a big-endian CPU
+    // (the original read *(BYTE *)&flags, so Cubic never allocated its cube maps).
+    if ((g_pGraphics->field913_0x3bc & 0x80) != 0 && count > 0) {
         pId = g_carReflectionCubeMaps;
         do {
             RenderTexture *pCube = Graphics_AllocateCubeMapTextureSlot();

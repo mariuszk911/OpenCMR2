@@ -6,7 +6,7 @@
 // The picture path differs, for speed: the decoder hands over its YUV planes
 // and a map of the 16x16 macroblocks that changed; only those are converted,
 // into one persistent RGBA8 frame, and only their pixel rows are uploaded into
-// one of two stream textures (gfx_minigl_movie.h explains why two). When the
+// one of two stream textures (render/gfx_stream.h explains why two). When the
 // machine falls behind, Movie_Present drops frames (decoding still happens, see
 // movie_pacing.h), because the game's loop never skips one itself.
 //
@@ -19,7 +19,7 @@
 #include "port/sys.h"
 #include "platform/amiga/amiga_ahi.h"
 #include "platform/amiga/amiga_sys.h"
-#include "render/minigl/gfx_minigl_movie.h"
+#include "render/gfx_stream.h"
 #include "video/bink_decoder.h"
 #include "video/movie_pacing.h"
 #include "video/yuv_rgba.h"
@@ -196,11 +196,11 @@ const char *Load(Movie *movie, const char *path, int audioTrack)
         return "no memory for the frame buffers";
     YuvRgba::InitTables(movie->tables);
     for (int i = 0; i < 2; ++i) {
-        movie->textures[i] = GfxMiniGL_CreateStreamTexture(int(info.width), int(info.height));
+        movie->textures[i] = GfxStream_Create(int(info.width), int(info.height));
         if (!movie->textures[i])
             return "cannot create the frame textures";
     }
-    if (!GfxMiniGL_GetStreamTextureSize(movie->textures[0], &movie->glWidth, &movie->glHeight))
+    if (!GfxStream_GetSize(movie->textures[0], &movie->glWidth, &movie->glHeight))
         return "cannot query the frame texture size";
 
     if (info.channels) {
@@ -250,7 +250,7 @@ void UploadStale(Movie *movie, int index)
             stale[end++] = 0;
         const uint32_t y0 = row * 16;
         const uint32_t y1 = end * 16 < movie->info.height ? end * 16 : movie->info.height;
-        if (GfxMiniGL_UploadRows(movie->textures[index], movie->rgba, int(y0), int(y1 - y0)))
+        if (GfxStream_UploadRows(movie->textures[index], movie->rgba, int(y0), int(y1 - y0)))
             movie->uploaded[index] = true;
         else if (!movie->uploadFailed) {
             Sys_Log("movie: frame upload failed");

@@ -772,7 +772,9 @@ extern "C" int AmigaSys_EnsureSettingsFile(void)
         "\n"
         "[video]\n"
         "fullscreen = 1\n"
-        "vsync = 1\n";
+        "vsync = 1\n"
+        "; renderer = minigl or gles2 (ogles2.library 1.3.3+, 32-bit screen)\n"
+        "renderer = minigl\n";
     if (!WriteTextFile(path, defaults)) {
         Sys_Log("settings: cannot create %s (IoErr %ld)", path.c_str(), (long)IoErr());
         return 0;

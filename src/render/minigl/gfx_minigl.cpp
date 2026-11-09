@@ -2,6 +2,11 @@
 //
 // Owns the MiniGL context/window, frame lifecycle, 2D TL rendering, and the
 // capability-tiered 3D fixed-function pipeline.
+// The Amiga binary links this backend and the GLES2 one behind
+// render/gfx_dispatch_amiga.cpp: the definitions below are MiniGL_Gfx_*.
+#define OPENCMR2_GFX_PREFIX_MINIGL
+#include "render/gfx_api_prefix.h"
+
 #include "port/backdrop_fog.h"
 #include "port/bc_decode.h"
 #include "port/bump_luminance.h"

@@ -27,6 +27,7 @@ struct GfxTexture {
     bool renderedTo;            // the GPU copy is newer (render targets)
     void *gpu;                  // executor's object
     GfxTexture *replacement;    // drawn instead (Gfx_SetTextureReplacement)
+    uint32_t cubePasses = 0;    // a cube render target: passes over its faces begun
 };
 
 // The texture a draw reads for t: its cube, or its replacement.
@@ -48,6 +49,10 @@ struct GfxVertexBuffer {
     uint32_t referencedRecord = 0;  // recording that last drew from it
     void *gpu = nullptr;            // executor's copy
 };
+
+// Not a game flag: a texture with no CPU copy whose pixels are uploaded by
+// rows (render/gfx_stream.h; the Amiga movie player).
+#define GFX_TEXTURE_STREAM 0x10000
 
 // Bytes of one level, given its size, for a format.
 size_t Gfx_LevelSize(int format, int width, int height, LONG *pitch);
@@ -100,6 +105,12 @@ struct GfxDrawState {
     GfxStageState stages[2];
     GfxViewport viewport;
     int screenW = 0, screenH = 0;   // Gfx_SetVirtualScreen (0: the back buffer's size)
+    // Changed (to a value never used before) by gfx_core whenever anything but
+    // the world matrix, the textures and stage operations, blending, depth,
+    // alpha test and fog colour changes: two states with the same serial have
+    // the same 3D vertex uniforms apart from world*view (the GLES2 executor
+    // skips comparing them).
+    uint32_t vertexSerial = 0;
 };
 
 enum GfxCommandType {
@@ -169,6 +180,10 @@ struct GfxExecutor {
     virtual void DestroyVertexBuffer(GfxVertexBuffer *) {}
     // Brings a render target's pixels back into its CPU copy (for locks).
     virtual void ReadTexture(GfxTexture *texture) = 0;
+    // Stream textures (render/gfx_stream.h): uploads rows of RGBA8 pixels into
+    // the GPU copy of a texture made with GFX_TEXTURE_STREAM, creating its
+    // storage on the first upload. 0 when not supported.
+    virtual int UploadStreamRows(GfxTexture *, const uint8_t *, int, int) { return 0; }
     // Completes the back buffer read the last presented frame started, when
     // the game asks for its pixels (Gfx_ReadBackBuffer).
     virtual void CollectReadback(GfxReadback &) {}
@@ -183,6 +198,11 @@ GfxExecutor *Gfx_CreateGlExecutor(void);
 // Sets up an OpenGL 3.3 context's attributes; returns the window flags it
 // needs (gfx_gl.cpp).
 unsigned long long Gfx_PrepareGlWindow(void);
+#endif
+
+#ifdef OPENCMR2_AMIGA
+// The ogles2.library executor (render/gles2/gfx_gles2.cpp).
+GfxExecutor *Gfx_CreateGles2Executor(void);
 #endif
 
 // Shared by the executors (gfx_core.cpp).

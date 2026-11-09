@@ -424,6 +424,7 @@ add_test(NAME movie_pacing COMMAND movie_pacing_test)
 
 # The Amiga movie player against fake renderer, audio and file layers.
 add_executable(movie_amiga_test movie_amiga.cpp ${PROJECT_SOURCE_DIR}/src/video/movie_amiga.cpp)
+target_include_directories(movie_amiga_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(movie_amiga_test PRIVATE opencmr2_bink)
 add_test(NAME movie_amiga COMMAND movie_amiga_test)
 
@@ -749,3 +750,43 @@ foreach(c3d_payload_bound_variant c3d_payload_bound c3d_payload_bound_be)
     add_test(NAME ${c3d_payload_bound_variant} COMMAND ${c3d_payload_bound_variant}_test)
 endforeach()
 target_compile_definitions(c3d_payload_bound_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
+# [video] renderer = minigl | gles2: ini parsing and the fall-back decision.
+add_executable(gfx_renderer_test gfx_renderer.cpp)
+target_include_directories(gfx_renderer_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME gfx_renderer COMMAND gfx_renderer_test)
+
+# src/render/gfx_api.inc (the Amiga dispatcher's X-macro list) matches port/gfx.h.
+add_executable(gfx_api_list_test gfx_api_list.cpp)
+target_compile_definitions(gfx_api_list_test PRIVATE SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+add_test(NAME gfx_api_list COMMAND gfx_api_list_test)
+
+# Byte-wise texel conversions for the GLES2 renderer (port/gfx_texel.h).
+add_executable(gfx_texel_test gfx_texel.cpp)
+target_include_directories(gfx_texel_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME gfx_texel COMMAND gfx_texel_test)
+
+# Packing of a recorded draw's state into the GLES2 shaders' vec4 arrays.
+add_executable(gles2_uniforms_test gles2_uniforms.cpp)
+target_include_directories(gles2_uniforms_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME gles2_uniforms COMMAND gles2_uniforms_test)
+
+# Specialised fragment shaders of the GLES2 renderer: the key and the text.
+add_executable(gles2_fragment_test gles2_fragment.cpp)
+target_include_directories(gles2_fragment_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME gles2_fragment COMMAND gles2_fragment_test)
+
+# gfx_core's recorded states: no-op setters and GfxDrawState::vertexSerial
+# (which the GLES2 executor trusts instead of comparing states).
+add_executable(gfx_core_serial_test gfx_core_serial.cpp
+    ${PROJECT_SOURCE_DIR}/src/diagnostics/observer.cpp ${PROJECT_SOURCE_DIR}/src/render/gfx_core.cpp)
+target_include_directories(gfx_core_serial_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(gfx_core_serial_test PRIVATE SDL3::SDL3)
+add_test(NAME gfx_core_serial COMMAND gfx_core_serial_test)
+
+# [video] cube_faces_per_frame: one cube face per pass, in turn.
+add_executable(gfx_core_cube_test gfx_core_cube.cpp
+    ${PROJECT_SOURCE_DIR}/src/diagnostics/observer.cpp ${PROJECT_SOURCE_DIR}/src/render/gfx_core.cpp)
+target_include_directories(gfx_core_cube_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(gfx_core_cube_test PRIVATE SDL3::SDL3)
+add_test(NAME gfx_core_cube COMMAND gfx_core_cube_test)

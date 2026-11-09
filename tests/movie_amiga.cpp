@@ -9,7 +9,7 @@
 #include "port/gfx.h"
 #include "port/movie.h"
 #include "port/sys.h"
-#include "render/minigl/gfx_minigl_movie.h"
+#include "render/gfx_stream.h"
 
 #include <string>
 
@@ -64,7 +64,7 @@ extern "C" int Sys_GetOption(const char *name, int fallback) {
 extern "C" uint32_t AmigaAhi_GetLatencyMs(void) { return 100; }
 extern "C" unsigned long AmigaSys_GetFreeMemory(void) { return 1000000; }
 
-extern "C" GfxTexture *GfxMiniGL_CreateStreamTexture(int width, int height) {
+extern "C" GfxTexture *GfxStream_Create(int width, int height) {
     if (failTextureAfter == 0) return nullptr;
     if (failTextureAfter > 0) --failTextureAfter;
     int w = 1, h = 1;
@@ -76,10 +76,10 @@ extern "C" GfxTexture *GfxMiniGL_CreateStreamTexture(int width, int height) {
     ++textures;
     return t;
 }
-extern "C" int GfxMiniGL_GetStreamTextureSize(const GfxTexture *t, int *w, int *h) {
+extern "C" int GfxStream_GetSize(const GfxTexture *t, int *w, int *h) {
     *w = t->glWidth; *h = t->glHeight; return 1;
 }
-extern "C" int GfxMiniGL_UploadRows(GfxTexture *t, const uint8_t *rgba, int y0, int rows) {
+extern "C" int GfxStream_UploadRows(GfxTexture *t, const uint8_t *rgba, int y0, int rows) {
     Check(y0 >= 0 && rows > 0 && y0 + rows <= t->height, "upload rows inside the frame");
     if (!t->created) { y0 = 0; rows = t->height; t->created = true; }
     for (int y = y0; y < y0 + rows; ++y)
