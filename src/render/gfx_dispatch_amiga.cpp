@@ -12,6 +12,8 @@
 // The list of entry points is render/gfx_api.inc.
 #include "port/gfx.h"
 #include "port/gfx_renderer.h"
+#include "render/gfx_stream.h"
+#include "render/minigl/gfx_minigl_movie.h"
 #include "port/sys.h"
 
 #ifdef OPENCMR2_GLES2_RENDERER
@@ -22,6 +24,9 @@ namespace {
 
 struct GfxBackend {
     const char *name;
+    GfxTexture *(*streamCreate)(int width, int height);
+    int (*streamGetSize)(const GfxTexture *texture, int *glWidth, int *glHeight);
+    int (*streamUploadRows)(GfxTexture *texture, const uint8_t *rgba, int y0, int rows);
 #define GFX_API(ret, name, params, args) ret(*name) params;
 #include "render/gfx_api.inc"
 #undef GFX_API
@@ -37,6 +42,9 @@ extern "C" {
 #define GFX_API(ret, name, params, args) ret Core_##name params;
 #include "render/gfx_api.inc"
 #undef GFX_API
+GfxTexture *Core_GfxStream_Create(int width, int height);
+int Core_GfxStream_GetSize(const GfxTexture *texture, int *glWidth, int *glHeight);
+int Core_GfxStream_UploadRows(GfxTexture *texture, const uint8_t *rgba, int y0, int rows);
 #endif
 }
 
@@ -44,6 +52,9 @@ namespace {
 
 const GfxBackend s_minigl = {
     "minigl",
+    &GfxMiniGL_CreateStreamTexture,
+    &GfxMiniGL_GetStreamTextureSize,
+    &GfxMiniGL_UploadRows,
 #define GFX_API(ret, name, params, args) &MiniGL_##name,
 #include "render/gfx_api.inc"
 #undef GFX_API
@@ -52,6 +63,9 @@ const GfxBackend s_minigl = {
 #ifdef OPENCMR2_GLES2_RENDERER
 const GfxBackend s_gles2 = {
     "gles2",
+    &Core_GfxStream_Create,
+    &Core_GfxStream_GetSize,
+    &Core_GfxStream_UploadRows,
 #define GFX_API(ret, name, params, args) &Core_##name,
 #include "render/gfx_api.inc"
 #undef GFX_API
@@ -106,3 +120,18 @@ inline const GfxBackend *Active()
     extern "C" ret name params { return Active()->name args; }
 #include "render/gfx_api.inc"
 #undef GFX_API
+
+extern "C" GfxTexture *GfxStream_Create(int width, int height)
+{
+    return Active()->streamCreate(width, height);
+}
+
+extern "C" int GfxStream_GetSize(const GfxTexture *texture, int *glWidth, int *glHeight)
+{
+    return Active()->streamGetSize(texture, glWidth, glHeight);
+}
+
+extern "C" int GfxStream_UploadRows(GfxTexture *texture, const uint8_t *rgba, int y0, int rows)
+{
+    return Active()->streamUploadRows(texture, rgba, y0, rows);
+}

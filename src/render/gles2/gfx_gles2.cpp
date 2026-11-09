@@ -121,6 +121,16 @@ struct Executor : GfxExecutor {
     std::vector<float> vertexData3D, vertexDataTL, fragmentData;
     std::vector<DrawUniforms> drawUniforms;
 
+    // [video] gles2_stats = 1: where a frame's time goes, logged every 120
+    // frames (milliseconds per frame). "other" is what the game and gfx_core
+    // spend between two presents.
+    struct Stats {
+        bool enabled = false;
+        double lastPresent = 0, upload = 0, build = 0, draw = 0, present = 0, period = 0;
+        long frames = 0, draws = 0, draws3d = 0, vertexUploads = 0, fragmentUploads = 0, programSwitches = 0,
+             textureBinds = 0;
+    } stats;
+
     struct Bound {
         GLuint program = 0, framebuffer = ~0u, vertices = ~0u;
         bool transformed = false;
@@ -250,6 +260,7 @@ struct Executor : GfxExecutor {
             return false;
         }
         open = true;
+        stats.enabled = Sys_GetOption("video.gles2_stats", 0) != 0;
         AmigaSys_SetWindow(display.inputWindow);
         Sys_Log("gfx: gles2: %s (%s), screen %ux%u, input window %lx", (const char *)gl.GetString(GL_RENDERER),
                 (const char *)gl.GetString(GL_VERSION), display.width, display.height,
@@ -333,10 +344,48 @@ struct Executor : GfxExecutor {
 
     // ---- textures ----
 
+    // Rows of a stream texture's pixels (render/gfx_stream.h); the first upload
+    // makes the storage from the whole frame.
+    int UploadStreamRows(GfxTexture *t, const uint8_t *rgba, int y0, int rows) override
+    {
+        if (!open)
+            return 0;
+        GlTexture *g = (GlTexture *)t->gpu;
+        if (g == NULL) {
+            g = new GlTexture;
+            gl.GenTextures(1, &g->texture);
+            t->gpu = g;
+        }
+        gl.ActiveTexture(GL_TEXTURE0);
+        gl.BindTexture(GL_TEXTURE_2D, g->texture);
+        InvalidateTextureBinding();
+        if (!g->specified) {
+            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t->width, t->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+            g->specified = true;
+            g->samplerKey = ~0u;
+        } else {
+            gl.TexSubImage2D(GL_TEXTURE_2D, 0, 0, y0, t->width, rows, GL_RGBA, GL_UNSIGNED_BYTE,
+                             rgba + (size_t)y0 * t->width * 4);
+        }
+        return 1;
+    }
+
     GlTexture *Ensure(GfxTexture *t)
     {
         if (t->gpu != NULL)
             return (GlTexture *)t->gpu;
+        if (t->flags & GFX_TEXTURE_STREAM) {
+            // Drawn before its first frame: empty storage, no CPU copy to upload.
+            GlTexture *stream = new GlTexture;
+            gl.GenTextures(1, &stream->texture);
+            gl.BindTexture(GL_TEXTURE_2D, stream->texture);
+            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t->width, t->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            stream->specified = true;
+            InvalidateTextureBinding();
+            t->gpu = stream;
+            t->dirty = false;
+            return stream;
+        }
         GlTexture *g = new GlTexture;
         g->compressed = (t->format == GFX_FORMAT_BC1 || t->format == GFX_FORMAT_BC3) && bcSupported;
         gl.GenTextures(1, &g->texture);
@@ -564,6 +613,7 @@ struct Executor : GfxExecutor {
                 const int unit = i * 2 + k;
                 const GLenum target = k == 0 ? GL_TEXTURE_2D : GL_TEXTURE_CUBE_MAP;
                 if (bound.textures[unit] != textures[k]) {
+                    stats.textureBinds++;
                     gl.ActiveTexture(GL_TEXTURE0 + unit);
                     gl.BindTexture(target, textures[k]);
                     bound.textures[unit] = textures[k];
@@ -667,6 +717,7 @@ struct Executor : GfxExecutor {
     {
         if (bound.program == p.id)
             return;
+        stats.programSwitches++;
         gl.UseProgram(p.id);
         bound.program = p.id;
     }
@@ -865,10 +916,12 @@ struct Executor : GfxExecutor {
     {
         if (p.locV >= 0 && u.vertexOffset != p.lastV) {
             const std::vector<float> &data = transformed ? vertexDataTL : vertexData3D;
+            stats.vertexUploads++;
             gl.Uniform4fv(p.locV, p.vertexVec4, &data[u.vertexOffset]);
             p.lastV = u.vertexOffset;
         }
         if (p.locF >= 0 && u.fragmentOffset != p.lastF) {
+            stats.fragmentUploads++;
             gl.Uniform4fv(p.locF, GLES2_FRAGMENT_VEC4, &fragmentData[u.fragmentOffset]);
             p.lastF = u.fragmentOffset;
         }
@@ -879,6 +932,7 @@ struct Executor : GfxExecutor {
     {
         if (!open)
             return;
+        const double t0 = stats.enabled ? Sys_GetTicksPrecise() : 0.0;
         for (const GfxDrawState &s : frame.states)
             for (const GfxStageState &stage : s.stages)
                 if (stage.texture != NULL)
@@ -889,7 +943,9 @@ struct Executor : GfxExecutor {
         UploadTextures(textures);
         UploadGeometry(frame);
         UploadVertexBuffers(frame);
+        const double t1 = stats.enabled ? Sys_GetTicksPrecise() : 0.0;
         BuildUniforms(frame);
+        const double t2 = stats.enabled ? Sys_GetTicksPrecise() : 0.0;
         program3d.lastV = program3d.lastF = programTL.lastV = programTL.lastF = -1;
 
         GfxTexture *target = NULL;
@@ -946,12 +1002,25 @@ struct Executor : GfxExecutor {
                 gl.DrawArrays(PrimitiveMode(c.primitive), (GLint)firstVertex, (GLsizei)c.vertexCount);
             }
         }
+        if (stats.enabled) {
+            const double t3 = Sys_GetTicksPrecise();
+            stats.upload += t1 - t0;
+            stats.build += t2 - t1;
+            stats.draw += t3 - t2;
+            for (const GfxCommand &c : frame.commands)
+                if (c.type == GFX_CMD_DRAW) {
+                    stats.draws++;
+                    if (!c.transformed)
+                        stats.draws3d++;
+                }
+        }
         if (present)
             Present(readback, vsyncWanted, stretch);
     }
 
     void Present(GfxReadback &readback, bool vsyncWanted, bool stretch)
     {
+        const double p0 = stats.enabled ? Sys_GetTicksPrecise() : 0.0;
         BindFramebuffer(backFramebuffer);
         if (readback.requested && readback.width > 0 && readback.height > 0) {
             // The back buffer read of the frame just drawn (the lens flare
@@ -1008,6 +1077,30 @@ struct Executor : GfxExecutor {
         bound.scissor[0] = -1;
         bound.framebuffer = 0;
         bound.program = programBlit.id;
+        if (stats.enabled) {
+            const double now = Sys_GetTicksPrecise();
+            stats.present += now - p0;
+            if (stats.lastPresent != 0.0)
+                stats.period += now - stats.lastPresent;
+            stats.lastPresent = now;
+            if (++stats.frames % 120 == 0)
+                LogStats();
+        }
+    }
+
+    void LogStats()
+    {
+        const double n = (double)stats.frames;
+        Sys_Log("gfx: gles2 stats, %ld frames, ms/frame: period %.2f = upload %.2f + uniforms %.2f + draw loop %.2f + "
+                "present %.2f + other %.2f; per frame: draws %.0f (3D %.0f), uniform blocks v %.0f f %.0f, "
+                "program switches %.0f, texture binds %.0f",
+                stats.frames, stats.period / n, stats.upload / n, stats.build / n, stats.draw / n, stats.present / n,
+                (stats.period - stats.upload - stats.build - stats.draw - stats.present) / n, stats.draws / n,
+                stats.draws3d / n, stats.vertexUploads / n, stats.fragmentUploads / n, stats.programSwitches / n,
+                stats.textureBinds / n);
+        const bool enabled = stats.enabled;
+        stats = Stats();
+        stats.enabled = enabled;
     }
 };
 

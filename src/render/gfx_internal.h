@@ -49,6 +49,10 @@ struct GfxVertexBuffer {
     void *gpu = nullptr;            // executor's copy
 };
 
+// Not a game flag: a texture with no CPU copy whose pixels are uploaded by
+// rows (render/gfx_stream.h; the Amiga movie player).
+#define GFX_TEXTURE_STREAM 0x10000
+
 // Bytes of one level, given its size, for a format.
 size_t Gfx_LevelSize(int format, int width, int height, LONG *pitch);
 // Bytes per pixel of the CPU copy (0 for compressed formats).
@@ -169,6 +173,10 @@ struct GfxExecutor {
     virtual void DestroyVertexBuffer(GfxVertexBuffer *) {}
     // Brings a render target's pixels back into its CPU copy (for locks).
     virtual void ReadTexture(GfxTexture *texture) = 0;
+    // Stream textures (render/gfx_stream.h): uploads rows of RGBA8 pixels into
+    // the GPU copy of a texture made with GFX_TEXTURE_STREAM, creating its
+    // storage on the first upload. 0 when not supported.
+    virtual int UploadStreamRows(GfxTexture *, const uint8_t *, int, int) { return 0; }
     // Completes the back buffer read the last presented frame started, when
     // the game asks for its pixels (Gfx_ReadBackBuffer).
     virtual void CollectReadback(GfxReadback &) {}

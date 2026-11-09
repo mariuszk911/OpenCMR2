@@ -424,6 +424,7 @@ add_test(NAME movie_pacing COMMAND movie_pacing_test)
 
 # The Amiga movie player against fake renderer, audio and file layers.
 add_executable(movie_amiga_test movie_amiga.cpp ${PROJECT_SOURCE_DIR}/src/video/movie_amiga.cpp)
+target_include_directories(movie_amiga_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(movie_amiga_test PRIVATE opencmr2_bink)
 add_test(NAME movie_amiga COMMAND movie_amiga_test)
 

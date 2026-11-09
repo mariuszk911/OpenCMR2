@@ -815,6 +815,41 @@ extern "C" void Gfx_DrawIndexedPrimitiveTL(int primitive, const GfxTLVertex *ver
 
 // ---- textures -------------------------------------------------------------------------
 
+#ifdef OPENCMR2_AMIGA
+// ---- stream textures (render/gfx_stream.h) ---------------------------------------------
+
+extern "C" GfxTexture *Core_GfxStream_Create(int width, int height)
+{
+    if (s_executor == NULL || width <= 0 || height <= 0 || width > 4096 || height > 4096)
+        return NULL;
+    GfxTexture *t = Gfx_CreateTexture(width, height, GFX_FORMAT_BGRX8, 1, GFX_TEXTURE_STREAM);
+    if (t == NULL)
+        return NULL;
+    // No CPU copy: the movie player keeps the frame, the executor uploads rows.
+    std::vector<uint8_t>().swap(t->levels[0][0]);
+    t->dirty = false;
+    return t;
+}
+
+extern "C" int Core_GfxStream_GetSize(const GfxTexture *t, int *glWidth, int *glHeight)
+{
+    if (t == NULL || !(t->flags & GFX_TEXTURE_STREAM) || glWidth == NULL || glHeight == NULL)
+        return 0;
+    *glWidth = t->width;
+    *glHeight = t->height;
+    return 1;
+}
+
+extern "C" int Core_GfxStream_UploadRows(GfxTexture *t, const uint8_t *rgba, int y0, int rows)
+{
+    if (s_executor == NULL || t == NULL || rgba == NULL || !(t->flags & GFX_TEXTURE_STREAM) || y0 < 0 || rows <= 0 ||
+        rows > t->height || y0 > t->height - rows)
+        return 0;
+    return s_executor->UploadStreamRows(t, rgba, y0, rows);
+}
+
+#endif
+
 extern "C" GfxTexture *Gfx_CreateTexture(int width, int height, int format, int mipLevels, DWORD flags)
 {
     if (width <= 0 || height <= 0)
