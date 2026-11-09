@@ -2477,7 +2477,12 @@ int Graphics_RenderNodeCubeMapFaces(SceneNode *pNode, int bit)
     farPlane = CGraphics::m_farPlaneFixed;
     pCurrent = &pNode->current;
     pNodeMesh = (Mesh *)pNode->pObject;
-    cubeIndex = (pNodeMesh->flags >> 15) & 7;
+    // PORT: AMIGA: m68k-amigaos-gcc 6.5.0b -O2 miscompiled this read: it turned it
+    // into a bit-field extract from pNode->pObject + 0x30, and reload put the
+    // 0x30 into the register that held pNode before using it, so the cube index
+    // came from absolute address 60 and the faces were never drawn. A volatile
+    // read keeps the mesh flags load a plain move.
+    cubeIndex = (*(volatile unsigned int *)&pNodeMesh->flags >> 15) & 7;
     if (CGraphics::m_pTextureManager->textureBuffer2[cubeIndex] == NULL)
         return 1;
     for (i = 0; i < 6; i++) {
