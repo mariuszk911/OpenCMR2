@@ -9,6 +9,16 @@ permissions:
   contents: read
 
 jobs:
+  # game/ must stay close to upstream: every differing line is a future merge
+  # conflict (AGENTS.md rules 1-2).
+  game-divergence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: python3 tools/game_divergence.py --check
+
   # 32-bit x86 reference build on the same Ubuntu LTS as native Linux.
   linux-x86:
     runs-on: ubuntu-24.04
