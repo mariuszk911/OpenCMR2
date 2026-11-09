@@ -86,6 +86,7 @@ add_library(opencmr2_platform OBJECT
     platform/amiga/amiga_sys.cpp
     platform/amiga/amiga_platform.cpp
     render/minigl/gfx_minigl.cpp
+    render/gfx_dispatch_amiga.cpp
     ${OGLES2_SOURCES}
     input/input_amiga.cpp
     audio/audio_ahi.cpp
@@ -172,6 +173,7 @@ opencmr2_amiga_stack(amiga_minigl_movie_upload_test)
 # movie stream textures through it (Domain B, target only, not staged).
 add_executable(amiga_gfx_stream_texture_test ${PROJECT_SOURCE_DIR}/tests/amiga/gfx_stream_texture_test.cpp
     render/minigl/gfx_minigl.cpp
+    render/gfx_dispatch_amiga.cpp
     platform/amiga/amiga_sys.cpp
     platform/amiga/amiga_libfix.c)
 target_include_directories(amiga_gfx_stream_texture_test PRIVATE ${MINIGL_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})

@@ -749,3 +749,13 @@ foreach(c3d_payload_bound_variant c3d_payload_bound c3d_payload_bound_be)
     add_test(NAME ${c3d_payload_bound_variant} COMMAND ${c3d_payload_bound_variant}_test)
 endforeach()
 target_compile_definitions(c3d_payload_bound_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
+# [video] renderer = minigl | gles2: ini parsing and the fall-back decision.
+add_executable(gfx_renderer_test gfx_renderer.cpp)
+target_include_directories(gfx_renderer_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME gfx_renderer COMMAND gfx_renderer_test)
+
+# src/render/gfx_api.inc (the Amiga dispatcher's X-macro list) matches port/gfx.h.
+add_executable(gfx_api_list_test gfx_api_list.cpp)
+target_compile_definitions(gfx_api_list_test PRIVATE SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+add_test(NAME gfx_api_list COMMAND gfx_api_list_test)
