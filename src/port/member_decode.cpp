@@ -6,7 +6,10 @@
 #include "FileBuffer.h"
 #include "port/cod_disk.h"
 #include "port/disk.h"
+#include "port/light_preset_disk.h"
 #include "port/stage_camera_disk.h"
+#include "port/stage_light_transform_disk.h"
+#include "port/start_table_disk.h"
 #include "port/sys.h"
 
 #include <string.h>
@@ -27,6 +30,21 @@ bool DecodeStageCamera(void *native, size_t size, const void *file)
     return StageCameraDisk_Decode(native, size, file, size, NULL) != 0;
 }
 
+bool DecodeStartTable(void *native, size_t size, const void *file)
+{
+    return StartTableDisk_Decode(native, size, file, size, NULL) != 0;
+}
+
+bool DecodeStageLightTransform(void *native, size_t size, const void *file)
+{
+    return StageLightTransformDisk_Decode(native, size, file, size) != 0;
+}
+
+bool DecodeLightPreset(void *native, size_t size, const void *file)
+{
+    return LightPresetDisk_Decode(native, size, file, size) != 0;
+}
+
 struct Format {
     const char *extension;
     DecodeFn decode;
@@ -35,6 +53,9 @@ struct Format {
 const Format kFormats[] = {
     { ".cod", DecodeCod },          // co-driver calls
     { ".tsc", DecodeStageCamera },  // trackside cameras
+    { ".csp", DecodeStartTable },   // car start positions and angles
+    { ".bsp", DecodeStageLightTransform }, // stage light placement
+    { ".hor", DecodeLightPreset },  // weather lighting presets
 };
 
 bool HasExtension(const char *name, const char *extension)

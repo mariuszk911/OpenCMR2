@@ -14,7 +14,6 @@
 #include "port/car_info_disk.h"
 #include "port/disk.h"
 #include "port/split_table_disk.h"
-#include "port/start_table_disk.h"
 #include "port/track_collision_disk.h"
 #include "StageWeather.h"
 #include <stdio.h>
@@ -1891,40 +1890,16 @@ BYTE *GameMenu_GetChampionshipTransitionState(void);
 // FUNCTION: CMR2 0x00456c10
 void StageTiming_LoadCspData(void)
 {
-    {
-        DWORD cspSize = 0;
-        BYTE *pNativeCsp = NULL;
-
-        sprintf(CFrontend::m_stringDest, g_strCspFormat, GameMenu_GetChampionshipTransitionState());
-        g_unk0x00542608 = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
-                                                               CFrontend::m_stringDest, 0, &cspSize, 0);
-        // PORT: AMIGA: the .csp start table is little-endian; decode an archive-owned copy.
-        if (g_unk0x00542608 != NULL && cspSize != 0)
-            pNativeCsp = (BYTE *)CFileBuffer::AllocateLockedBuffer(cspSize);
-        if (cspSize < 0x18) {
-            // PORT: AMIGA: g_carStartAngles points 0x18 bytes into this table.
-            Sys_Log("start table: .csp too short (%lu bytes)", (unsigned long)cspSize);
-            if (pNativeCsp != NULL)
-                CFileBuffer::FreeGenericFileBuffer(pNativeCsp);
-            g_unk0x00542608 = NULL;
-        } else if (pNativeCsp != NULL && StartTableDisk_Decode(pNativeCsp, cspSize, g_unk0x00542608, cspSize, NULL)) {
-            Disk_AttachToBuffer(g_unk0x00542608, pNativeCsp);
-            g_unk0x00542608 = pNativeCsp;
-        } else {
-            if (pNativeCsp != NULL)
-                CFileBuffer::FreeGenericFileBuffer(pNativeCsp);
-            // PORT: AMIGA: never expose the raw member as native start data.
-            Sys_Log("start table: .csp decode failed");
-            g_unk0x00542608 = NULL;
-        }
-    }
+    // PORT: AMIGA: a stage without .csp data must not keep the previous stage's table.
+    g_carStartData = NULL;
+    g_carStartAngles = NULL;
+    sprintf(CFrontend::m_stringDest, g_strCspFormat, GameMenu_GetChampionshipTransitionState());
+    g_unk0x00542608 = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
+                                                           CFrontend::m_stringDest, 0, 0, 0);
     if (g_unk0x00542608 != NULL) {
         g_carStartData = g_unk0x00542608;
         g_carStartAngles = (FixAngles *)(g_unk0x00542608 + 0x18);
         CGame::RegisterCallback(StageTiming_NoOpResourceRelease, 0);
-    } else {
-        g_carStartData = NULL;
-        g_carStartAngles = NULL;
     }
 }
 

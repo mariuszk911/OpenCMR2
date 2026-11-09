@@ -26,8 +26,6 @@
 #include "Sound.h"
 #include "NetworkLeaderboards.h"
 #include "port/disk.h"
-#include "port/light_preset_disk.h"
-#include "port/stage_light_transform_disk.h"
 #include "RegKey.h"
 
 // Race session state (0x41e210-0x420190)
@@ -3703,18 +3701,9 @@ void Race_LoadSurfaceList(void)
 // FUNCTION: CMR2 0x00420020
 void Race_LoadStageLightPlacement(void)
 {
-    DWORD bspSize = 0;
-    BYTE *pBsp;
-    FixVector axes[4];
-
     sprintf(CFrontend::m_stringDest, g_strBspFormat, GameMenu_GetChampionshipTransitionState());
-    pBsp = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
-                                                CFrontend::m_stringDest, 0, &bspSize, 0);
-    // PORT: AMIGA: .bsp is four little-endian FixVectors; a stack copy suffices.
-    if (pBsp != NULL && StageLightTransformDisk_Decode(axes, sizeof(axes), pBsp, bspSize))
-        StageLights_SetTransform(axes);
-    else
-        StageLights_SetTransform(NULL); // PORT: AMIGA: reject malformed/missing .bsp.
+    StageLights_SetTransform((FixVector *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
+                                                                     CFrontend::m_stringDest, 0, 0, 0));
 }
 
 // Loads the stage's .hpc data when present.
@@ -4417,8 +4406,6 @@ void Race_ResolveStageTexturesAndPalettes(void)
 {
     char *pNames[48];
     BYTE *handles[48];
-    DWORD presetSizes[48];
-    StageLightPreset nativePresets[48];
     BYTE colour[6];
     StageLightPreset *pPrimary;
     StageLightPreset *pSecondary;
@@ -4475,16 +4462,7 @@ void Race_ResolveStageTexturesAndPalettes(void)
     pNames[47] = g_str0x005194a8;
     for (i = 0; i < 48; i++)
         handles[i] = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
-                                                       pNames[i], NULL, &presetSizes[i], 0);
-    // PORT: AMIGA: .hor records are little-endian; decode the 48 presets to stack copies.
-    for (i = 0; i < 48; i++) {
-        if (handles[i] != NULL &&
-                LightPresetDisk_Decode(&nativePresets[i], sizeof(nativePresets[i]),
-                                       handles[i], presetSizes[i]))
-            handles[i] = (BYTE *)&nativePresets[i];
-        else
-            handles[i] = NULL; // PORT: AMIGA: never pass raw LE .hor data on.
-    }
+                                                       pNames[i], NULL, NULL, 0);
     StageLights_BlendPresetPair(RallyData_GetPrimaryStageScoreScale(), RallyData_GetSecondaryStageScoreScale(), handles, &g_stageLightPresetPrimary,
                  &g_stageLightPresetSecondary);
     StageLights_SetPairFogDistances(g_stageLightPresetPrimary, g_stageLightPresetSecondary);
