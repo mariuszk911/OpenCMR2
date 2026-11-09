@@ -185,6 +185,11 @@ GfxExecutor *Gfx_CreateGlExecutor(void);
 unsigned long long Gfx_PrepareGlWindow(void);
 #endif
 
+#ifdef OPENCMR2_AMIGA
+// The ogles2.library executor (render/gles2/gfx_gles2.cpp).
+GfxExecutor *Gfx_CreateGles2Executor(void);
+#endif
+
 // Shared by the executors (gfx_core.cpp).
 struct SDL_Window;
 // Fullscreen on the desktop resolution, or a centred window of the back

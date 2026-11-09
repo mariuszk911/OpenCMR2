@@ -4,12 +4,21 @@
 set(MINIGL_INCLUDE_DIR "${PISTORM3D}/SDK/minigl-shared-library/include")
 set(MINIGL_LIBRARY_DIR "${PISTORM3D}/SDK/lib")
 set(OGLES2_INCLUDE_DIR "${OGLES2_SDK}/include")
+add_compile_definitions(OPENCMR2_GLES2_RENDERER)
 # Sources that include <proto/ogles2.h>. They get the SDK's include directory
 # on their own (not the whole target), as MiniGL's and ogles2's headers differ.
 set(OGLES2_SOURCES
     render/gles2/ogles2_glue.c
-    render/gles2/ogles2_display.c)
+    render/gles2/ogles2_display.c
+    render/gles2/ogles2_runtime.c)
 set_source_files_properties(${OGLES2_SOURCES}
+    PROPERTIES INCLUDE_DIRECTORIES "${OGLES2_INCLUDE_DIR};${CMAKE_CURRENT_SOURCE_DIR}")
+# The GLES2 renderer itself: shares port/types.h with the game, so it never
+# sees the NDK headers; it takes only the GL headers.
+set(GLES2_RENDERER_SOURCES
+    render/gfx_core.cpp
+    render/gles2/gfx_gles2.cpp)
+set_source_files_properties(render/gles2/gfx_gles2.cpp render/gfx_dispatch_amiga.cpp
     PROPERTIES INCLUDE_DIRECTORIES "${OGLES2_INCLUDE_DIR};${CMAKE_CURRENT_SOURCE_DIR}")
 
 # libnix swapstack.o plus the __stack size. The Shell stack is too small for the
@@ -87,6 +96,7 @@ add_library(opencmr2_platform OBJECT
     platform/amiga/amiga_platform.cpp
     render/minigl/gfx_minigl.cpp
     render/gfx_dispatch_amiga.cpp
+    ${GLES2_RENDERER_SOURCES}
     ${OGLES2_SOURCES}
     input/input_amiga.cpp
     audio/audio_ahi.cpp
@@ -174,6 +184,9 @@ opencmr2_amiga_stack(amiga_minigl_movie_upload_test)
 add_executable(amiga_gfx_stream_texture_test ${PROJECT_SOURCE_DIR}/tests/amiga/gfx_stream_texture_test.cpp
     render/minigl/gfx_minigl.cpp
     render/gfx_dispatch_amiga.cpp
+    ${GLES2_RENDERER_SOURCES}
+    ${OGLES2_SOURCES}
+    diagnostics/observer.cpp
     platform/amiga/amiga_sys.cpp
     platform/amiga/amiga_libfix.c)
 target_include_directories(amiga_gfx_stream_texture_test PRIVATE ${MINIGL_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})

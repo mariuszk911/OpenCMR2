@@ -15,9 +15,7 @@
 #include "port/sys.h"
 
 #ifdef OPENCMR2_GLES2_RENDERER
-#include "render/gles2/ogles2_display.h"
-#include "render/gles2/ogles2_glue.h"
-#include <proto/ogles2.h>
+#include "render/gles2/gles2_api.h"
 #endif
 
 namespace {
@@ -77,18 +75,10 @@ void SelectBackend()
 #ifdef OPENCMR2_GLES2_RENDERER
     gles2Built = 1;
     if (requested == GFX_RENDERER_GLES2) {
-        ogles2Opens = OGLES2Open() ? 1 : 0;
-        if (ogles2Opens) {
-            Ogles2Mode mode;
-            const char *modeWhy = "";
-            modeFound = Ogles2FindMode(0, 0, &mode, &modeWhy) ? 1 : 0;
-            if (!modeFound)
-                Sys_Log("gfx: ogles2: %s", modeWhy);
-        } else {
-            Sys_Log("gfx: ogles2: %s", OGLES2OpenError());
-        }
-        if (!ogles2Opens || !modeFound)
-            OGLES2Close();
+        const char *reason = "";
+        modeFound = Gles2Display_Probe(&ogles2Opens, &reason);
+        if (!modeFound)
+            Sys_Log("gfx: ogles2: %s", reason);
     }
 #endif
     const int chosen = GfxRenderer_Choose(requested, gles2Built, ogles2Opens, modeFound, &why);

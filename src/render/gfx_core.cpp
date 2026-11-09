@@ -1,7 +1,18 @@
 // The renderer's front end: the gfx.h state machine, CPU copies of textures
 // and vertex buffers, and the recording of each frame for the executor.
 
+#ifdef OPENCMR2_AMIGA
+// The AmigaOS build links this front end with the GLES2 executor next to the
+// MiniGL backend: its exports are Core_Gfx_* and render/gfx_dispatch_amiga.cpp
+// forwards to them. It has no SDL: the few SDL calls below are replaced by
+// the Amiga Sys layer's settings and plain C.
+#define OPENCMR2_GFX_PREFIX_CORE
+#include "render/gfx_api_prefix.h"
+#endif
+
+#ifndef OPENCMR2_AMIGA
 #include "platform/platform.h"
+#endif
 #include "port/sys.h"
 #include "port/diagnostics.h"
 #include "render/gfx_internal.h"
@@ -13,6 +24,21 @@
 #include <string.h>
 
 #include <algorithm>
+
+#ifdef OPENCMR2_AMIGA
+#define SDL_getenv getenv
+#define Platform_GetSetting Sys_GetOptionText
+#define Platform_GetSettingInt Sys_GetOption
+static int Gfx_StrCaseCmp(const char *a, const char *b)
+{
+    for (;; a++, b++) {
+        const int x = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a, y = (*b >= 'A' && *b <= 'Z') ? *b + 32 : *b;
+        if (x != y || x == 0)
+            return x - y;
+    }
+}
+#define SDL_strcasecmp Gfx_StrCaseCmp
+#endif
 
 namespace {
 
@@ -289,7 +315,7 @@ extern "C" void Gfx_GetPixelFormat(int format, GfxPixelFormat *out)
 
 namespace {
 
-enum Backend { BACKEND_NONE, BACKEND_NULL, BACKEND_GPU, BACKEND_GL };
+enum Backend { BACKEND_NONE, BACKEND_NULL, BACKEND_GPU, BACKEND_GL, BACKEND_GLES2 };
 
 // SDL_GPU (Vulkan, Direct3D 12, Metal) where the system has a hardware
 // device for it, otherwise OpenGL 3.3, for GPUs older than Vulkan; [video] graphics_api
@@ -303,6 +329,9 @@ Backend ChooseBackend()
     const char *headless = SDL_getenv("OPENCMR2_HEADLESS");
     if ((headless != NULL && *headless != '0') || Platform_GetSettingInt("video.headless", 0))
         return backend = BACKEND_NULL;
+#ifdef OPENCMR2_AMIGA
+    return backend = BACKEND_GLES2;
+#else
     const char *wanted = Platform_GetSetting("video.graphics_api", "auto");
 #ifdef OPENCMR2_RENDERER_GL
     if (SDL_strcasecmp(wanted, "opengl") == 0)
@@ -321,12 +350,16 @@ Backend ChooseBackend()
     backend = BACKEND_GPU;
 #endif
     return backend;
+#endif
 }
 
 } // namespace
 
 extern "C" unsigned long long Gfx_PrepareWindow(void)
 {
+#ifdef OPENCMR2_AMIGA
+    return 0;
+#endif
 #ifdef OPENCMR2_RENDERER_GL
     if (ChooseBackend() == BACKEND_GL)
         return Gfx_PrepareGlWindow();
@@ -336,6 +369,12 @@ extern "C" unsigned long long Gfx_PrepareWindow(void)
 
 extern "C" const char *Gfx_GetRendererName(void)
 {
+#ifdef OPENCMR2_AMIGA
+    // PORT: AMIGA: the game stores this name as the "graphics card" and resets
+    // its configuration when it changes. The GLES2 renderer keeps MiniGL's
+    // name so that switching [video] renderer does not reset the settings.
+    return "OpenCMR2 MiniGL";
+#endif
     return ChooseBackend() == BACKEND_GL ? "OpenCMR2 OpenGL" : "OpenCMR2 SDL_GPU";
 }
 
@@ -348,14 +387,25 @@ extern "C" BOOL Gfx_SetVideoMode(int width, int height, BOOL fullscreen)
         case BACKEND_NULL:
             s_executor = Gfx_CreateNullExecutor();
             break;
+#ifdef OPENCMR2_AMIGA
+        case BACKEND_GLES2:
+            s_executor = Gfx_CreateGles2Executor();
+            break;
+#endif
 #ifdef OPENCMR2_RENDERER_GL
         case BACKEND_GL:
             s_executor = Gfx_CreateGlExecutor();
             break;
 #endif
+#ifdef OPENCMR2_AMIGA
+        default:
+            s_executor = Gfx_CreateNullExecutor();
+            break;
+#else
         default:
             s_executor = Gfx_CreateGpuExecutor();
             break;
+#endif
         }
     }
     s_width = width;
@@ -395,6 +445,12 @@ extern "C" void Gfx_GetDefaultDisplayMode(int *width, int *height)
     // text, drawn in pixels for 640x480, stay readable: 720 lines, as
     // the game was played at 1024x768, and 540 on Android's small screens.
     // Higher modes stay available for a sharper 3D picture.
+#ifdef OPENCMR2_AMIGA
+    // MiniGL's default; the GLES2 renderer stretches it to the screen.
+    *width = 640;
+    *height = 480;
+    return;
+#endif
 #ifdef __ANDROID__
     const int lines = 540;
 #else
@@ -1161,6 +1217,7 @@ GfxExecutor *Gfx_CreateNullExecutor(void)
 
 // ---- shared by the executors -----------------------------------------------------------
 
+#ifndef OPENCMR2_AMIGA
 void Gfx_SetWindowMode(SDL_Window *window, bool fullscreen, int width, int height)
 {
     if (window == NULL)
@@ -1179,6 +1236,7 @@ void Gfx_SetWindowMode(SDL_Window *window, bool fullscreen, int width, int heigh
     SDL_SetWindowSize(window, width * scale, height * scale);
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
 }
+#endif
 
 bool Gfx_FrameHashWanted(void)
 {
@@ -1198,6 +1256,7 @@ void Gfx_HashFrame(const uint8_t *bgra, int width, int height)
     for (size_t i = 0; i < bytes; i++)
         h = (h ^ bgra[i]) * 1099511628211ull;
     fprintf(file, "%u %dx%d %016llx\n", frame, width, height, (unsigned long long)h);
+#ifndef OPENCMR2_AMIGA
     if (dump != NULL && every > 0 && frame % every == 0) {
         char path[1024];
         snprintf(path, sizeof(path), "%s/frame-%06u.bmp", dump, frame);
@@ -1207,5 +1266,9 @@ void Gfx_HashFrame(const uint8_t *bgra, int width, int height)
             SDL_DestroySurface(s);
         }
     }
+#else
+    (void)dump;
+    (void)every;
+#endif
     frame++;
 }

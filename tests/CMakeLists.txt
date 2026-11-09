@@ -759,3 +759,13 @@ add_test(NAME gfx_renderer COMMAND gfx_renderer_test)
 add_executable(gfx_api_list_test gfx_api_list.cpp)
 target_compile_definitions(gfx_api_list_test PRIVATE SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 add_test(NAME gfx_api_list COMMAND gfx_api_list_test)
+
+# Byte-wise texel conversions for the GLES2 renderer (port/gfx_texel.h).
+add_executable(gfx_texel_test gfx_texel.cpp)
+target_include_directories(gfx_texel_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME gfx_texel COMMAND gfx_texel_test)
+
+# Packing of a recorded draw's state into the GLES2 shaders' vec4 arrays.
+add_executable(gles2_uniforms_test gles2_uniforms.cpp)
+target_include_directories(gles2_uniforms_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME gles2_uniforms COMMAND gles2_uniforms_test)
