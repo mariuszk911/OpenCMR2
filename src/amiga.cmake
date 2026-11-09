@@ -67,6 +67,7 @@ add_library(cmr2_game OBJECT
     port/font_pcf.cpp
     port/leaderboard_disk.cpp
     port/light_preset_disk.cpp
+    port/member_decode.cpp
     port/replay_disk.cpp
     port/route_disk.cpp
     port/save_image_disk.cpp

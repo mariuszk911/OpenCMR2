@@ -1,6 +1,7 @@
 #include "GenericFileLoader.h"
 #include "FileBuffer.h"
 #include "port/endian.h"
+#include "port/member_decode.h"
 #include <string.h>
 
 GenericFile CGenericFileLoader::m_genericFile;
@@ -190,16 +191,22 @@ char *CGenericFileLoader::StrLowerPolish(char *str)
 void *CGenericFileLoader::FindFile(GenericFile *pFile, char *pPath, BYTE *pFound, DWORD *pId, BYTE bSkipArchive)
 {
     void *pResult;
+    DWORD size = 0;
     char name[64];
 
     if (pFound != NULL)
         *pFound = 0;
     if (pFile != NULL && pFile->didFileLoad != 0 && bSkipArchive == 0) {
         GetFileNameFromPath(pPath, name, sizeof(name));
-        pResult = FindFileInArchive(pFile, name, pId);
+        pResult = FindFileInArchive(pFile, name, &size);
+        // PORT: AMIGA: members with little-endian records come back as native copies.
+        if (pResult != NULL)
+            pResult = MemberDecode_Find(name, pResult, size);
         if (pResult != NULL) {
             if (pFound != NULL)
                 *pFound = 1;
+            if (pId != NULL)
+                *pId = size;
             return pResult;
         }
     }

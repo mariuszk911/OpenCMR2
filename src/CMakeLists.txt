@@ -71,6 +71,7 @@ add_library(opencmr2_platform STATIC
     port/intdiv.cpp
     port/leaderboard_disk.cpp
     port/light_preset_disk.cpp
+    port/member_decode.cpp
     port/replay_disk.cpp
     port/route_disk.cpp
     port/stage_camera_disk.cpp

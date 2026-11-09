@@ -25,10 +25,8 @@
 #include "main.h"
 #include "Sound.h"
 #include "NetworkLeaderboards.h"
-#include "port/cod_disk.h"
 #include "port/disk.h"
 #include "port/light_preset_disk.h"
-#include "port/stage_camera_disk.h"
 #include "port/stage_light_transform_disk.h"
 #include "RegKey.h"
 
@@ -752,23 +750,9 @@ BYTE Race_LoadSelectedStage(void)
     StageTiming_LoadCspData();
     RallyData_LoadSelectedRouteNodes();
     Race_LoadCoDriverCallData();
-    {
-        DWORD tscSize = 0;
-        BYTE *pNativeTsc = NULL;
-
-        sprintf(CFrontend::m_stringDest, g_str0x0051947c, GameMenu_GetChampionshipTransitionState());
-        pTsc = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
-                                                    CFrontend::m_stringDest, 0, &tscSize, 0);
-        // PORT: AMIGA: .tsc records are little-endian; decode into an archive-owned copy.
-        if (pTsc != NULL && tscSize != 0)
-            pNativeTsc = (BYTE *)CFileBuffer::AllocateLockedBuffer(tscSize);
-        if (pNativeTsc != NULL && StageCameraDisk_Decode(pNativeTsc, tscSize, pTsc, tscSize, NULL)) {
-            Disk_AttachToBuffer(pTsc, pNativeTsc);
-            pTsc = pNativeTsc;
-        } else if (pNativeTsc != NULL) {
-            CFileBuffer::FreeGenericFileBuffer(pNativeTsc);
-        }
-    }
+    sprintf(CFrontend::m_stringDest, g_str0x0051947c, GameMenu_GetChampionshipTransitionState());
+    pTsc = (BYTE *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(),
+                                                CFrontend::m_stringDest, 0, 0, 0);
     StageObject_SelectNonemptyRecordList((int *)pTsc);
     Sector_RebuildStageGrid();
     sprintf(CFrontend::m_stringDest, g_str0x00519474, GameMenu_GetChampionshipTransitionState());
@@ -3882,28 +3866,10 @@ void Race_LoadCoDriverCallData(void)
 {
     CGame::RegisterCallback(Race_ReleaseCoDriverCallData, 0);
     Race_ResetPlayerCallState();
-    {
-        DWORD codSize = 0;
-        unsigned int *pNative = NULL;
-
-        sprintf(CFrontend::m_stringDest, g_strCodFormat, GameMenu_GetChampionshipTransitionState());
-        g_loadedCoDriverCalls = (unsigned int *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(), CFrontend::m_stringDest, 0, &codSize, 0);
-        // PORT: AMIGA: .cod is little-endian; decode into a stage-archive-owned copy.
-        if (g_loadedCoDriverCalls != NULL && codSize != 0)
-            pNative = (unsigned int *)CFileBuffer::AllocateLockedBuffer(codSize + 1);
-        if (pNative != NULL && CodDisk_Decode(pNative, codSize, g_loadedCoDriverCalls, codSize, NULL)) {
-            Disk_AttachToBuffer(g_loadedCoDriverCalls, pNative);
-            g_loadedCoDriverCalls = pNative;
-        } else {
-            if (pNative != NULL)
-                CFileBuffer::FreeGenericFileBuffer(pNative);
-            // PORT: AMIGA: never expose the raw LE/un-aligned .cod member.
-            g_loadedCoDriverCalls = NULL;
-            g_coDriverCalls = NULL;
-        }
-        if (g_loadedCoDriverCalls != NULL)
-            g_coDriverCalls = g_loadedCoDriverCalls;
-    }
+    sprintf(CFrontend::m_stringDest, g_strCodFormat, GameMenu_GetChampionshipTransitionState());
+    g_loadedCoDriverCalls = (unsigned int *)CGenericFileLoader::FindFile((GenericFile *)StageTiming_GetStageFile3(), CFrontend::m_stringDest, 0, 0, 0);
+    if (g_loadedCoDriverCalls != NULL)
+        g_coDriverCalls = g_loadedCoDriverCalls;
 }
 
 // GLOBAL: CMR2 0x00537364

@@ -1,0 +1,30 @@
+/*
+ * Archive members the game reads through raw pointers although their records
+ * are little-endian (and, on 64-bit hosts, larger in memory). CGenericFileLoader::
+ * FindFile hands every member it finds to MemberDecode_Find; the game then
+ * sees native data without any decoding of its own, so the loading code in
+ * game/ stays as upstream wrote it.
+ *
+ * To add a format: write its decoder (port/*_disk.cpp), list its extension in
+ * member_decode.cpp, and remove the PORT: AMIGA hook from its load site.
+ */
+#ifndef OPENCMR2_PORT_MEMBER_DECODE_H
+#define OPENCMR2_PORT_MEMBER_DECODE_H
+
+#include "port/types.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* name: the member's file name, lower case. data and size: the member in its
+ * archive. Returns data for a member without a decoder; a native copy owned by
+ * the archive's buffer (Disk_AttachToBuffer) for one with; NULL when the
+ * decoder rejects the member, as if it were missing. */
+void *MemberDecode_Find(const char *name, void *data, DWORD size);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
