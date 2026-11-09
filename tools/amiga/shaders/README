@@ -22,6 +22,12 @@ Regenerating (on a PiStorm with v3dglslc installed):
      every shader as "built in N ms"; the first run says COMPILED.
   3. Copy WORK:CMR2/shadercache/#? here (the .v3dp and .v3ds files; also .v3dw
      and .v3da if any appear) and delete the older ones.
-  4. Test without the compiler: rename LIBS:v3dglslc, Avail FLUSH, start the
-     game from a drawer that has shaders/ and look for "COMPILED" or "FAILED" in
-     the log: there must be none. Then put the compiler back.
+  4. Check that nothing is compiled: point the cache at an EMPTY drawer
+       Assign OGLES2Cache: WORK:CMR2/emptycache
+     put `gles2_warm_variants = 1` under [video] in opencmr2.ini, start the game
+     (Stack 16777216), quit at the menu and look in opencmr2.log: every shader
+     variant must say a few milliseconds, with no "COMPILED" or "FAILED".
+     Restore the assign afterwards. Do NOT run `Avail FLUSH` or change the
+     compiler's protection bits for this: `Avail FLUSH` crashed the test machine
+     (ogles2 / v3dglslc still in use). A real no-compiler test needs a machine
+     without LIBS:v3dglslc.
