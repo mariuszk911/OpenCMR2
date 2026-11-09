@@ -25,6 +25,8 @@
 #include <string.h>
 
 #include <string>
+#include <utility>
+#include <vector>
 
 struct Gles2FragmentKey {
     int kind[2];        // Gles2TextureKind of each stage's texture
@@ -139,6 +141,36 @@ inline bool Gles2Fragment_ParseKey(const char *line, bool *transformed, Gles2Fra
     *key = k;
     *transformed = t;
     return true;
+}
+
+// The variations of a recorded key a game may also ask for in a state it was not
+// seen in: with and without the alpha test (the usual GREATEREQUAL function, or
+// the key's own) and, for 3D draws, with and without vertex fog (stages with
+// fog or rain). Used to build the shipped shader binaries without playing every
+// stage ([video] gles2_warm_variants). The key itself is always included.
+inline std::vector<std::pair<bool, Gles2FragmentKey> > Gles2Fragment_Variations(bool transformed,
+                                                                                const Gles2FragmentKey &key)
+{
+    std::vector<std::pair<bool, Gles2FragmentKey> > out;
+    const int tests[2] = { 0, key.alphaTest != 0 ? key.alphaTest : GFX_CMP_GREATEREQUAL };
+    const int fogs[2] = { 0, 1 };
+    for (int t = 0; t < 2; t++)
+        for (int f = 0; f < (transformed ? 1 : 2); f++) {
+            Gles2FragmentKey k = key;
+            k.alphaTest = tests[t];
+            k.fog = transformed ? key.fog : fogs[f];
+            bool seen = false;
+            for (size_t i = 0; i < out.size(); i++)
+                seen = seen || Gles2Fragment_SameKey(out[i].second, k);
+            if (!seen)
+                out.push_back(std::make_pair(transformed, k));
+        }
+    bool listed = false;
+    for (size_t i = 0; i < out.size(); i++)
+        listed = listed || Gles2Fragment_SameKey(out[i].second, key);
+    if (!listed)
+        out.push_back(std::make_pair(transformed, key));
+    return out;
 }
 
 // The fragment uniforms a program built from key reads, and nothing else: the

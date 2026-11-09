@@ -140,6 +140,32 @@ int main()
         Check(!Gles2Fragment_ParseKey("", &transformed, &back), "an empty line is refused");
     }
 
+    // The variations used to warm the shader binaries.
+    {
+        GfxDrawState d = s;
+        Gles2FragmentKey base;
+        Gles2Fragment_Key(d, GLES2_KIND_2D, GLES2_KIND_NONE, &base);   // no test, no fog
+        std::vector<std::pair<bool, Gles2FragmentKey> > v3 = Gles2Fragment_Variations(false, base);
+        Check(v3.size() == 4, "a 3D key: with and without the alpha test and with and without fog");
+        std::vector<std::pair<bool, Gles2FragmentKey> > v2 = Gles2Fragment_Variations(true, base);
+        Check(v2.size() == 2, "a 2D key: with and without the alpha test");
+        bool hasBase = false;
+        for (size_t i = 0; i < v3.size(); i++)
+            hasBase = hasBase || Gles2Fragment_SameKey(v3[i].second, base);
+        Check(hasBase, "the key itself is among its variations");
+        d.alphaTest = true;
+        d.alphaFunc = GFX_CMP_GREATER;
+        d.fog = true;
+        Gles2FragmentKey odd;
+        Gles2Fragment_Key(d, GLES2_KIND_2D, GLES2_KIND_NONE, &odd);   // GREATER test, fog on
+        std::vector<std::pair<bool, Gles2FragmentKey> > vo = Gles2Fragment_Variations(false, odd);
+        Check(vo.size() == 4, "no duplicates when the key already has a test and fog");
+        bool keepsOwnTest = false;
+        for (size_t i = 0; i < vo.size(); i++)
+            keepsOwnTest = keepsOwnTest || vo[i].second.alphaTest == GFX_CMP_GREATER;
+        Check(keepsOwnTest, "the key's own alpha function is kept");
+    }
+
     // Distinct states, distinct keys.
     t = s;
     t.stages[0].colorOp = GFX_TOP_ADD;

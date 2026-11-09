@@ -870,10 +870,13 @@ struct Executor : GfxExecutor {
         e->failed = !(transformed ? Link(e->program, kGles2VertexTL, source.c_str(), attributesTL, 4, GLES2_TL_VEC4)
                                   : Link(e->program, simpleVertex ? kGles2Vertex3DSimple : vertex3D,
                                          source.c_str(), attributes3D, 6, GLES2_VERTEX_VEC4));
-        Sys_Log("gfx: gles2: %s shader variant %u %s in %.0f ms (kinds %d %d, ops %d/%d, alpha test %d, fog %d)",
-                transformed ? "2D" : "3D", (unsigned)specials.size() + 1, e->failed ? "FAILED" : "built",
-                Sys_GetTicksPrecise() - t0, key.kind[0], key.kind[1], key.colorOp[0], key.colorOp[1], key.alphaTest,
-                key.fog);
+        const double built = Sys_GetTicksPrecise() - t0;
+        // A binary found in PROGDIR:shaders/ or the cache loads in milliseconds; seconds
+        // mean v3dglslc compiled it: that shader is not shipped yet.
+        Sys_Log("gfx: gles2: %s shader variant %u %s in %.0f ms%s (kinds %d %d, ops %d/%d, alpha test %d, fog %d)",
+                transformed ? "2D" : "3D", (unsigned)specials.size() + 1, e->failed ? "FAILED" : "built", built,
+                built > 300.0 ? " COMPILED: not in the shader binaries" : "", key.kind[0], key.kind[1],
+                key.colorOp[0], key.colorOp[1], key.alphaTest, key.fog);
         specials.push_back(e);
         if (!e->failed && !prewarming)
             RememberVariant(transformed, key);
@@ -905,22 +908,36 @@ struct Executor : GfxExecutor {
         if (f == NULL)
             return;
         const double t0 = Sys_GetTicksPrecise();
+        // Read the whole list first: variants built below are appended to it.
+        std::vector<std::pair<bool, Gles2FragmentKey> > listed;
         char line[256];
-        int count = 0, bad = 0;
-        prewarming = true;
+        int bad = 0;
         while (fgets(line, sizeof(line), f) != NULL) {
             bool transformed = false;
             Gles2FragmentKey key;
-            if (!Gles2Fragment_ParseKey(line, &transformed, &key)) {
+            if (Gles2Fragment_ParseKey(line, &transformed, &key))
+                listed.push_back(std::make_pair(transformed, key));
+            else
                 bad++;
-                continue;
-            }
-            ProgramFor(transformed, key);   // a variant already built is found, not built again
-            count++;
         }
-        prewarming = false;
         fclose(f);
-        Sys_Log("gfx: gles2: %d shader variants listed (%d bad lines), %u built, %.0f ms", count, bad,
+        // [video] gles2_warm_variants = 1: also the usual variations of each (see
+        // Gles2Fragment_Variations), to build the shipped shader binaries without
+        // playing every stage; they are remembered as they are built.
+        const bool warm = Sys_GetOption("video.gles2_warm_variants", 0) != 0;
+        for (size_t i = 0; i < listed.size(); i++) {
+            if (warm) {
+                const std::vector<std::pair<bool, Gles2FragmentKey> > all =
+                    Gles2Fragment_Variations(listed[i].first, listed[i].second);
+                for (size_t k = 0; k < all.size(); k++)
+                    ProgramFor(all[k].first, all[k].second);
+            } else {
+                prewarming = true;   // already listed: not appended again
+                ProgramFor(listed[i].first, listed[i].second);
+                prewarming = false;
+            }
+        }
+        Sys_Log("gfx: gles2: %u shader variants listed (%d bad lines), %u built, %.0f ms", (unsigned)listed.size(), bad,
                 (unsigned)specials.size(), Sys_GetTicksPrecise() - t0);
     }
 

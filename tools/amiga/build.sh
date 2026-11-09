@@ -240,6 +240,16 @@ for binary in "$REPO"/build/amiga/amiga_smoke "$REPO"/build/amiga/amiga_*_test; 
     cp "$binary" "$REPO/dist/amiga/tests/"
     chmod 755 "$REPO/dist/amiga/tests/$(basename "$binary")"
 done
+# Compiled GLES2 shaders (ogles2 finds them in PROGDIR:shaders/ by the hash of
+# the shader text; see tools/amiga/shaders/README). Missing binaries are
+# compiled on the first run where LIBS:v3dglslc is installed.
+if [ -d "$REPO/tools/amiga/shaders" ]; then
+    mkdir -p "$REPO/dist/amiga/shaders"
+    for shader in "$REPO"/tools/amiga/shaders/*.v3d?; do
+        [ -f "$shader" ] || continue
+        cp "$shader" "$REPO/dist/amiga/shaders/"
+    done
+fi
 cp "$PISTORM3D_ROOT/bin/minigl.library" "$REPO/dist/amiga/Libs/minigl.library"
 chmod 644 "$REPO/dist/amiga/Libs/minigl.library"
 cp "$PISTORM3D_ROOT/licences/License_MiniGL_Library.txt" "$REPO/dist/amiga/License_MiniGL_Library.txt"
@@ -251,6 +261,7 @@ OpenCMR2 for AmigaOS 3.2 / PiStorm
   opencmr2                    the game executable
   tests/                      Sys/platform diagnostics; not deployment files
   Libs/minigl.library         MiniGL 29.1, matching the SDK it was built with
+  shaders/                    compiled GLES2 shaders (renderer = gles2), see below
   License_MiniGL_Library.txt  MiniGL licence
 
 Requirements: AmigaOS 3.2, PiStorm, RTG (640x480 baseline), AHI and the
