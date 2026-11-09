@@ -16,6 +16,7 @@
 #include "render/gfx_internal.h"
 #include "render/gles2/gfx_gles2_shaders.h"
 #include "render/gles2/gles2_api.h"
+#include "render/gles2/gles2_fragment.h"
 #include "render/gles2/gles2_uniforms.h"
 #include "render/presentation.h"
 
@@ -95,16 +96,28 @@ struct GlVertexBuffer {
 
 struct Program {
     GLuint id = 0;
-    GLint locV = -1, locF = -1;
-    int vertexVec4 = 0;
-    // The uniform block (offset in its vector) last given to this program in
-    // this Execute, -1: none.
-    long lastV = -1, lastF = -1;
+    // u_v (the world*view slots of a 3D program, the target size of a TL one),
+    // u_v[4] (the rest of a 3D program's vertex uniforms) and u_f.
+    GLint locW = -1, locS = -1, locF = -1;
+    int worldVec4 = 0;      // vec4 slots given through locW
+    // The uniform blocks (float offsets into the frame's vectors) last given to
+    // this program in this Execute, -1: none.
+    long lastW = -1, lastS = -1, lastF = -1;
 };
 
-// What a draw needs besides its state: where its uniforms are.
+// What a draw needs besides its state: where its uniforms are (float offsets
+// into the frame's vectors).
 struct DrawUniforms {
-    long vertexOffset = -1, fragmentOffset = -1;   // float offsets into the frame's vectors
+    long worldOffset = -1, staticOffset = -1, fragmentOffset = -1;
+};
+
+// A program with a fragment shader specialised for a draw state
+// (gles2_fragment.h), made the first time such a draw is seen.
+struct SpecialProgram {
+    Gles2FragmentKey key;
+    bool transformed = false;
+    bool failed = false;
+    Program program;
 };
 
 struct Executor : GfxExecutor {
@@ -118,8 +131,12 @@ struct Executor : GfxExecutor {
     bool bcSupported = false, baseVertex = false;
     int vsync = -1;
     int boundAttributes = 0;    // vertex attribute arrays enabled
-    std::vector<float> vertexData3D, vertexDataTL, fragmentData;
+    int activeUnit = -1;        // the texture unit last made active
+    std::vector<float> worldData, staticData, tlData, fragmentData;
     std::vector<DrawUniforms> drawUniforms;
+    std::vector<SpecialProgram *> specials;
+    bool genericFragment = false;   // [video] gles2_generic_fragment: the general shader for every draw
+    bool simpleVertex = false;
 
     // [video] gles2_stats = 1: where a frame's time goes, logged every 120
     // frames (milliseconds per frame). "other" is what the game and gfx_core
@@ -127,8 +144,8 @@ struct Executor : GfxExecutor {
     struct Stats {
         bool enabled = false;
         double lastPresent = 0, upload = 0, build = 0, draw = 0, present = 0, period = 0;
-        long frames = 0, draws = 0, draws3d = 0, vertexUploads = 0, fragmentUploads = 0, programSwitches = 0,
-             textureBinds = 0;
+        long frames = 0, draws = 0, draws3d = 0, vertexUploads = 0, worldUploads = 0, fragmentUploads = 0,
+             programSwitches = 0, textureBinds = 0, vertexBinds = 0, unitSwitches = 0;
     } stats;
 
     struct Bound {
@@ -153,6 +170,11 @@ struct Executor : GfxExecutor {
         gl.DeleteFramebuffers(1, &backFramebuffer);
         GLuint buffers[] = { vertexBuffer, indexBuffer, quadBuffer };
         gl.DeleteBuffers(3, buffers);
+        for (SpecialProgram *e : specials) {
+            if (e->program.id != 0)
+                gl.DeleteProgram(e->program.id);
+            delete e;
+        }
         gl.DeleteProgram(program3d.id);
         gl.DeleteProgram(programTL.id);
         gl.DeleteProgram(programBlit.id);
@@ -210,9 +232,10 @@ struct Executor : GfxExecutor {
                 gl.Uniform1i(loc, i);
         }
         p.id = id;
-        p.locV = gl.GetUniformLocation(id, "u_v");
+        p.locW = gl.GetUniformLocation(id, "u_v");
+        p.locS = vertexVec4 > GLES2_WORLD_VEC4 ? gl.GetUniformLocation(id, "u_v[4]") : -1;
         p.locF = gl.GetUniformLocation(id, "u_f");
-        p.vertexVec4 = vertexVec4;
+        p.worldVec4 = vertexVec4 > GLES2_WORLD_VEC4 ? GLES2_WORLD_VEC4 : vertexVec4;
         return true;
     }
 
@@ -273,7 +296,14 @@ struct Executor : GfxExecutor {
         static const char *const attributes3D[6] = { "aPosition", "aNormal", "aDiffuse", "aSpecular", "aTex0", "aTex1" };
         static const char *const attributesTL[4] = { "aPosition", "aDiffuse", "aSpecular", "aTex" };
         static const char *const attributesBlit[1] = { "aPosition" };
-        if (!Link(program3d, kGles2Vertex3D, kGles2Fragment, attributes3D, 6, GLES2_VERTEX_VEC4) ||
+        simpleVertex = Sys_GetOption("video.gles2_simple_vertex", 0) != 0;
+        genericFragment = Sys_GetOption("video.gles2_generic_fragment", 0) != 0;
+        const bool simpleFragment = Sys_GetOption("video.gles2_simple_fragment", 0) != 0;
+        if (simpleVertex || simpleFragment)
+            Sys_Log("gfx: gles2: DIAGNOSTIC shaders: simple vertex %d, simple fragment %d", (int)simpleVertex,
+                    (int)simpleFragment);
+        if (!Link(program3d, simpleVertex ? kGles2Vertex3DSimple : kGles2Vertex3D,
+                  simpleFragment ? kGles2FragmentSimple : kGles2Fragment, attributes3D, 6, GLES2_VERTEX_VEC4) ||
             !Link(programTL, kGles2VertexTL, kGles2Fragment, attributesTL, 4, GLES2_TL_VEC4) ||
             !Link(programBlit, kGles2VertexBlit, kGles2FragmentBlit, attributesBlit, 1, 0))
             return false;
@@ -356,7 +386,7 @@ struct Executor : GfxExecutor {
             gl.GenTextures(1, &g->texture);
             t->gpu = g;
         }
-        gl.ActiveTexture(GL_TEXTURE0);
+        SelectUnit(0);
         gl.BindTexture(GL_TEXTURE_2D, g->texture);
         InvalidateTextureBinding();
         if (!g->specified) {
@@ -459,7 +489,7 @@ struct Executor : GfxExecutor {
     {
         const bool cube = (t->flags & GFX_TEXTURE_CUBE) != 0;
         const GLenum target = cube ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
-        gl.ActiveTexture(GL_TEXTURE0);
+        SelectUnit(0);
         gl.BindTexture(target, g->texture);
         InvalidateTextureBinding();
         const GLenum compressedFormat =
@@ -561,17 +591,31 @@ struct Executor : GfxExecutor {
     {
         for (GLuint &texture : bound.textures)
             texture = ~0u;
+        activeUnit = -1;
+    }
+
+    void SelectUnit(int unit)
+    {
+        if (activeUnit == unit)
+            return;
+        stats.unitSwitches++;
+        gl.ActiveTexture(GL_TEXTURE0 + unit);
+        activeUnit = unit;
     }
 
     // ---- sampler state (per texture in ES 2.0) ----
 
-    void ApplySampler(GlTexture *g, GfxTexture *t, const GfxStageState &stage, GLenum target)
+    uint32_t SamplerKey(const GfxTexture *t, const GfxStageState &stage)
     {
         const bool mips = t->mipLevels > 1 && stage.mipFilter != GFX_MIPFILTER_NONE;
-        const uint32_t key = (uint32_t)(stage.minFilter & 3) | (uint32_t)(stage.magFilter & 3) << 2 |
-                             (uint32_t)(mips ? stage.mipFilter & 3 : 1) << 4 | (uint32_t)(stage.address & 3) << 6;
-        if (g->samplerKey == key)
-            return;
+        return (uint32_t)(stage.minFilter & 3) | (uint32_t)(stage.magFilter & 3) << 2 |
+               (uint32_t)(mips ? stage.mipFilter & 3 : 1) << 4 | (uint32_t)(stage.address & 3) << 6;
+    }
+
+    // Sets the sampler state of the texture bound to the active unit.
+    void ApplySampler(GlTexture *g, const GfxStageState &stage, GLenum target, uint32_t key)
+    {
+        const bool mips = ((key >> 4) & 3) != 1;
         const bool linear = stage.minFilter == GFX_FILTER_LINEAR;
         GLint minFilter;
         if (!mips)
@@ -614,13 +658,16 @@ struct Executor : GfxExecutor {
                 const GLenum target = k == 0 ? GL_TEXTURE_2D : GL_TEXTURE_CUBE_MAP;
                 if (bound.textures[unit] != textures[k]) {
                     stats.textureBinds++;
-                    gl.ActiveTexture(GL_TEXTURE0 + unit);
+                    SelectUnit(unit);
                     gl.BindTexture(target, textures[k]);
                     bound.textures[unit] = textures[k];
                 }
                 if (g != NULL && (k == 1) == cube) {
-                    gl.ActiveTexture(GL_TEXTURE0 + unit);
-                    ApplySampler(g, t, stage, target);
+                    const uint32_t key = SamplerKey(t, stage);
+                    if (g->samplerKey != key) {
+                        SelectUnit(unit);
+                        ApplySampler(g, stage, target, key);
+                    }
                 }
             }
         }
@@ -651,15 +698,16 @@ struct Executor : GfxExecutor {
     // only when it is not the one it holds.
     void BuildUniforms(const GfxFrame &frame)
     {
-        vertexData3D.clear();
-        vertexDataTL.clear();
+        worldData.clear();
+        staticData.clear();
+        tlData.clear();
         fragmentData.clear();
         drawUniforms.assign(frame.commands.size(), DrawUniforms());
         GfxTexture *target = NULL;
-        const GfxDrawState *vertexState = NULL;
-        int vertexW = 0, vertexH = 0;
-        bool vertexScaled = false, vertexTransformed = false;
-        long vertexOffset = -1, fragmentOffset = -1;
+        const GfxDrawState *staticState = NULL, *worldState = NULL, *tlState = NULL;
+        int staticW = 0, staticH = 0, tlW = 0, tlH = 0;
+        bool staticScaled = false, tlScaled = false;
+        long worldOffset = -1, staticOffset = -1, tlOffset = -1, fragmentOffset = -1;
         float fragment[GLES2_FRAGMENT_VEC4 * 4];
         int lastKind0 = -1, lastKind1 = -1;
         for (size_t i = 0; i < frame.commands.size(); i++) {
@@ -678,24 +726,45 @@ struct Executor : GfxExecutor {
             }
             const GfxDrawState &s = frame.states[c.state];
             const bool scaled = target == NULL && s.screenW > 0 && s.screenH > 0;
-            if (vertexState == NULL || vertexTransformed != c.transformed || vertexW != targetW || vertexH != targetH ||
-                vertexScaled != scaled || (vertexState != &s && (c.transformed || !Gles2U_SameVertex(*vertexState, s)))) {
-                if (c.transformed) {
-                    vertexOffset = (long)vertexDataTL.size();
-                    vertexDataTL.resize(vertexDataTL.size() + GLES2_TL_VEC4 * 4);
-                    Gles2U_FillTL(s, targetW, targetH, scaled, &vertexDataTL[vertexOffset]);
-                } else {
-                    vertexOffset = (long)vertexData3D.size();
-                    vertexData3D.resize(vertexData3D.size() + GLES2_VERTEX_VEC4 * 4);
-                    Gles2U_FillVertex(s, targetW, targetH,
-                                      ToTarget(s.viewport, s.screenW, s.screenH, target == NULL, targetW, targetH),
-                                      scaled, &vertexData3D[vertexOffset]);
+            if (c.transformed) {
+                // Only the target size matters to a pre-transformed draw.
+                if (tlState == NULL || tlW != targetW || tlH != targetH || tlScaled != scaled ||
+                    (tlState != &s && scaled && (tlState->screenW != s.screenW || tlState->screenH != s.screenH))) {
+                    tlOffset = (long)tlData.size();
+                    tlData.resize(tlData.size() + GLES2_TL_VEC4 * 4);
+                    Gles2U_FillTL(s, targetW, targetH, scaled, &tlData[tlOffset]);
+                    tlState = &s;
+                    tlW = targetW;
+                    tlH = targetH;
+                    tlScaled = scaled;
                 }
-                vertexState = &s;
-                vertexTransformed = c.transformed;
-                vertexW = targetW;
-                vertexH = targetH;
-                vertexScaled = scaled;
+                drawUniforms[i].worldOffset = tlOffset;
+            } else {
+                // The part that changes with the view, lights and state, then
+                // the world*view matrix that changes with every object.
+                bool newWorld = false;
+                if (staticState == NULL || staticW != targetW || staticH != targetH || staticScaled != scaled ||
+                    (staticState != &s && !Gles2U_SameStatic(*staticState, s))) {
+                    staticOffset = (long)staticData.size();
+                    staticData.resize(staticData.size() + GLES2_VERTEX_VEC4 * 4);
+                    Gles2U_FillStatic(s, targetW, targetH,
+                                      ToTarget(s.viewport, s.screenW, s.screenH, target == NULL, targetW, targetH),
+                                      scaled, &staticData[staticOffset]);
+                    staticState = &s;
+                    staticW = targetW;
+                    staticH = targetH;
+                    staticScaled = scaled;
+                    newWorld = true;
+                }
+                if (newWorld || worldState == NULL ||
+                    (worldState != &s && memcmp(&worldState->world, &s.world, sizeof(s.world)) != 0)) {
+                    worldOffset = (long)worldData.size();
+                    worldData.resize(worldData.size() + GLES2_WORLD_VEC4 * 4);
+                    Gles2U_FillWorldView(s, &worldData[worldOffset]);
+                    worldState = &s;
+                }
+                drawUniforms[i].worldOffset = worldOffset;
+                drawUniforms[i].staticOffset = staticOffset;
             }
             const int kind0 = TextureKind(s.stages[0]), kind1 = TextureKind(s.stages[1]);
             float f[GLES2_FRAGMENT_VEC4 * 4];
@@ -708,9 +777,46 @@ struct Executor : GfxExecutor {
                 lastKind0 = kind0;
                 lastKind1 = kind1;
             }
-            drawUniforms[i].vertexOffset = vertexOffset;
             drawUniforms[i].fragmentOffset = fragmentOffset;
         }
+    }
+
+    // The program for a draw: its fragment shader specialised for the state,
+    // compiled on first use. Where that fails (no compiled binary and no
+    // compiler) the general program does the draw.
+    Program &ProgramFor(bool transformed, const Gles2FragmentKey &key)
+    {
+        Program &generic = transformed ? programTL : program3d;
+        if (genericFragment)
+            return generic;
+        for (SpecialProgram *e : specials)
+            if (e->transformed == transformed && Gles2Fragment_SameKey(e->key, key))
+                return e->failed ? generic : e->program;
+        SpecialProgram *e = new SpecialProgram;
+        e->key = key;
+        e->transformed = transformed;
+        const std::string source = Gles2Fragment::Source(key);
+        static const char *const attributes3D[6] = { "aPosition", "aNormal", "aDiffuse", "aSpecular", "aTex0", "aTex1" };
+        static const char *const attributesTL[4] = { "aPosition", "aDiffuse", "aSpecular", "aTex" };
+        const double t0 = Sys_GetTicksPrecise();
+        e->failed = !(transformed ? Link(e->program, kGles2VertexTL, source.c_str(), attributesTL, 4, GLES2_TL_VEC4)
+                                  : Link(e->program, simpleVertex ? kGles2Vertex3DSimple : kGles2Vertex3D,
+                                         source.c_str(), attributes3D, 6, GLES2_VERTEX_VEC4));
+        Sys_Log("gfx: gles2: %s shader variant %u %s in %.0f ms (kinds %d %d, ops %d/%d, alpha test %d, fog %d)",
+                transformed ? "2D" : "3D", (unsigned)specials.size() + 1, e->failed ? "FAILED" : "built",
+                Sys_GetTicksPrecise() - t0, key.kind[0], key.kind[1], key.colorOp[0], key.colorOp[1], key.alphaTest,
+                key.fog);
+        specials.push_back(e);
+        return e->failed ? generic : e->program;
+    }
+
+    void ResetUniformCache()
+    {
+        Program *all[2] = { &program3d, &programTL };
+        for (Program *p : all)
+            p->lastW = p->lastS = p->lastF = -1;
+        for (SpecialProgram *e : specials)
+            e->program.lastW = e->program.lastS = e->program.lastF = -1;
     }
 
     void UseProgram(Program &p)
@@ -778,6 +884,7 @@ struct Executor : GfxExecutor {
     {
         if (bound.vertices == buffer && bound.transformed == transformed && bound.firstVertexBound == first)
             return;
+        stats.vertexBinds++;
         gl.BindBuffer(GL_ARRAY_BUFFER, buffer);
         const int wanted = transformed ? 4 : 6;
         if (transformed) {
@@ -914,11 +1021,16 @@ struct Executor : GfxExecutor {
 
     void GiveUniforms(Program &p, const DrawUniforms &u, bool transformed)
     {
-        if (p.locV >= 0 && u.vertexOffset != p.lastV) {
-            const std::vector<float> &data = transformed ? vertexDataTL : vertexData3D;
+        if (p.locS >= 0 && u.staticOffset != p.lastS) {
             stats.vertexUploads++;
-            gl.Uniform4fv(p.locV, p.vertexVec4, &data[u.vertexOffset]);
-            p.lastV = u.vertexOffset;
+            gl.Uniform4fv(p.locS, GLES2_STATIC_VEC4, &staticData[u.staticOffset + GLES2_SLOT(GLES2_WORLD_VEC4)]);
+            p.lastS = u.staticOffset;
+        }
+        if (p.locW >= 0 && u.worldOffset != p.lastW) {
+            stats.worldUploads++;
+            const std::vector<float> &data = transformed ? tlData : worldData;
+            gl.Uniform4fv(p.locW, p.worldVec4, &data[u.worldOffset]);
+            p.lastW = u.worldOffset;
         }
         if (p.locF >= 0 && u.fragmentOffset != p.lastF) {
             stats.fragmentUploads++;
@@ -946,11 +1058,15 @@ struct Executor : GfxExecutor {
         const double t1 = stats.enabled ? Sys_GetTicksPrecise() : 0.0;
         BuildUniforms(frame);
         const double t2 = stats.enabled ? Sys_GetTicksPrecise() : 0.0;
-        program3d.lastV = program3d.lastF = programTL.lastV = programTL.lastF = -1;
+        ResetUniformCache();
 
         GfxTexture *target = NULL;
         int targetW = backWidth, targetH = backHeight;
         BindFramebuffer(backFramebuffer);
+        uint32_t keyState = ~0u;
+        bool keyTransformed = false;
+        Gles2FragmentKey fragmentKey;
+        Program *keyProgram = &program3d;
         for (size_t i = 0; i < frame.commands.size(); i++) {
             const GfxCommand &c = frame.commands[i];
             if (c.type == GFX_CMD_TARGET) {
@@ -974,7 +1090,13 @@ struct Executor : GfxExecutor {
             if (c.type == GFX_CMD_BACKDROP)
                 continue;   // no distance fade on this renderer
             const GfxDrawState &s = frame.states[c.state];
-            Program &p = c.transformed ? programTL : program3d;
+            if (c.state != keyState || c.transformed != keyTransformed) {
+                Gles2Fragment_Key(s, TextureKind(s.stages[0]), TextureKind(s.stages[1]), &fragmentKey);
+                keyState = c.state;
+                keyTransformed = c.transformed;
+                keyProgram = &ProgramFor(c.transformed, fragmentKey);
+            }
+            Program &p = *keyProgram;
             UseProgram(p);
             SetDrawState(s);
             const GfxViewport viewport = ToTarget(s.viewport, s.screenW, s.screenH, target == NULL, targetW, targetH);
@@ -1064,7 +1186,7 @@ struct Executor : GfxExecutor {
         gl.Viewport(rect.x, (int)display.height - rect.y - rect.height, rect.width, rect.height);
         bound.viewport[0] = -1;
         UseProgram(programBlit);
-        gl.ActiveTexture(GL_TEXTURE0);
+        SelectUnit(0);
         gl.BindTexture(GL_TEXTURE_2D, backColor);
         bound.textures[0] = ~0u;
         gl.BindBuffer(GL_ARRAY_BUFFER, quadBuffer);
@@ -1096,8 +1218,8 @@ struct Executor : GfxExecutor {
                 "program switches %.0f, texture binds %.0f",
                 stats.frames, stats.period / n, stats.upload / n, stats.build / n, stats.draw / n, stats.present / n,
                 (stats.period - stats.upload - stats.build - stats.draw - stats.present) / n, stats.draws / n,
-                stats.draws3d / n, stats.vertexUploads / n, stats.fragmentUploads / n, stats.programSwitches / n,
-                stats.textureBinds / n);
+                stats.draws3d / n, stats.vertexUploads / n, stats.worldUploads / n, stats.fragmentUploads / n,
+                stats.programSwitches / n, stats.textureBinds / n, stats.vertexBinds / n, stats.unitSwitches / n);
         const bool enabled = stats.enabled;
         stats = Stats();
         stats.enabled = enabled;

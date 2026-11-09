@@ -104,6 +104,23 @@ int main()
     t.stages[1].texCoordIndex = 0;
     Check(!Gles2U_SameVertex(s, t), "a texture coordinate source change differs");
 
+    // The split parts give the same slots as the whole block, and the static part
+    // ignores the world matrix.
+    {
+        static float whole[GLES2_VERTEX_VEC4 * 4], split[GLES2_VERTEX_VEC4 * 4];
+        Gles2U_FillVertex(s, 640, 480, viewport, false, whole);
+        memset(split, 0x55, sizeof(split));
+        Gles2U_FillWorldView(s, split);
+        Gles2U_FillStatic(s, 640, 480, viewport, false, split);
+        Check(memcmp(whole, split, sizeof(whole)) == 0, "world and static parts make the whole block");
+        GfxDrawState moved = s;
+        moved.world._41 = 99.0f;
+        Check(Gles2U_SameStatic(s, moved) && !Gles2U_SameVertex(s, moved), "a moved object keeps the static part");
+        moved = s;
+        moved.view._42 = 3.0f;
+        Check(!Gles2U_SameStatic(s, moved), "a moved view changes it");
+    }
+
     float tl[4];
     Gles2U_FillTL(s, 1024, 768, true, tl);
     Check(tl[0] == 640.0f && tl[1] == 480.0f, "TL target size");

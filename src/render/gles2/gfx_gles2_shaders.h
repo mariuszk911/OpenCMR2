@@ -340,6 +340,62 @@ void main()
 }
 )GLSL";
 
+/* Diagnostics only ([video] gles2_simple_fragment / gles2_simple_vertex): the
+   cheapest shaders that still draw textured geometry, to tell which stage of
+   the full shaders the GPU time goes to. Wrong output on purpose. */
+static const char kGles2FragmentSimple[] = R"GLSL(
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec4 vDiffuse;
+varying vec4 vSpecular;
+varying vec4 vTex0;
+varying vec4 vTex1;
+varying vec2 vFog;
+uniform sampler2D tex0;
+uniform samplerCube cube0;
+uniform sampler2D tex1;
+uniform samplerCube cube1;
+uniform vec4 u_f[13];
+void main()
+{
+    gl_FragColor = vDiffuse * texture2D(tex0, vTex0.xy);
+}
+)GLSL";
+
+static const char kGles2Vertex3DSimple[] = R"GLSL(
+attribute vec3 aPosition;
+attribute vec3 aNormal;
+attribute vec4 aDiffuse;
+attribute vec4 aSpecular;
+attribute vec2 aTex0;
+attribute vec2 aTex1;
+uniform vec4 u_v[83];
+varying vec4 vDiffuse;
+varying vec4 vSpecular;
+varying vec4 vTex0;
+varying vec4 vTex1;
+varying vec2 vFog;
+void main()
+{
+    mat4 worldView = mat4(u_v[0], u_v[1], u_v[2], u_v[3]);
+    mat4 projection = mat4(u_v[4], u_v[5], u_v[6], u_v[7]);
+    vec4 clip = projection * (worldView * vec4(aPosition, 1.0));
+    clip.xy += u_v[82].zw * clip.w;
+    clip.y = -clip.y;
+    clip.z = 2.0 * clip.z - clip.w;
+    gl_Position = clip;
+    gl_PointSize = 1.0;
+    vDiffuse = aDiffuse.yzwx;
+    vSpecular = vec4(0.0);
+    vTex0 = vec4(aTex0, 1.0, 0.0);
+    vTex1 = vec4(0.0);
+    vFog = vec2(1.0, 0.0);
+}
+)GLSL";
+
 /* Copies the back buffer to the screen. */
 static const char kGles2VertexBlit[] = R"GLSL(
 attribute vec2 aPosition;

@@ -30,7 +30,13 @@
 #include <math.h>
 #include <string.h>
 
-enum { GLES2_VERTEX_VEC4 = 83, GLES2_TL_VEC4 = 1, GLES2_FRAGMENT_VEC4 = 13 };
+enum {
+    GLES2_VERTEX_VEC4 = 83, GLES2_TL_VEC4 = 1, GLES2_FRAGMENT_VEC4 = 13,
+    // Slots 0-3 (world*view) change with every object; the rest (slots 4-82)
+    // only when the view, lights, material or render state do. They are given
+    // to the program separately.
+    GLES2_WORLD_VEC4 = 4, GLES2_STATIC_VEC4 = 79
+};
 
 enum Gles2TextureKind { GLES2_KIND_NONE = 0, GLES2_KIND_2D = 1, GLES2_KIND_CUBE = 2 };
 
@@ -81,14 +87,19 @@ inline float Gles2U_TexCoordMode(DWORD index)
 // Float offset of vec4 slot n.
 #define GLES2_SLOT(n) ((n) * 4)
 
-// The 3D vertex uniforms of a draw. viewport is the draw's viewport in target
+// The 3D vertex uniforms of a draw, in two parts. viewport is the draw's viewport in target
 // pixels (for the half-pixel offset); scaled: the target is the back buffer
 // and the game's virtual screen applies.
-inline void Gles2U_FillVertex(const GfxDrawState &s, int targetW, int targetH, const GfxViewport &viewport,
+inline void Gles2U_FillWorldView(const GfxDrawState &s, float *u16)
+{
+    Gles2U_Multiply(s.world, s.view, u16);
+}
+
+// Slots 4-82 of a full 83-slot buffer (slots 0-3 are left alone).
+inline void Gles2U_FillStatic(const GfxDrawState &s, int targetW, int targetH, const GfxViewport &viewport,
                               bool scaled, float *u)
 {
-    memset(u, 0, sizeof(float) * 4 * GLES2_VERTEX_VEC4);
-    Gles2U_Multiply(s.world, s.view, u + GLES2_SLOT(0));
+    memset(u + GLES2_SLOT(GLES2_WORLD_VEC4), 0, sizeof(float) * 4 * GLES2_STATIC_VEC4);
     memcpy(u + GLES2_SLOT(4), &s.projection, 64);
     memcpy(u + GLES2_SLOT(8), &s.texture[0], 64);
     memcpy(u + GLES2_SLOT(12), &s.texture[1], 64);
@@ -148,6 +159,13 @@ inline void Gles2U_FillVertex(const GfxDrawState &s, int targetW, int targetH, c
     target[3] = viewport.height ? -1.0f / viewport.height : 0.0f;
 }
 
+inline void Gles2U_FillVertex(const GfxDrawState &s, int targetW, int targetH, const GfxViewport &viewport,
+                              bool scaled, float *u)
+{
+    Gles2U_FillWorldView(s, u);
+    Gles2U_FillStatic(s, targetW, targetH, viewport, scaled, u);
+}
+
 // The pre-transformed vertex shader's one slot: the target size positions are
 // given in.
 inline void Gles2U_FillTL(const GfxDrawState &s, int targetW, int targetH, bool scaled, float *u)
@@ -195,7 +213,7 @@ inline void Gles2U_FillFragment(const GfxDrawState &s, int kind0, int kind1, flo
 
 // Whether two draws need the same 3D vertex uniforms (the state they are
 // computed from compares equal).
-inline bool Gles2U_SameVertex(const GfxDrawState &a, const GfxDrawState &b)
+inline bool Gles2U_SameStatic(const GfxDrawState &a, const GfxDrawState &b)
 {
     for (int i = 0; i < 2; i++)
         if (a.stages[i].texCoordIndex != b.stages[i].texCoordIndex ||
@@ -208,13 +226,17 @@ inline bool Gles2U_SameVertex(const GfxDrawState &a, const GfxDrawState &b)
            a.specularSource == b.specularSource && a.ambientSource == b.ambientSource &&
            a.emissiveSource == b.emissiveSource && a.fog == b.fog && a.fogTableMode == b.fogTableMode &&
            a.fogVertexMode == b.fogVertexMode && a.fogStart == b.fogStart && a.fogEnd == b.fogEnd &&
-           a.ambient == b.ambient && memcmp(&a.world, &b.world, sizeof(a.world)) == 0 &&
-           memcmp(&a.view, &b.view, sizeof(a.view)) == 0 &&
+           a.ambient == b.ambient && memcmp(&a.view, &b.view, sizeof(a.view)) == 0 &&
            memcmp(&a.projection, &b.projection, sizeof(a.projection)) == 0 &&
            memcmp(a.texture, b.texture, sizeof(a.texture)) == 0 &&
            memcmp(&a.material, &b.material, sizeof(a.material)) == 0 &&
            memcmp(a.lightEnabled, b.lightEnabled, sizeof(a.lightEnabled)) == 0 &&
            memcmp(a.lights, b.lights, sizeof(a.lights)) == 0;
+}
+
+inline bool Gles2U_SameVertex(const GfxDrawState &a, const GfxDrawState &b)
+{
+    return memcmp(&a.world, &b.world, sizeof(a.world)) == 0 && Gles2U_SameStatic(a, b);
 }
 
 #endif

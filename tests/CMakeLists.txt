@@ -770,3 +770,8 @@ add_test(NAME gfx_texel COMMAND gfx_texel_test)
 add_executable(gles2_uniforms_test gles2_uniforms.cpp)
 target_include_directories(gles2_uniforms_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME gles2_uniforms COMMAND gles2_uniforms_test)
+
+# Specialised fragment shaders of the GLES2 renderer: the key and the text.
+add_executable(gles2_fragment_test gles2_fragment.cpp)
+target_include_directories(gles2_fragment_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME gles2_fragment COMMAND gles2_fragment_test)
