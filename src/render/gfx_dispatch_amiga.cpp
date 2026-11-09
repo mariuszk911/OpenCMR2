@@ -75,12 +75,13 @@ const GfxBackend s_gles2 = {
 const GfxBackend *s_active = NULL;
 
 // [video] frame_stats = 1: the same frame timing for either renderer, logged
-// every 480 frames: the period between presents, the time inside Present and
-// inside the draw calls (MiniGL submits there, gfx_core records), and the rest
-// (the game, state calls). Frames with 3D draws are summed apart. Done by
-// replacing the Present and Draw entries of a copy of the backend's table, so
-// it costs nothing when off; each timed call reads the E-clock twice (its cost
-// is logged too).
+// every 480 frames: the period between presents, the time inside Present, and
+// the rest (the game, state and draw calls). Frames with 3D draws are summed
+// apart. frame_stats = 2 also times every draw call (MiniGL submits there,
+// gfx_core records), but an E-clock read costs about 22 us on the PiStorm:
+// two per draw add about 30 ms to a 3D frame, so 2 is for the split, not the
+// total. Done by replacing the Present and Draw entries of a copy of the
+// backend's table, so it costs nothing when off.
 GfxBackend s_timed;
 const GfxBackend *s_inner;
 
@@ -91,6 +92,8 @@ struct FrameStats {
     long frames = 0, frames3d = 0, draws = 0, draws3d = 0, frameDraws3d = 0;
 } s_fs;
 
+bool s_timeDraws;
+
 struct DrawTimer {
     double t0;
     DrawTimer(bool is3d)
@@ -100,9 +103,13 @@ struct DrawTimer {
             s_fs.draws3d++;
             s_fs.frameDraws3d++;
         }
-        t0 = Sys_GetTicksPrecise();
+        t0 = s_timeDraws ? Sys_GetTicksPrecise() : 0.0;
     }
-    ~DrawTimer() { s_fs.frameDraw += Sys_GetTicksPrecise() - t0; }
+    ~DrawTimer()
+    {
+        if (s_timeDraws)
+            s_fs.frameDraw += Sys_GetTicksPrecise() - t0;
+    }
 };
 
 void LogFrameStats()
@@ -183,8 +190,10 @@ void Timed_DrawIndexedPrimitiveTL(int p, const GfxTLVertex *v, uint32_t n, const
 
 const GfxBackend *WithFrameStats(const GfxBackend *backend)
 {
-    if (!Sys_GetOption("video.frame_stats", 0))
+    const int mode = Sys_GetOption("video.frame_stats", 0);
+    if (mode == 0)
         return backend;
+    s_timeDraws = mode >= 2;
     s_inner = backend;
     s_timed = *backend;
     s_timed.Gfx_Present = &Timed_Present;

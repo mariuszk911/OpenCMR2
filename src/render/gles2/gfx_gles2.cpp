@@ -156,6 +156,8 @@ struct Executor : GfxExecutor {
     // spend between two presents.
     struct Stats {
         bool enabled = false;
+        double readback = 0;
+        long readbacks = 0;
         double lastPresent = 0, upload = 0, build = 0, draw = 0, present = 0, period = 0;
         long frames = 0, draws = 0, draws3d = 0, vertexUploads = 0, worldUploads = 0, fragmentUploads = 0,
              programSwitches = 0, states = 0, textureBinds = 0, vertexBinds = 0, unitSwitches = 0, targets = 0, cubeDraws = 0, targetDraws = 0;
@@ -1266,6 +1268,9 @@ struct Executor : GfxExecutor {
     {
         if (!open)
             return;
+        // A read the game did not collect must be done before the back buffer
+        // is drawn into again.
+        CollectReadback(readback);
         const double t0 = stats.enabled ? Sys_GetTicksPrecise() : 0.0;
         for (const GfxDrawState &s : frame.states)
             for (const GfxStageState &stage : s.stages)
@@ -1401,19 +1406,17 @@ struct Executor : GfxExecutor {
         BindFramebuffer(backFramebuffer);
         if (readback.requested && readback.width > 0 && readback.height > 0) {
             // The back buffer read of the frame just drawn (the lens flare
-            // test): synchronous here, returned by Gfx_ReadBackBuffer as the
-            // previous frame's.
-            const int x = std::max(0, std::min(readback.x, backWidth - 1));
-            const int y = std::max(0, std::min(readback.y, backHeight - 1));
-            const int w = std::min(readback.width, backWidth - x), h = std::min(readback.height, backHeight - y);
-            std::vector<uint8_t> rgba((size_t)w * h * 4);
-            gl.ReadPixels(x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
-            readback.pixels.resize((size_t)w * h);
-            for (size_t i = 0; i < readback.pixels.size(); i++)
-                readback.pixels[i] = GfxTexel_RgbaBytesToArgb(&rgba[i * 4]);
-            readback.readyWidth = w;
-            readback.readyHeight = h;
-            readback.ready = true;
+            // test), returned by Gfx_ReadBackBuffer as the previous frame's.
+            // Not read here: glReadPixels waits for the GPU to finish the
+            // frame, which stalled every 3D frame. It is read when the game
+            // asks (CollectReadback), while the game builds the next frame
+            // and the GPU has had time to render this one; the back buffer
+            // still holds it then (the next frame is drawn at its Present).
+            readbackPending = true;
+            readbackX = std::max(0, std::min(readback.x, backWidth - 1));
+            readbackY = std::max(0, std::min(readback.y, backHeight - 1));
+            readbackW = std::min(readback.width, backWidth - readbackX);
+            readbackH = std::min(readback.height, backHeight - readbackY);
             readback.requested = false;
         }
         if (dumpEvery > 0) {
@@ -1472,18 +1475,44 @@ struct Executor : GfxExecutor {
         }
     }
 
+    bool readbackPending = false;
+    int readbackX = 0, readbackY = 0, readbackW = 0, readbackH = 0;
+
+    void CollectReadback(GfxReadback &readback) override
+    {
+        if (!readbackPending || !open)
+            return;
+        const double r0 = stats.enabled ? Sys_GetTicksPrecise() : 0.0;
+        readbackPending = false;
+        BindFramebuffer(backFramebuffer);
+        std::vector<uint8_t> rgba((size_t)readbackW * readbackH * 4);
+        gl.ReadPixels(readbackX, readbackY, readbackW, readbackH, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        readback.pixels.resize((size_t)readbackW * readbackH);
+        for (size_t i = 0; i < readback.pixels.size(); i++)
+            readback.pixels[i] = GfxTexel_RgbaBytesToArgb(&rgba[i * 4]);
+        readback.readyWidth = readbackW;
+        readback.readyHeight = readbackH;
+        readback.ready = true;
+        if (stats.enabled) {
+            stats.readback += Sys_GetTicksPrecise() - r0;
+            stats.readbacks++;
+        }
+    }
+
     void LogStats()
     {
         const double n = (double)stats.frames;
         Sys_Log("gfx: gles2 stats, %ld frames, ms/frame: period %.2f = upload %.2f + uniforms %.2f + draw loop %.2f + "
                 "present %.2f + other %.2f; per frame: draws %.0f (3D %.0f), uniform blocks static %.0f world %.0f "
                 "fragment %.0f, recorded states %.0f, program switches %.0f, texture binds %.0f, vertex binds %.0f, unit switches %.0f, "
-                "render-target switches %.2f, draws into render targets %.1f, draws with a cube map %.1f",
+                "render-target switches %.2f, draws into render targets %.1f, draws with a cube map %.1f; "
+                "back buffer reads %.2f, %.2f ms (in other)",
                 stats.frames, stats.period / n, stats.upload / n, stats.build / n, stats.draw / n, stats.present / n,
                 (stats.period - stats.upload - stats.build - stats.draw - stats.present) / n, stats.draws / n,
                 stats.draws3d / n, stats.vertexUploads / n, stats.worldUploads / n, stats.fragmentUploads / n,
                 stats.states / n, stats.programSwitches / n, stats.textureBinds / n, stats.vertexBinds / n, stats.unitSwitches / n,
-                stats.targets / n, stats.targetDraws / n, stats.cubeDraws / n);
+                stats.targets / n, stats.targetDraws / n, stats.cubeDraws / n,
+                stats.readbacks / n, stats.readback / n);
         const bool enabled = stats.enabled;
         stats = Stats();
         stats.enabled = enabled;
