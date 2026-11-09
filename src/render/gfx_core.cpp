@@ -1036,12 +1036,16 @@ std::vector<uint32_t> ToBGRA(GfxTexture *t)
     std::vector<uint32_t> out((size_t)t->width * t->height);
     const uint8_t *src = t->levels[0][0].data();
     switch (t->format) {
+    // The CPU copy holds the bytes B, G, R, A of a pixel in every byte order, so
+    // a pixel value (0xAARRGGBB) is built from its bytes, not read as a word:
+    // on a big-endian CPU a word read puts A where B is.
     case GFX_FORMAT_BGRX8:
         for (size_t i = 0; i < out.size(); i++)
-            out[i] = ((const uint32_t *)src)[i] | 0xff000000;
+            out[i] = src[i * 4] | src[i * 4 + 1] << 8 | src[i * 4 + 2] << 16 | 0xff000000u;
         break;
     case GFX_FORMAT_BGRA8:
-        memcpy(out.data(), src, out.size() * 4);
+        for (size_t i = 0; i < out.size(); i++)
+            out[i] = src[i * 4] | src[i * 4 + 1] << 8 | src[i * 4 + 2] << 16 | (uint32_t)src[i * 4 + 3] << 24;
         break;
     case GFX_FORMAT_BUMP_DUDVL:
         for (size_t i = 0; i < out.size(); i++)
@@ -1103,7 +1107,10 @@ extern "C" void Gfx_CopyTexture(GfxTexture *dst, GfxTexture *src)
                 out[i * 3 + 1] = (uint8_t)(p >> 8);
                 out[i * 3 + 2] = (uint8_t)(p >> 16);
             } else {
-                ((uint32_t *)out)[i] = p;
+                out[i * 4] = (uint8_t)p;
+                out[i * 4 + 1] = (uint8_t)(p >> 8);
+                out[i * 4 + 2] = (uint8_t)(p >> 16);
+                out[i * 4 + 3] = (uint8_t)(p >> 24);
             }
         }
     }
