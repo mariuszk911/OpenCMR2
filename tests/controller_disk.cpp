@@ -71,11 +71,11 @@ static void FillRecord(unsigned char *file, int record)
     PutLE32(p + offsetof(ControllerData, textureForce), 0x11000000u + (unsigned)record);
     PutLE32(p + offsetof(ControllerData, effectsForce), 0x22000000u + (unsigned)record);
     PutLE32(p + offsetof(ControllerData, hasAxes), 0x33110000u + (unsigned)record);
-    PutLE32(p + offsetof(ControllerData, field_0x124), 0x44220000u + (unsigned)record);
+    PutLE32(p + offsetof(ControllerData, smoothSteering), 0x44220000u + (unsigned)record);
     PutLE16(p + offsetof(ControllerData, actionMasks), 0x10u + (unsigned)record);
     PutLE16(p + offsetof(ControllerData, field_0x13c), 0x20u + (unsigned)record);
     for (i = 0; i < 9; i++)
-        p[offsetof(ControllerData, field_0x13e) + i] = (unsigned char)(0x40 + record * 9 + i);
+        p[offsetof(ControllerData, keys) + i] = (unsigned char)(0x40 + record * 9 + i);
     p[offsetof(ControllerData, name)] = 'K';
     p[offsetof(ControllerData, index)] = (unsigned char)record;
     PutLE32(p + offsetof(ControllerData, axisBindings) +
@@ -103,11 +103,11 @@ static int CheckRecords(const ControllerData *records)
         CHECK(records[i].textureForce == 0x11000000u + (unsigned)i);
         CHECK(records[i].effectsForce == 0x22000000u + (unsigned)i);
         CHECK(records[i].hasAxes == 0x33110000u + (unsigned)i);
-        CHECK(records[i].field_0x124 == 0x44220000u + (unsigned)i);
+        CHECK(records[i].smoothSteering == 0x44220000u + (unsigned)i);
         CHECK(records[i].actionMasks[0] == (unsigned short)(0x10u + (unsigned)i));
         CHECK(records[i].field_0x13c == (unsigned short)(0x20u + (unsigned)i));
-        CHECK(records[i].field_0x13e[0] == (unsigned char)(0x40 + i * 9));
-        CHECK(records[i].field_0x13e[8] == (unsigned char)(0x40 + i * 9 + 8));
+        CHECK(records[i].keys[0] == (unsigned char)(0x40 + i * 9));
+        CHECK(records[i].keys[8] == (unsigned char)(0x40 + i * 9 + 8));
         CHECK(records[i].name[0] == 'K');
         CHECK(records[i].index == (unsigned char)i);
         CHECK(records[i].axisBindings[3].present == 1);

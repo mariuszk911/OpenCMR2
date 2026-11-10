@@ -146,6 +146,31 @@ foreach(controller_variant controller_disk controller_disk_be)
 endforeach()
 target_compile_definitions(controller_disk_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
+# Archive members decoded in one place (CGenericFileLoader::FindFile): .cod,
+# .tsc, .csp, .bsp and .hor come back as native copies, other names untouched,
+# malformed members as missing. The forced variant proves the swap path.
+foreach(member_decode_variant member_decode member_decode_be)
+    add_executable(${member_decode_variant}_test member_decode.cpp
+        font_pcf_buffer_stub.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/member_decode.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/cod_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/stage_camera_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/start_table_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/stage_light_transform_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/light_preset_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/disk.cpp)
+    target_include_directories(${member_decode_variant}_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/game
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/port/compat)
+    target_compile_options(${member_decode_variant}_test PRIVATE
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h"
+        "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/msvcrt.h"
+        -fms-extensions)
+    add_test(NAME ${member_decode_variant} COMMAND ${member_decode_variant}_test)
+endforeach()
+target_compile_definitions(member_decode_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
+
 # .cin car-info sections: little-endian directory and section scalars. The
 # forced variant proves the decoder branch on the little-endian host.
 foreach(car_info_variant car_info_disk car_info_disk_be)
