@@ -23,6 +23,13 @@ extern "C" {
  * decoder rejects the member, as if it were missing. */
 void *MemberDecode_Find(const char *name, void *data, DWORD size);
 
+/* Standalone files (CFileBuffer::GetGenericFileBuffer): the same idea, but the
+ * game owns the buffer, so the file is decoded in place. Returns 1 for a file
+ * without a decoder or one decoded, 0 when the decoder rejects it (the caller
+ * frees the buffer and reports the file as missing). name may be a full path in
+ * any case. */
+int FileDecode_InPlace(const char *name, void *data, DWORD size);
+
 #ifdef __cplusplus
 }
 #endif

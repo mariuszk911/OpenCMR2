@@ -2,6 +2,7 @@
 #include "port/save_slot.h"
 #include "port/sys.h"
 #include "port/disk.h"
+#include "port/member_decode.h"
 #include "ChampionshipDriver.h"
 #include "FileBuffer.h"
 #include "GenericFileLoader.h"
@@ -128,6 +129,11 @@ void *CFileBuffer::GetGenericFileBuffer(char *fileName, BOOL isLocalFile)
         // PORT: AMIGA: register only a buffer that is actually returned.
         if (lpBuffer != NULL)
             Disk_RegisterBuffer(lpBuffer, fileSize);
+        // PORT: AMIGA: files with little-endian records are decoded in place.
+        if (!FileDecode_InPlace(_fileName, lpBuffer, fileSize)) {
+            FreeGenericFileBuffer(lpBuffer);
+            return NULL;
+        }
     }
 
     return lpBuffer;

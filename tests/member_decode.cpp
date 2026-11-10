@@ -27,6 +27,24 @@ static void PutLE32(unsigned char *p, unsigned int value)
 #endif
 }
 
+static void PutLE16(unsigned char *p, unsigned int value)
+{
+#if defined(OPENCMR2_TEST_FORCE_BIG_ENDIAN) && defined(OPENCMR2_LITTLE_ENDIAN)
+    p[0] = (unsigned char)((value >> 8) & 0xff);
+    p[1] = (unsigned char)(value & 0xff);
+#else
+    p[0] = (unsigned char)(value & 0xff);
+    p[1] = (unsigned char)((value >> 8) & 0xff);
+#endif
+}
+
+static unsigned short GetHost16(const unsigned char *p)
+{
+    unsigned short value;
+    memcpy(&value, p, sizeof(value));
+    return value;
+}
+
 static unsigned int GetHost32(const unsigned char *p)
 {
     unsigned int value;
@@ -126,6 +144,21 @@ int main()
 
     // The input is never modified in place: it still holds the file bytes.
     CHECK(member[0x1c] == 0x5A);
+
+    // Standalone files: decoded in place; a name without a decoder is accepted as is.
+    {
+        unsigned char file[64];
+
+        memset(file, 0xEE, sizeof(file));
+        CHECK(FileDecode_InPlace("save.rcs", file, sizeof(file)) == 1);
+        CHECK(file[0] == 0xEE);
+        CHECK(FileDecode_InPlace(NULL, file, sizeof(file)) == 1);
+        CHECK(FileDecode_InPlace("a.cin", NULL, 0) == 1);
+        // Garbage with a .cin name is rejected, in any case, and so is an empty file.
+        CHECK(FileDecode_InPlace("Cars\\206.cin", file, sizeof(file)) == 0);
+        CHECK(FileDecode_InPlace("CARS/206.CIN", file, sizeof(file)) == 0);
+        CHECK(FileDecode_InPlace("206.cin", file, 0) == 0);
+    }
 
     // The native copies belong to the archive: releasing it frees them.
     Disk_ReleaseBuffer(archive);

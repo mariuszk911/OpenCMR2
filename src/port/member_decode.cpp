@@ -4,6 +4,7 @@
 #include "port/member_decode.h"
 
 #include "FileBuffer.h"
+#include "port/car_info_disk.h"
 #include "port/cod_disk.h"
 #include "port/disk.h"
 #include "port/light_preset_disk.h"
@@ -62,8 +63,34 @@ bool HasExtension(const char *name, const char *extension)
 {
     size_t length = strlen(name);
     size_t extensionLength = strlen(extension);
-    return length >= extensionLength && strcmp(name + length - extensionLength, extension) == 0;
+    size_t i;
+
+    if (length < extensionLength)
+        return false;
+    for (i = 0; i < extensionLength; i++) {
+        char c = name[length - extensionLength + i];
+        if (c >= 'A' && c <= 'Z')
+            c = (char)(c - 'A' + 'a');
+        if (c != extension[i])
+            return false;
+    }
+    return true;
 }
+
+// Standalone files are decoded where they lie.
+typedef bool (*InPlaceFn)(void *data, size_t size);
+
+bool DecodeCarInfoInPlace(void *data, size_t size)
+{
+    return CarInfoDisk_Decode(data, size, data, size) != 0;
+}
+
+const struct {
+    const char *extension;
+    InPlaceFn decode;
+} kFiles[] = {
+    { ".cin", DecodeCarInfoInPlace },   // car info sections
+};
 
 } // namespace
 
@@ -88,4 +115,20 @@ extern "C" void *MemberDecode_Find(const char *name, void *data, DWORD size)
         return native;
     }
     return data;
+}
+
+extern "C" int FileDecode_InPlace(const char *name, void *data, DWORD size)
+{
+    if (name == NULL || data == NULL)
+        return 1;
+    for (const auto &file : kFiles) {
+        if (!HasExtension(name, file.extension))
+            continue;
+        if (size == 0 || !file.decode(data, size)) {
+            Sys_Log("file %s: rejected (%u bytes)", name, (unsigned)size);
+            return 0;
+        }
+        return 1;
+    }
+    return 1;
 }
