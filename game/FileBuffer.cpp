@@ -129,11 +129,13 @@ void *CFileBuffer::GetGenericFileBuffer(char *fileName, BOOL isLocalFile)
         // PORT: AMIGA: register only a buffer that is actually returned.
         if (lpBuffer != NULL)
             Disk_RegisterBuffer(lpBuffer, fileSize);
-        // PORT: AMIGA: files with little-endian records are decoded in place.
-        if (!FileDecode_InPlace(_fileName, lpBuffer, fileSize)) {
-            FreeGenericFileBuffer(lpBuffer);
-            return NULL;
-        }
+    }
+
+    // PORT: AMIGA: files with little-endian records are decoded in place. A .cin is
+    // a CMPR file, read by the branch above, so this covers both branches.
+    if (lpBuffer != NULL && !FileDecode_InPlace(_fileName, lpBuffer, CGenericFileLoader::m_fileSize)) {
+        FreeGenericFileBuffer(lpBuffer);
+        return NULL;
     }
 
     return lpBuffer;
