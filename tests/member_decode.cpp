@@ -145,6 +145,28 @@ int main()
     // The input is never modified in place: it still holds the file bytes.
     CHECK(member[0x1c] == 0x5A);
 
+    // .pcf: header, 256-entry character map, one glyph record, no kerning.
+    {
+        const size_t pcfSize = 0x18 + 512 + 0x10;
+        memset(member, 0, pcfSize);
+        PutLE32(member + 4, 1);                                          // glyph count
+        PutLE32(member + 8, 12);                                         // line height
+        for (i = 0; i < 256; i++)
+            PutLE16(member + 0x18 + i * 2, 0xffffu);
+        PutLE16(member + 0x18 + 'A' * 2, 0);
+        PutLE16(member + 0x18 + 512, 0x0102u);                           // glyph x
+        PutLE16(member + 0x18 + 512 + 4, 7);                             // glyph width
+        native = (unsigned char *)MemberDecode_Find("fonts.pcf", member, (DWORD)pcfSize);
+        CHECK(native != NULL && native != member);
+        CHECK(GetHost32(native + 4) == 1u && GetHost32(native + 8) == 12u);
+        CHECK(GetHost16(native + 0x18 + 'A' * 2) == 0);
+        CHECK(GetHost16(native + 0x18 + 'B' * 2) == (unsigned short)-1);
+        CHECK(GetHost16(native + 0x18 + 512) == 0x0102u);
+        CHECK(GetHost16(native + 0x18 + 512 + 4) == 7u);
+        PutLE32(member + 4, 0);                                          // no glyphs
+        CHECK(MemberDecode_Find("fonts.pcf", member, (DWORD)pcfSize) == NULL);
+    }
+
     // Standalone files: decoded in place; a name without a decoder is accepted as is.
     {
         unsigned char file[64];

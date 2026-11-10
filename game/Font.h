@@ -5,7 +5,8 @@
 #include "Texture.h"
 
 // Bitmap font (.pcf data + .tga texture). The .pcf file is a header, a
-// 256-entry character map and the glyph table; port/font_pcf.cpp builds native copies.
+// 256-entry character map and the glyph table; kerning pairs are relocated
+// in place at load time.
 
 struct FontKernPair {
     BYTE ch;                // 0x0  following character
@@ -14,7 +15,9 @@ struct FontKernPair {
 };
 
 // ON-DISK: the .pcf glyph record, 0x10 bytes. pKern holds a 32-bit offset
-// from the start of the file; the port parser builds native glyphs instead.
+// from the start of the file until Font_Setup relocates it in place, so the
+// record holds a pointer only on Win32; a 64-bit build must build native
+// glyphs from the file records instead.
 struct FontGlyph {
     BYTE field_0x0[4];
     short width;            // 0x4
@@ -22,7 +25,7 @@ struct FontGlyph {
     BYTE field_0x8;
     BYTE kernCount;         // 0x9
     BYTE field_0xa[2];
-    FontKernPair *pKern;    // 0xc  file offset on disk, native pointer here
+    FontKernPair *pKern;    // 0xc  file offset until Font_Setup relocates it
 };
 
 // PORT: a glyph as the .pcf file stores it, 0x10 bytes on every target: the
@@ -75,8 +78,7 @@ extern int g_fontBlendMode;
 int Font_InitTable(unsigned int count);
 BYTE Font_ReleaseAll(void);
 void Font_Release(BYTE index);
-// PORT: AMIGA: dataSize is the readable extent of the .pcf data (0 = unknown).
-void Font_Setup(void *pData, Texture *pTexture, unsigned int index, char bInArchive, DWORD dataSize);
+void Font_Setup(void *pData, Texture *pTexture, unsigned int index, char bInArchive);
 void Font_Load(char *name, GenericFile *pFile, unsigned int index);
 void Font_Reload(char *name, GenericFile *pFile, unsigned int index);
 void Font_Select(BYTE index, int *pColour);

@@ -7,6 +7,7 @@
 #include "port/car_info_disk.h"
 #include "port/cod_disk.h"
 #include "port/disk.h"
+#include "port/font_pcf.h"
 #include "port/light_preset_disk.h"
 #include "port/stage_camera_disk.h"
 #include "port/stage_light_transform_disk.h"
@@ -46,6 +47,11 @@ bool DecodeLightPreset(void *native, size_t size, const void *file)
     return LightPresetDisk_Decode(native, size, file, size) != 0;
 }
 
+bool DecodeFont(void *native, size_t size, const void *file)
+{
+    return FontPcf_Decode(native, size, file, size) != 0;
+}
+
 struct Format {
     const char *extension;
     DecodeFn decode;
@@ -57,6 +63,7 @@ const Format kFormats[] = {
     { ".csp", DecodeStartTable },   // car start positions and angles
     { ".bsp", DecodeStageLightTransform }, // stage light placement
     { ".hor", DecodeLightPreset },  // weather lighting presets
+    { ".pcf", DecodeFont },         // bitmap font tables
 };
 
 bool HasExtension(const char *name, const char *extension)

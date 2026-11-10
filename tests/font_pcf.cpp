@@ -1,10 +1,9 @@
-// Tests for the fork-owned .pcf parser (src/port/font_pcf.cpp). The fixture is
+// Tests for the .pcf member decoder (src/port/font_pcf.cpp). The fixture is
 // assembled through WriteLE*, so it can also be compiled together with the
-// parser under OPENCMR2_TEST_FORCE_BIG_ENDIAN to exercise the swap path.
+// decoder under OPENCMR2_TEST_FORCE_BIG_ENDIAN to exercise the swap path.
 #include "port/types.h"
 
 #include "Font.h"
-#include "GenericFileLoader.h"
 #include "port/endian.h"
 #include "port/font_pcf.h"
 
@@ -103,110 +102,128 @@ std::vector<unsigned char> MakePcf()
     return bytes;
 }
 
-void CheckTables(FontSlot &slot)
+using Bytes = std::vector<unsigned char>;
+
+short Host16(const Bytes &bytes, unsigned int offset)
 {
-    Check(slot.pHeader != NULL, "header bound");
-    Check(slot.pGlyphs != NULL, "glyphs bound");
-    Check(slot.pCharMap != NULL, "char map bound");
-    Check(slot.pHeader->glyphCount == kGlyphCount, "glyph count");
-    Check(slot.pHeader->lineHeight == 12 && slot.pHeader->spaceWidth == 4 &&
-          slot.pHeader->charSpacing == 1 && slot.pHeader->lineGap == 2, "header fields");
-    Check(slot.pCharMap['A'] == 0 && slot.pCharMap['B'] == 1 && slot.pCharMap['C'] == 2,
-          "valid char map entries");
-    Check(slot.pCharMap['Y'] == -1 && slot.pCharMap['Z'] == -1, "invalid char map entries");
-    Check(slot.pCharMap[' '] == -1, "missing char");
-    Check(slot.pGlyphs[0].width == 5 && slot.pGlyphs[0].height == 6, "glyph extent");
-    Check(((short *)slot.pGlyphs[0].field_0x0)[0] == 1 &&
-          ((short *)slot.pGlyphs[0].field_0x0)[1] == 2, "glyph origin");
-    Check(slot.pGlyphs[0].kernCount == 2 && slot.pGlyphs[0].pKern != NULL, "kern count");
-    Check(slot.pGlyphs[0].pKern[0].ch == 'B' && slot.pGlyphs[0].pKern[0].offset == -3, "kern 0");
-    Check(slot.pGlyphs[0].pKern[1].ch == 'C' && slot.pGlyphs[0].pKern[1].offset == 4, "kern 1");
-    Check(slot.pGlyphs[1].kernCount == 0 && slot.pGlyphs[1].pKern == NULL, "empty kern table");
-    Check(slot.pGlyphs[2].pKern[0].ch == 'A' && slot.pGlyphs[2].pKern[0].offset == 1000, "kern 2");
+    short value;
+    std::memcpy(&value, &bytes[offset], sizeof(value));
+    return value;
 }
 
-void CheckOutlineCells(const FontSlot &slot)
+int Host32(const Bytes &bytes, unsigned int offset)
 {
-    OutlineFontGlyph cells[256];
-    int count = FontPcf_OutlineCells(&slot, cells);
-
-    Check(count == 3, "outline cell count");
-    Check(cells[0].code == 'A' && cells[0].x == 1 && cells[0].y == 2 &&
-          cells[0].width == 5 && cells[0].height == 6, "outline cell A");
-    Check(cells[1].code == 'B' && cells[1].x == 10 && cells[1].y == 11 &&
-          cells[1].width == 7 && cells[1].height == 8, "outline cell B");
-    Check(cells[2].code == 'C' && cells[2].x == 20 && cells[2].y == 21 &&
-          cells[2].width == 9 && cells[2].height == 10, "outline cell C");
+    int value;
+    std::memcpy(&value, &bytes[offset], sizeof(value));
+    return value;
 }
 
-void ExpectRejected(const std::vector<unsigned char> &bytes, unsigned int index,
-                    DWORD dataSize, const char *what)
+Bytes Decode(const Bytes &file, bool *ok)
 {
-    FontSlot slot;
-    std::memset(&slot, 0, sizeof(slot));
-    Check(FontPcf_Setup(&slot, index, bytes.data(), dataSize) == 0, what);
-    Check(slot.pGlyphs == NULL, "rejected data leaves no glyph table");
-    Check(slot.pHeader != NULL && slot.pHeader->glyphCount == 0, "rejected data leaves idle tables");
+    Bytes native(file.size() + 1);
+    *ok = FontPcf_Decode(native.data(), native.size(), file.data(), file.size()) == 1;
+    return native;
+}
+
+void ExpectRejected(const Bytes &file, const char *what)
+{
+    bool ok;
+    Decode(file, &ok);
+    Check(!ok, what);
+}
+
+void CheckNative(const Bytes &n)
+{
+    // The header as upstream's Font_Setup reads it.
+    Check(Host32(n, 4) == (int)kGlyphCount, "glyph count");
+    Check(Host32(n, 8) == 12 && Host32(n, 12) == 4 && Host32(n, 16) == 1 && Host32(n, 20) == 2,
+          "header fields");
+    Check(Host16(n, kMapOffset + 'A' * 2) == 0 && Host16(n, kMapOffset + 'B' * 2) == 1 &&
+          Host16(n, kMapOffset + 'C' * 2) == 2, "valid char map entries");
+    Check(Host16(n, kMapOffset + 'Y' * 2) == -1 && Host16(n, kMapOffset + 'Z' * 2) == -1,
+          "invalid char map entries");
+    Check(Host16(n, kMapOffset + ' ' * 2) == -1, "missing char");
+    // Glyph 0: origin, extent, the two bytes either side of kernCount, kern offset.
+    Check(Host16(n, kRecordsOffset + 0) == 1 && Host16(n, kRecordsOffset + 2) == 2, "glyph origin");
+    Check(Host16(n, kRecordsOffset + 4) == 5 && Host16(n, kRecordsOffset + 6) == 6, "glyph extent");
+    Check(n[kRecordsOffset + 8] == 7 && n[kRecordsOffset + 9] == 2 &&
+          n[kRecordsOffset + 10] == 8 && n[kRecordsOffset + 11] == 9, "glyph bytes");
+    Check((unsigned int)Host32(n, kRecordsOffset + 12) == kKernOffset, "kern offset");
+    // Kerning pairs.
+    Check(n[kKernOffset] == 'B' && Host16(n, kKernOffset + 2) == -3, "kern 0");
+    Check(n[kKernOffset + 4] == 'C' && Host16(n, kKernOffset + 4 + 2) == 4, "kern 1");
+    Check(n[kKernOffset + 8] == 'A' && Host16(n, kKernOffset + 8 + 2) == 1000, "kern 2");
+    Check(Host16(n, kRecordsOffset + 2 * kRecordSize + 4) == 9, "glyph 2 width");
 }
 
 } // namespace
 
 int main()
 {
-    std::vector<unsigned char> data = MakePcf();
-    FontSlot slot;
+    bool ok;
+    Bytes data = MakePcf();
+    Bytes native = Decode(data, &ok);
 
-    std::memset(&slot, 0, sizeof(slot));
-    Check(FontPcf_Setup(&slot, 0, data.data(), (DWORD)data.size()) == 1, "valid pcf rejected");
-    CheckTables(slot);
-    CheckOutlineCells(slot);
+    Check(ok, "valid pcf rejected");
+    CheckNative(native);
+    Check(data == MakePcf(), "the member is not modified");
 
-    FontPcf_Release(&slot, 0);
-    Check(slot.pGlyphs == NULL, "release clears the glyph table");
-    Check(slot.pHeader != NULL && slot.pHeader->glyphCount == 0, "release leaves idle tables");
-    Check(FontPcf_Setup(&slot, 0, data.data(), 0) == 1, "unknown extent rejected");
-    CheckTables(slot);
-
-    {
-        std::vector<unsigned char> changed = MakePcf();
-        Put32(changed, 8, 99);
-        Check(FontPcf_Setup(&slot, 0, changed.data(), (DWORD)changed.size()) == 1, "reload rejected");
-        Check(slot.pHeader->lineHeight == 99, "reload keeps the new header");
+    {   // Glyphs may share a kerning run: it is converted once.
+        Bytes bytes = MakePcf();
+        PutGlyph(bytes, 2, 20, 21, 9, 10, 2, kKernOffset);
+        native = Decode(bytes, &ok);
+        Check(ok, "shared kern run rejected");
+        Check(Host16(native, kKernOffset + 2) == -3 && Host16(native, kKernOffset + 4 + 2) == 4,
+              "shared kern run converted once");
     }
-    FontPcf_Release(&slot, 0);
 
     {
-        std::vector<unsigned char> bytes = MakePcf();
-        ExpectRejected(bytes, 1, (DWORD)(sizeof(FontHeader)), "short header");
+        Bytes bytes = MakePcf();
         Put32(bytes, 4, 0);
-        ExpectRejected(bytes, 1, (DWORD)bytes.size(), "zero glyph count");
+        ExpectRejected(bytes, "zero glyph count");
         Put32(bytes, 4, 0x10001);
-        ExpectRejected(bytes, 1, (DWORD)bytes.size(), "glyph count cap");
+        ExpectRejected(bytes, "glyph count cap");
         bytes = MakePcf();
-        ExpectRejected(bytes, 1, (DWORD)(kKernOffset - 1), "truncated glyph records");
+        bytes.resize(kKernOffset - 1);
+        ExpectRejected(bytes, "truncated glyph records");
         bytes = MakePcf();
-        bytes[kRecordsOffset + 9] = 65;
-        ExpectRejected(bytes, 1, (DWORD)bytes.size(), "kern count cap");
-        bytes = MakePcf();
-        PutGlyph(bytes, 0, 1, 2, 5, 6, 2, kRecordsOffset);
-        ExpectRejected(bytes, 1, (DWORD)bytes.size(), "kern offset inside the records");
-        bytes = MakePcf();
-        PutGlyph(bytes, 0, 1, 2, 5, 6, 2, (unsigned int)bytes.size());
-        ExpectRejected(bytes, 1, (DWORD)bytes.size(), "kern offset past the buffer");
+        bytes.resize(sizeof(FontHeader));
+        ExpectRejected(bytes, "short header");
     }
 
-    {
-        std::vector<unsigned char> bytes = MakePcf();
-        GenericFile file;
-        file.buffer = bytes.data();
-        file.fileSize = (unsigned int)bytes.size();
-        file.didFileLoad = TRUE;
-        Check(FontPcf_ArchiveExtent(&file, bytes.data(), 1) == (DWORD)bytes.size(), "archive extent");
-        Check(FontPcf_ArchiveExtent(&file, bytes.data() + 10, 1) == (DWORD)(bytes.size() - 10),
-              "archive extent from an offset");
-        Check(FontPcf_ArchiveExtent(&file, bytes.data(), 0) == 0, "extent outside an archive");
-        Check(FontPcf_ArchiveExtent(NULL, bytes.data(), 1) == 0, "extent with no file");
+    {   // A glyph with an invalid kerning run keeps its data and loses only its kerning.
+        const char *what[] = { "kern count over the cap", "kern offset inside the records",
+                               "kern offset past the buffer", "unaligned kern offset",
+                               "junk like the unused last record of hel_20pt.pcf" };
+        for (int variant = 0; variant < 5; variant++) {
+            Bytes bytes = MakePcf();
+            if (variant == 0)
+                PutGlyph(bytes, 0, 1, 2, 5, 6, 65, kKernOffset);
+            else if (variant == 1)
+                PutGlyph(bytes, 0, 1, 2, 5, 6, 2, kRecordsOffset);
+            else if (variant == 2)
+                PutGlyph(bytes, 0, 1, 2, 5, 6, 2, (unsigned int)bytes.size());
+            else if (variant == 3)
+                PutGlyph(bytes, 0, 1, 2, 5, 6, 2, kKernOffset + 2);
+            else
+                PutGlyph(bytes, 0, 1, 2, 5, 6, 205, 0xCDAB1234u);
+            native = Decode(bytes, &ok);
+            Check(ok, what[variant]);
+            Check(native[kRecordsOffset + 9] == 0 && Host32(native, kRecordsOffset + 12) == 0, what[variant]);
+            Check(Host16(native, kRecordsOffset + 4) == 5 && Host16(native, kRecordsOffset + 6) == 6,
+                  "glyph extent survives a bad kerning run");
+            // The other glyphs keep their kerning.
+            Check(native[kRecordsOffset + 2 * kRecordSize + 9] == 1 &&
+                  (unsigned int)Host32(native, kRecordsOffset + 2 * kRecordSize + 12) == kKernOffset + 2 * 4,
+                  "other glyphs keep their kerning");
+        }
+        Bytes bytes = MakePcf();
+        bytes[kRecordsOffset + 9] = 0;
+        Check(Decode(bytes, &ok).size() != 0 && ok, "no kerning at all");
     }
+
+    Check(FontPcf_Decode(NULL, 8, data.data(), data.size()) == 0, "NULL destination");
+    Check(FontPcf_Decode(native.data(), 8, data.data(), data.size()) == 0, "destination too small");
 
     std::puts("font_pcf: all checks passed");
     return 0;

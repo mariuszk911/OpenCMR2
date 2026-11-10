@@ -158,6 +158,7 @@ foreach(member_decode_variant member_decode member_decode_be)
         ${PROJECT_SOURCE_DIR}/src/port/start_table_disk.cpp
         ${PROJECT_SOURCE_DIR}/src/port/stage_light_transform_disk.cpp
         ${PROJECT_SOURCE_DIR}/src/port/light_preset_disk.cpp
+        ${PROJECT_SOURCE_DIR}/src/port/font_pcf.cpp
         ${PROJECT_SOURCE_DIR}/src/port/car_info_disk.cpp
         ${PROJECT_SOURCE_DIR}/src/port/disk.cpp)
     target_include_directories(${member_decode_variant}_test PRIVATE
