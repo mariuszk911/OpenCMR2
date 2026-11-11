@@ -23,7 +23,9 @@
 #include <devices/keymap.h>
 #include <exec/interrupts.h>
 #include <dos/dos.h>
+#include <dos/dosextens.h>
 #include <intuition/intuition.h>
+#include <intuition/intuitionbase.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/intuition.h>
@@ -84,6 +86,14 @@ struct Window *s_ownedInputWindow;
 struct MsgPort *s_inputPort;
 struct Screen *s_inputScreen;
 unsigned char s_keyState[256];
+// PORT: AMIGA: blank sprite for the fullscreen input window (chip memory).
+UWORD *s_blankPointer;
+const ULONG kBlankPointerSize = 6 * sizeof(UWORD);
+// Set while s_ownedInputWindow is the 1x1 input window on a fullscreen
+// renderer's screen (not the windowed game window on Workbench).
+int s_fullscreenInput;
+// Whether that screen was the front one at the last poll.
+int s_inputScreenInFront;
 
 /* input.device adapter. The handler is the authoritative key down/up source:
  * a sampled IDCMP state can lose a release or a tap shorter than one frame.
@@ -1367,16 +1377,55 @@ extern "C" void Sys_Sleep(uint32_t ms)
                 (long)s_timerRequest.tr_node.io_Error);
 }
 
+// PORT: AMIGA: DOS requesters ("Please insert volume", read/write errors)
+// open on the screen of the process's pr_WindowPtr, by default Workbench,
+// which the fullscreen game hides: the game then blocks on a requester no one
+// can see. Point them at the game's window while it is open.
+static APTR s_savedRequesterWindow;
+static int s_requestersRedirected;
+
+static void RestoreRequesters(void)
+{
+    if (!s_requestersRedirected)
+        return;
+    ((struct Process *)FindTask(NULL))->pr_WindowPtr = s_savedRequesterWindow;
+    s_requestersRedirected = 0;
+}
+
+static void RedirectRequesters(struct Window *window)
+{
+    struct Process *process = (struct Process *)FindTask(NULL);
+
+    // Only a real Intuition window (event_test passes a fake one), and only
+    // from a process: a plain Exec task has no pr_WindowPtr.
+    if (window == NULL || window->WScreen == NULL || process->pr_Task.tc_Node.ln_Type != NT_PROCESS)
+        return;
+    if (!s_requestersRedirected) {
+        s_savedRequesterWindow = process->pr_WindowPtr;
+        s_requestersRedirected = 1;
+    }
+    process->pr_WindowPtr = window;
+}
+
 // Releases everything AmigaSys_SetWindow owns and detaches our port from a
 // window we did not create. One teardown path for window changes and exit.
 static void CloseInputState(void)
 {
+    // Before any window closes: a requester must never reference a dead window.
+    RestoreRequesters();
+    s_fullscreenInput = 0;
     if (s_ownedInputWindow != NULL) {
         struct Window *window = s_ownedInputWindow;
         s_ownedInputWindow = NULL;
         /* Stop the input handler from touching the window before it dies. */
         s_inputWindow = NULL;
+        if (s_blankPointer != NULL)
+            ClearPointer(window);
         CloseWindow(window);
+    }
+    if (s_blankPointer != NULL) {
+        FreeMem(s_blankPointer, kBlankPointerSize);
+        s_blankPointer = NULL;
     }
     if (s_inputScreen != NULL) {
         UnlockPubScreen(NULL, s_inputScreen);
@@ -1449,6 +1498,7 @@ extern "C" void *AmigaSys_CreateGameWindow(int width, int height, const char *ti
     s_inputWindow = window;
     WindowToFront(window);
     ActivateWindow(window);
+    RedirectRequesters(window);
     Sys_Log("input: game window %lx client %dx%d at %d,%d",
             (unsigned long)window,
             (int)(window->Width - window->BorderLeft - window->BorderRight),
@@ -1475,6 +1525,7 @@ extern "C" void AmigaSys_SetWindow(void *window)
         if (base->WScreen != NULL)
             ModifyIDCMP(base, base->IDCMPFlags | kInputIDCMP);
         s_inputWindow = base;
+        RedirectRequesters(base);
         return;
     }
     // PORT: AMIGA: follow the working reVC input path. MiniGL's fullscreen
@@ -1497,6 +1548,18 @@ extern "C" void AmigaSys_SetWindow(void *window)
             s_inputWindow = s_ownedInputWindow;
             WindowToFront(s_ownedInputWindow);
             ActivateWindow(s_ownedInputWindow);
+            // PORT: AMIGA: the game is keyboard-only; hide the pointer over
+            // the fullscreen picture. The active window's sprite is shown,
+            // and PollEvent keeps this window active on its screen.
+            s_blankPointer = (UWORD *)AllocMem(kBlankPointerSize, MEMF_CHIP | MEMF_CLEAR);
+            if (s_blankPointer != NULL)
+                SetPointer(s_ownedInputWindow, s_blankPointer, 1, 16, 0, 0);
+            else
+                Sys_Log("input: no chip memory for the blank pointer");
+            s_fullscreenInput = 1;
+            s_inputScreenInFront = 1;
+        } else {
+            Sys_Log("input: cannot open the fullscreen input window");
         }
     }
     // Fallback: put a port on MiniGL's window if opening our own failed.
@@ -1510,6 +1573,68 @@ extern "C" void AmigaSys_SetWindow(void *window)
             ActivateWindow(base);
         }
     }
+    RedirectRequesters(s_inputWindow);
+}
+
+// True when our owned fullscreen input window lost the focus to another
+// window on its own screen (MiniGL's backdrop, after a mouse click), not to
+// another screen such as Workbench. Only the owned window is reactivated.
+static int FocusStayedOnInputScreen(void)
+{
+    struct Window *owned = s_ownedInputWindow;
+    struct Window *active;
+    struct Screen *front;
+    ULONG lock;
+
+    if (!s_fullscreenInput || owned == NULL || s_inputWindow != owned || owned->WScreen == NULL)
+        return 0;
+    lock = LockIBase(0);
+    active = IntuitionBase->ActiveWindow;
+    front = IntuitionBase->FirstScreen;
+    UnlockIBase(lock);
+    if (active == owned)
+        return 0;
+    if (active != NULL)
+        return active->WScreen == owned->WScreen;
+    return front == owned->WScreen;
+}
+
+// PORT: AMIGA: Amiga-M (or any screen depth change) moves screens, not the
+// active window. With the game screen behind, the blank pointer of our still
+// active window would hide the pointer on Workbench; with it back in front,
+// nothing reactivates our window, so a focus lost on Workbench was never
+// regained (keys and frames stopped for good). Follow the front screen: show
+// the pointer while the game screen is behind, and hide it and take the focus
+// back when the game screen returns to the front.
+static void TrackInputScreen(void)
+{
+    struct Window *owned = s_ownedInputWindow;
+    struct Screen *front;
+    struct Window *active;
+    ULONG lock;
+    int inFront;
+
+    if (!s_fullscreenInput || owned == NULL || owned->WScreen == NULL)
+        return;
+    lock = LockIBase(0);
+    front = IntuitionBase->FirstScreen;
+    active = IntuitionBase->ActiveWindow;
+    UnlockIBase(lock);
+    inFront = front == owned->WScreen;
+    if (inFront == s_inputScreenInFront)
+        return;
+    s_inputScreenInFront = inFront;
+    if (!inFront) {
+        Sys_Log("input: game screen behind; pointer shown");
+        if (s_blankPointer != NULL)
+            ClearPointer(owned);
+        return;
+    }
+    Sys_Log("input: game screen in front%s", active != owned ? "; reactivating" : "");
+    if (s_blankPointer != NULL)
+        SetPointer(owned, s_blankPointer, 1, 16, 0, 0);
+    if (active != owned)
+        ActivateWindow(owned);
 }
 
 // Consumes every queued IDCMP message, keeping the polled input state current.
@@ -1523,6 +1648,7 @@ static int PollEvent(SysEvent *event, int *consumed)
         *consumed = 0;
     if (event == NULL || s_inputWindow == NULL || s_inputWindow->UserPort == NULL)
         return 0;
+    TrackInputScreen();
     while ((message = (struct IntuiMessage *)GetMsg(s_inputWindow->UserPort)) != NULL) {
         const ULONG messageClass = message->Class;
         int handled = 0;
@@ -1545,6 +1671,13 @@ static int PollEvent(SysEvent *event, int *consumed)
             event->character = 0;
             event->repeat = 0;
             handled = 1;
+        } else if (messageClass == IDCMP_INACTIVEWINDOW && FocusStayedOnInputScreen()) {
+            // PORT: AMIGA: a click on MiniGL's fullscreen backdrop activated
+            // that window, which has no IDCMP port: keys were lost and the
+            // focus-lost event left the game inactive for good (no frames,
+            // no attract mode). Take the focus back and report nothing.
+            Sys_Log("input: focus moved to another window on the game screen; reactivating");
+            ActivateWindow(s_ownedInputWindow);
         } else if (messageClass == IDCMP_INACTIVEWINDOW) {
             Sys_Log("input: inactive window");
             ResetKeyState();
@@ -1597,10 +1730,25 @@ static int PollEvent(SysEvent *event, int *consumed)
     return 0;
 }
 
+// PORT: AMIGA: Ctrl-C in the Shell, the Break command or a task manager's
+// "break" is AmigaOS's polite quit request (the SIGTERM equivalent). Turn it
+// into the window-close quit so the normal shutdown closes the MiniGL screen.
+static int TakeBreak(SysEvent *event)
+{
+    if ((SetSignal(0, SIGBREAKF_CTRL_C) & SIGBREAKF_CTRL_C) == 0)
+        return 0;
+    Sys_Log("input: break signal (Ctrl-C); quitting");
+    memset(event, 0, sizeof(*event));
+    event->type = SYS_EVENT_QUIT;
+    return 1;
+}
+
 extern "C" int Sys_PollEvent(SysEvent *event)
 {
     if (event == NULL)
         return 0;
+    if (TakeBreak(event))
+        return 1;
     if (TakePendingText(event))
         return 1;
     return PollEvent(event, NULL);
@@ -1658,6 +1806,8 @@ extern "C" int Sys_WaitEvent(SysEvent *event)
 {
     if (event == NULL)
         return 0;
+    if (TakeBreak(event))
+        return 1;
     if (TakePendingText(event))
         return 1;
     if (s_inputWindow == NULL || s_inputWindow->UserPort == NULL) {
@@ -1691,6 +1841,7 @@ extern "C" int Sys_CreateWindow(const char *title, int fullscreen)
 extern "C" void Sys_DestroyWindow(void)
 {
     // Do not close a window owned by MiniGL; just stop reading its port.
+    RestoreRequesters();
     s_inputWindow = NULL;
 }
 

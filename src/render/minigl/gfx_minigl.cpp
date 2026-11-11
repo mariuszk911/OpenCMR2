@@ -17,6 +17,8 @@
 #include "render/minigl/gfx_minigl_movie.h"
 #include "port/sys.h"
 #include "platform/amiga/amiga_sys.h"
+#include "platform/amiga/amiga_modes.h"
+#include "port/display_modes.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,6 +70,12 @@ struct GfxTexture {
     int lumValid;
     float lumScale;
     float lumOffset;
+    // PORT: AMIGA: every top-level texture is on this list so a context
+    // rebuild (windowed resolution change, window/fullscreen switch) can drop
+    // the old context's GL names and re-upload from the CPU copy.
+    GfxTexture *liveNext;
+    GfxTexture *livePrev;
+    int live;
 };
 
 struct GfxVertexBuffer {
@@ -285,6 +293,50 @@ int s_tlScreenActive;
 int s_fullscreen;
 // Windowed mode: the application owns this window and MiniGL renders into it.
 void *s_gameWindow;
+GfxTexture *s_liveTextures;
+
+void LinkLiveTexture(GfxTexture *texture)
+{
+    texture->livePrev = NULL;
+    texture->liveNext = s_liveTextures;
+    if (s_liveTextures != NULL)
+        s_liveTextures->livePrev = texture;
+    s_liveTextures = texture;
+    texture->live = 1;
+}
+
+void UnlinkLiveTexture(GfxTexture *texture)
+{
+    if (!texture->live)
+        return;
+    if (texture->livePrev != NULL)
+        texture->livePrev->liveNext = texture->liveNext;
+    else
+        s_liveTextures = texture->liveNext;
+    if (texture->liveNext != NULL)
+        texture->liveNext->livePrev = texture->livePrev;
+    texture->live = 0;
+}
+
+// After the context that owned them was deleted: no GL name is valid any
+// more. Textures with a CPU copy re-upload on their next bind; stream textures
+// get a new name on their next frame.
+void ForgetLiveTextureNames(void)
+{
+    int count = 0;
+    for (GfxTexture *t = s_liveTextures; t != NULL; t = t->liveNext) {
+        t->glId = 0;
+        t->lumGlId = 0;
+        t->lumValid = 0;
+        t->samplerValid = 0;
+        if (t->data != NULL)
+            t->dirty = 1;
+        else
+            t->streamFresh = 1;
+        ++count;
+    }
+    Sys_Log("gfx: %d textures will be uploaded again", count);
+}
 void UploadTexture(GfxTexture *texture);
 unsigned int EnsureBumpLuminanceTexture(GfxTexture *texture, float scale, float offset);
 void ApplyViewport(void);
@@ -852,22 +904,91 @@ extern "C" const char *Gfx_GetRendererName(void)
     return "OpenCMR2 MiniGL";
 }
 
-extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
+namespace {
+
+// The size, transforms and GL state of a display that was just created or
+// resized, then one clear. Returns 0 when the display cannot be locked.
+int StartDisplay(int width, int height)
 {
-    if (width <= 0 || height <= 0)
+    s_width = width;
+    s_height = height;
+    // A windowed request that fell back to MiniGL's screen is fullscreen.
+    s_fullscreen = s_gameWindow == NULL;
+    s_viewport.x = 0;
+    s_viewport.y = 0;
+    s_viewport.width = width;
+    s_viewport.height = height;
+    s_viewport.minZ = 0.0f;
+    s_viewport.maxZ = 1.0f;
+    s_virtualWidth = 0;
+    s_virtualHeight = 0;
+    for (int i = 0; i < 18; ++i) {
+        Identity(&s_transforms[i]);
+        s_transformSet[i] = 1;
+    }
+    memset(&s_material, 0, sizeof(s_material));
+    s_material.diffuse.r = s_material.diffuse.g = s_material.diffuse.b = s_material.diffuse.a = 1.0f;
+    s_material.ambient.r = s_material.ambient.g = s_material.ambient.b = s_material.ambient.a = 1.0f;
+    ResetStageStates();
+    InvalidateGlCache();
+    s_caps.probed = 0;
+    if (!EnsureLocked())
         return 0;
+    ProbeCapabilities();
+    ApplyViewport();
+    glShadeModel(GL_SMOOTH);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    mglUnlockDisplay();
+    s_locked = 0;
+    return 1;
+}
+
+// Deletes the context, its input path and its window; MiniGL stays open.
+// displayOpen = 0 after a failed screen reopen: no GL call is made then (the
+// context's own delete frees its textures).
+void DestroyContext(int displayOpen)
+{
     if (s_context != NULL) {
-        // MiniGL's window/screen is created with the context; changing mode
-        // needs a renderer restart, which is not implemented.
-        if (width != s_width || height != s_height)
-            Sys_Log("gfx: keeping %dx%d (requested %dx%d)", s_width, s_height, width, height);
-        return 1;
+        s_boundTexture = NULL;
+        s_renderTarget = NULL;
+        s_stages[0].texture = NULL;
+        s_stages[1].texture = NULL;
+        if (displayOpen && s_neutralReflectionTex != 0 && EnsureLocked()) {
+            glDeleteTextures(1, &s_neutralReflectionTex);
+            s_neutralReflectionTex = 0;
+        }
+        for (int i = 0; displayOpen && i < s_spareStreamCount; ++i) {
+            if (EnsureLocked())
+                glDeleteTextures(1, &s_spareStreams[i].glId);
+        }
+        if (s_locked) {
+            mglUnlockDisplay();
+            s_locked = 0;
+        }
+        if (s_gameWindow == NULL) {
+            // Fullscreen: our input window is on MiniGL's screen, which goes
+            // away with the context. Close it before deleting.
+            AmigaSys_SetWindow(NULL);
+        }
+        mglDeleteContext();
+        s_context = NULL;
     }
-    if (!MiniGLOpen()) {
-        Sys_Log("gfx: MiniGLOpen failed");
-        return 0;
+    s_neutralReflectionTex = 0;
+    s_spareStreamCount = 0;
+    s_caps.probed = 0;
+    InvalidateGlCache();
+    if (s_gameWindow != NULL) {
+        // The adopted window outlives the context; close it before MiniGLClose
+        // (proto/intuition.h stubs need the library's IntuitionBase).
+        AmigaSys_SetWindow(NULL);
+        s_gameWindow = NULL;
     }
-    s_miniglOpen = 1;
+}
+
+// Creates the context at width x height (MiniGL is open) and its input path.
+int CreateContext(int width, int height, int fullscreen)
+{
     // PORT: AMIGA: MiniGL's immediate-mode vertex buffer defaults to 256
     // entries and glVertex has no bounds check. The renderer submits up to 256
     // vertices per glBegin block, so enlarge the buffer before the context
@@ -908,12 +1029,6 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
         s_context = mglCreateContext(0, 0, width, height);
         if (s_context == NULL) {
             Sys_Log("gfx: mglCreateContext %dx%d failed", width, height);
-            if (s_gameWindow != NULL) {
-                AmigaSys_SetWindow(NULL);
-                s_gameWindow = NULL;
-            }
-            MiniGLClose();
-            s_miniglOpen = 0;
             return 0;
         }
         // Fullscreen: v3dWindow is NULL and inputWindow is MiniGL's borderless
@@ -925,93 +1040,142 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
     } else {
         Sys_Log("gfx: MiniGL %dx%d context ready (window)", width, height);
     }
-    s_width = width;
-    s_height = height;
-    s_fullscreen = fullscreen != 0;
-    s_viewport.x = 0;
-    s_viewport.y = 0;
-    s_viewport.width = width;
-    s_viewport.height = height;
-    s_viewport.minZ = 0.0f;
-    s_viewport.maxZ = 1.0f;
-    s_virtualWidth = 0;
-    s_virtualHeight = 0;
-    for (int i = 0; i < 18; ++i) {
-        Identity(&s_transforms[i]);
-        s_transformSet[i] = 1;
+    if (!StartDisplay(width, height)) {
+        DestroyContext(0);
+        return 0;
     }
-    memset(&s_material, 0, sizeof(s_material));
-    s_material.diffuse.r = s_material.diffuse.g = s_material.diffuse.b = s_material.diffuse.a = 1.0f;
-    s_material.ambient.r = s_material.ambient.g = s_material.ambient.b = s_material.ambient.a = 1.0f;
-    ResetStageStates();
-    InvalidateGlCache();
-    s_caps.probed = 0;
-    if (!EnsureLocked()) {
-        mglDeleteContext();
-        s_context = NULL;
-        if (s_gameWindow != NULL) {
-            AmigaSys_SetWindow(NULL);
-            s_gameWindow = NULL;
-        }
+    return 1;
+}
+
+// PORT: AMIGA: MiniGL reopens its own screen at the new size and keeps the
+// textures and GL state (MGLResizeContext, fullscreen only).
+int ResizeFullscreen(int width, int height)
+{
+    if (s_locked) {
+        mglUnlockDisplay();
+        s_locked = 0;
+    }
+    // Our input window is on that screen, which cannot close under a window.
+    AmigaSys_SetWindow(NULL);
+    if (!mglResizeContext(width, height)) {
+        Sys_Log("gfx: MiniGL could not reopen its screen at %dx%d", width, height);
+        return 0;
+    }
+    AmigaSys_SetWindow(mglGetInputWindowHandle());
+    return StartDisplay(width, height);
+}
+
+const char *ModeKind(int fullscreen)
+{
+    return fullscreen ? "screen" : "window";
+}
+
+// PORT: AMIGA: a new resolution or a switch between window and screen with a
+// context open. A screen-to-screen change resizes in place; anything with a
+// window rebuilds the context (a window context is sized once, by its window)
+// and the textures upload again from their CPU copies. A mode that fails
+// falls back to the previous one.
+int ChangeMode(int width, int height, int fullscreen)
+{
+    const int oldWidth = s_width;
+    const int oldHeight = s_height;
+    const int oldFullscreen = s_fullscreen;
+    // The menus set their virtual screen and viewport again every frame, so
+    // at worst the rest of a switching frame draws unscaled.
+    int displayOpen = 1;
+
+    Sys_Log("gfx: mode %dx%d %s -> %dx%d %s", oldWidth, oldHeight, ModeKind(oldFullscreen), width, height,
+            ModeKind(fullscreen));
+    if (fullscreen && oldFullscreen) {
+        if (ResizeFullscreen(width, height))
+            return 1;
+        displayOpen = 0;
+    }
+    DestroyContext(displayOpen);
+    ForgetLiveTextureNames();
+    if (CreateContext(width, height, fullscreen))
+        return 1;
+    Sys_Log("gfx: %dx%d %s failed; back to %dx%d %s", width, height, ModeKind(fullscreen), oldWidth, oldHeight,
+            ModeKind(oldFullscreen));
+    if (CreateContext(oldWidth, oldHeight, oldFullscreen))
+        return 1;
+    Sys_Log("gfx: the previous mode failed too; no display");
+    return 0;
+}
+
+// The game's resolution list: the 32-bit RTG modes MiniGL can open a screen
+// in, or for a window the sizes that fit on the Workbench screen.
+DisplayModeSize s_modeList[DISPLAY_MODES_COLLECT_MAX];
+int s_modeCount = -1;
+
+void BuildModeList(void)
+{
+    static const int classic[3][2] = { { 640, 480 }, { 800, 600 }, { 1024, 768 } };
+    const int windowed = Sys_GetOption("video.fullscreen", 1) == 0;
+    int n = AmigaModes_ListBGRA32(s_modeList, DISPLAY_MODES_COLLECT_MAX);
+
+    if (windowed) {
+        int desktopWidth = 0;
+        int desktopHeight = 0;
+        for (int i = 0; i < 3; ++i)
+            n = DisplayModes_Add(s_modeList, n, DISPLAY_MODES_COLLECT_MAX, classic[i][0], classic[i][1]);
+        // Room for the window's borders and title bar.
+        Sys_GetDesktopSize(&desktopWidth, &desktopHeight);
+        n = DisplayModes_Fit(s_modeList, n, desktopWidth - 8, desktopHeight - 24);
+    }
+    if (n == 0) {
+        for (int i = 0; i < 3; ++i)
+            n = DisplayModes_Add(s_modeList, n, DISPLAY_MODES_COLLECT_MAX, classic[i][0], classic[i][1]);
+        if (windowed)
+            n = 1;   // the default; the window is shrunk to fit
+    }
+    s_modeCount = DisplayModes_Trim(s_modeList, n, DISPLAY_MODES_GAME_MAX);
+    for (int i = 0; i < s_modeCount; ++i)
+        Sys_Log("gfx: %s mode %d: %dx%d", ModeKind(!windowed), i, s_modeList[i].width, s_modeList[i].height);
+}
+
+} // namespace
+
+extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
+{
+    if (width <= 0 || height <= 0)
+        return 0;
+    fullscreen = fullscreen != 0;
+    if (s_context != NULL) {
+        if (width == s_width && height == s_height && fullscreen == s_fullscreen)
+            return 1;
+        return ChangeMode(width, height, fullscreen);
+    }
+    if (!MiniGLOpen()) {
+        Sys_Log("gfx: MiniGLOpen failed");
+        return 0;
+    }
+    s_miniglOpen = 1;
+    if (!CreateContext(width, height, fullscreen)) {
         MiniGLClose();
         s_miniglOpen = 0;
         return 0;
     }
-    ProbeCapabilities();
-    ApplyViewport();
-    glShadeModel(GL_SMOOTH);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    mglUnlockDisplay();
-    s_locked = 0;
     return 1;
 }
 
 extern "C" void Gfx_SetFullscreen(int fullscreen)
 {
-    // MiniGL owns the screen mode; the setting is kept for the menu and a
-    // future renderer restart.
-    s_fullscreen = fullscreen != 0;
+    // PORT: AMIGA: the options menu's switch (saved as video.fullscreen by
+    // the caller) applies now, at the current resolution.
+    fullscreen = fullscreen != 0;
+    if (s_context == NULL) {
+        s_fullscreen = fullscreen;
+        return;
+    }
+    if (fullscreen != s_fullscreen)
+        ChangeMode(s_width, s_height, fullscreen);
 }
 
 extern "C" void Gfx_Shutdown(void)
 {
     FlushStageDiagnostics("shutdown");
-    if (s_context != NULL) {
-        s_boundTexture = NULL;
-        s_renderTarget = NULL;
-        s_stages[0].texture = NULL;
-        s_stages[1].texture = NULL;
-        if (s_neutralReflectionTex != 0 && EnsureLocked()) {
-            glDeleteTextures(1, &s_neutralReflectionTex);
-            s_neutralReflectionTex = 0;
-        }
-        for (int i = 0; i < s_spareStreamCount; ++i) {
-            if (EnsureLocked())
-                glDeleteTextures(1, &s_spareStreams[i].glId);
-        }
-        if (s_locked) {
-            mglUnlockDisplay();
-            s_locked = 0;
-        }
-        if (s_gameWindow == NULL) {
-            // Fullscreen: our port lives on MiniGL's input backdrop, which
-            // goes away with the context. Detach it before deleting.
-            AmigaSys_SetWindow(NULL);
-        }
-        mglDeleteContext();
-        s_context = NULL;
-    }
-    s_neutralReflectionTex = 0;
-    s_spareStreamCount = 0;
-    s_caps.probed = 0;
-    InvalidateGlCache();
-    if (s_gameWindow != NULL) {
-        // The adopted window outlives the context; close it before MiniGLClose
-        // (proto/intuition.h stubs need the library's IntuitionBase).
-        AmigaSys_SetWindow(NULL);
-        s_gameWindow = NULL;
-    }
+    DestroyContext(1);
     if (s_miniglOpen) {
         MiniGLClose();
         s_miniglOpen = 0;
@@ -1020,18 +1184,20 @@ extern "C" void Gfx_Shutdown(void)
 
 extern "C" int Gfx_GetDisplayModeCount(void)
 {
-    return 3;
+    BuildModeList();
+    return s_modeCount;
 }
 
 extern "C" void Gfx_GetDisplayMode(int index, int *width, int *height)
 {
-    static const int modes[3][2] = { { 640, 480 }, { 800, 600 }, { 1024, 768 } };
     if (width == NULL || height == NULL)
         return;
-    if (index < 0 || index >= 3)
+    if (s_modeCount < 0)
+        BuildModeList();
+    if (index < 0 || index >= s_modeCount)
         index = 0;
-    *width = modes[index][0];
-    *height = modes[index][1];
+    *width = s_modeList[index].width;
+    *height = s_modeList[index].height;
 }
 
 extern "C" void Gfx_GetDefaultDisplayMode(int *width, int *height)
@@ -3741,6 +3907,7 @@ extern "C" GfxTexture *Gfx_CreateTexture(int width, int height, int format, int 
     texture->dataSize = bytes;
     texture->pitch = pitch;
     texture->dirty = 1;
+    LinkLiveTexture(texture);
     return texture;
 }
 
@@ -3785,6 +3952,7 @@ extern "C" GfxTexture *GfxMiniGL_CreateStreamTexture(int width, int height)
             break;
         }
     }
+    LinkLiveTexture(texture);
     return texture;
 }
 
@@ -3922,6 +4090,7 @@ extern "C" void Gfx_DestroyTexture(GfxTexture *texture)
         }
         free(texture->data);
     }
+    UnlinkLiveTexture(texture);
     delete texture;
 }
 
@@ -4081,6 +4250,10 @@ extern "C" GfxTexture *Gfx_GetCubeFace(GfxTexture *cube, int face)
     faceTexture->data = NULL;
     faceTexture->dataSize = 0;
     faceTexture->parent = cube;
+    // A view is not on the live-texture list (its cube is).
+    faceTexture->live = 0;
+    faceTexture->liveNext = NULL;
+    faceTexture->livePrev = NULL;
     return faceTexture;
 }
 

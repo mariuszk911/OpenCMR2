@@ -95,6 +95,7 @@ add_library(opencmr2_platform OBJECT
     platform/amiga/amiga_libfix.c
     platform/amiga/amiga_sys.cpp
     platform/amiga/amiga_platform.cpp
+    platform/amiga/amiga_modes.c
     render/minigl/gfx_minigl.cpp
     render/gfx_dispatch_amiga.cpp
     ${GLES2_RENDERER_SOURCES}
@@ -198,6 +199,7 @@ opencmr2_amiga_stack(amiga_minigl_movie_upload_test)
 # movie stream textures through it (Domain B, target only, not staged).
 add_executable(amiga_gfx_stream_texture_test ${PROJECT_SOURCE_DIR}/tests/amiga/gfx_stream_texture_test.cpp
     render/minigl/gfx_minigl.cpp
+    platform/amiga/amiga_modes.c
     render/gfx_dispatch_amiga.cpp
     ${GLES2_RENDERER_SOURCES}
     ${OGLES2_SOURCES}

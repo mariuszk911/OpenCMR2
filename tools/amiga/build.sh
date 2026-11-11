@@ -233,6 +233,9 @@ fi
 mkdir -p "$REPO/dist/amiga/Libs" "$REPO/dist/amiga/tests"
 cp "$REPO/build/amiga/opencmr2" "$REPO/dist/amiga/opencmr2"
 chmod 755 "$REPO/dist/amiga/opencmr2"
+# Workbench icon (made by tools/amiga/make_info_icon.py).
+cp "$REPO/res/amiga/opencmr2.info" "$REPO/dist/amiga/opencmr2.info"
+chmod 644 "$REPO/dist/amiga/opencmr2.info"
 # Diagnostics and Sys smoke tests live under tests/, never next to the
 # deployment files.
 for binary in "$REPO"/build/amiga/amiga_smoke "$REPO"/build/amiga/amiga_*_test; do
@@ -259,7 +262,8 @@ cat > "$REPO/dist/amiga/README" <<'EOF'
 OpenCMR2 for AmigaOS 3.2 / PiStorm
 
   opencmr2                    the game executable
-  tests/                      Sys/platform diagnostics; not deployment files
+  opencmr2.info               its Workbench icon (double-click to start)
+  tests/                     Sys/platform diagnostics; not deployment files
   Libs/minigl.library         MiniGL 29.1, matching the SDK it was built with
   shaders/                    compiled GLES2 shaders (renderer = gles2), see below
   License_MiniGL_Library.txt  MiniGL licence

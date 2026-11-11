@@ -327,6 +327,10 @@ add_executable(bc_decode_test bc_decode.cpp)
 target_include_directories(bc_decode_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME bc_decode COMMAND bc_decode_test)
 
+add_executable(display_modes_test display_modes.cpp)
+target_include_directories(display_modes_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME display_modes COMMAND display_modes_test)
+
 # A texture stage that passes the colour through is left off on the MiniGL
 # backend (the car's Standard environment pass).
 add_executable(stage_passthrough_test stage_passthrough.cpp)
