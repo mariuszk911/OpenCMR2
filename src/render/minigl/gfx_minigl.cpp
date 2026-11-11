@@ -278,13 +278,6 @@ GfxTexture *s_boundTexture;
 // on the back buffer; the texture keeps its contents and consumers bind a
 // neutral reflection texture.
 GfxTexture *s_renderTarget;
-static const float kMenuDotCircle[20][2] = {
-    {1.0f, 0.0f}, {0.95106f, 0.30902f}, {0.80902f, 0.58779f}, {0.58779f, 0.80902f},
-    {0.30902f, 0.95106f}, {0.0f, 1.0f}, {-0.30902f, 0.95106f}, {-0.58779f, 0.80902f},
-    {-0.80902f, 0.58779f}, {-0.95106f, 0.30902f}, {-1.0f, 0.0f}, {-0.95106f, -0.30902f},
-    {-0.80902f, -0.58779f}, {-0.58779f, -0.80902f}, {-0.30902f, -0.95106f}, {0.0f, -1.0f},
-    {0.30902f, -0.95106f}, {0.58779f, -0.80902f}, {0.80902f, -0.58779f}, {0.95106f, -0.30902f},
-};
 int s_width = 640;
 int s_height = 480;
 int s_locked;
@@ -3592,36 +3585,6 @@ void Gfx_DrawPrimitiveTLBody(int primitive, const GfxTLVertex *vertices, uint32_
         s_diag.drawCallsTL++;
 
     BeginTLDraw();
-    if (s_boundTexture != NULL && (s_boundTexture->flags & GFX_TEXTURE_MENU_DOT) != 0 &&
-        vertexCount >= 4) {
-        float minX = vertices[0].sx, maxX = minX;
-        float minY = vertices[0].sy, maxY = minY;
-        for (uint32_t i = 1; i < vertexCount; ++i) {
-            if (vertices[i].sx < minX) minX = vertices[i].sx;
-            if (vertices[i].sx > maxX) maxX = vertices[i].sx;
-            if (vertices[i].sy < minY) minY = vertices[i].sy;
-            if (vertices[i].sy > maxY) maxY = vertices[i].sy;
-        }
-        const float cx = (minX + maxX) * 0.5f;
-        const float cy = (minY + maxY) * 0.5f;
-        const float rx = (maxX - minX) * 0.5f;
-        const float ry = (maxY - minY) * 0.5f;
-        const uint32_t c = vertices[0].color;
-        glDisable(GL_TEXTURE_2D);
-        s_glCache.texEnabled[0] = 0;
-        glColor4ub((GLubyte)((c >> 16) & 0xff), (GLubyte)((c >> 8) & 0xff),
-                   (GLubyte)(c & 0xff), (GLubyte)((c >> 24) & 0xff));
-        glBegin(GL_TRIANGLE_FAN);
-        glVertex2f(cx, cy);
-        for (int i = 0; i <= 20; ++i) {
-            const float *p = kMenuDotCircle[i % 20];
-            glVertex2f(cx + rx * p[0], cy + ry * p[1]);
-        }
-        glEnd();
-        glEnable(GL_TEXTURE_2D);
-        s_glCache.texEnabled[0] = 1;
-        return;
-    }
     SubmitTLBlocks(mode, vertices, NULL, vertexCount);
 }
 
@@ -4143,8 +4106,6 @@ extern "C" void Gfx_VectorizeMenuDot(GfxTexture *texture)
         return;
     if ((texture->flags & GFX_TEXTURE_MENU_DOT) != 0)
         return;
-    if (Sys_GetOption("video.vector_flags", 1) == 0)
-        return;
     GfxTexture *dot = Gfx_CreateTexture(texture->width, texture->height, texture->format, 1,
                                        GFX_TEXTURE_MENU_DOT);
     if (dot == NULL)
@@ -4157,7 +4118,8 @@ extern "C" float Gfx_GetSpriteTexelInset(GfxTexture *texture)
 {
     // The sprite path now applies the inset to the UVs only, keeping the
     // full destination; this excludes the atlas edge without shrinking
-    // glyphs. The menu dot is drawn from vector geometry and needs none.
+    // glyphs. The menu dot copy samples the original bitmap, as the GLES2
+    // renderer does (Core_Gfx_GetSpriteTexelInset), and needs none.
     GfxTexture *drawn = texture != NULL && texture->replacement != NULL ? texture->replacement : texture;
     if (drawn != NULL && (drawn->flags & GFX_TEXTURE_MENU_DOT))
         return 0.0f;
