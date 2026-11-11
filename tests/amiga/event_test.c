@@ -120,9 +120,13 @@ int main(void)
         return Fail("held key after focus loss");
     DrainReplies(reply);
 
-    Send(port, reply, IDCMP_VANILLAKEY, 'A', 0);
-    if (!Sys_PollEvent(&event) || event.type != SYS_EVENT_TEXT || event.character != 'A')
-        return Fail("vanilla key");
+    // Text comes from the keymap: a RAWKEY press is a key-down event, and the
+    // character it maps to (0x20 is A on the US keymap) follows as SYS_EVENT_TEXT.
+    Send(port, reply, IDCMP_RAWKEY, 0x20, 0);
+    if (!Sys_PollEvent(&event) || event.type != SYS_EVENT_KEY_DOWN || event.key != 0x1e)
+        return Fail("text key down");
+    if (!Sys_PollEvent(&event) || event.type != SYS_EVENT_TEXT || event.character != 'a')
+        return Fail("text from keymap");
     DrainReplies(reply);
 
     Send(port, reply, IDCMP_RAWKEY, 0x7f, 0);

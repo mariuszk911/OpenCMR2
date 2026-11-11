@@ -1049,15 +1049,19 @@ int StagedWriteKind(const char *path)
 
 // Closes a staged write: a complete file replaces the live one, anything
 // else is dropped and the live file stays as it was.
-void CommitStagedFile(SysFile *file, bool closed)
+// Returns false when the staged content did not replace the live file.
+bool CommitStagedFile(SysFile *file, bool closed)
 {
     if (file->failed || !closed) {
         Sys_Log("save: %s was not written completely, %s is unchanged", file->path, file->livePath);
         DeleteFile((STRPTR)file->path);
-        return;
+        return false;
     }
-    if (!ReplaceFile(file->path, file->livePath))
+    if (!ReplaceFile(file->path, file->livePath)) {
         Sys_Log("save: cannot replace %s", file->livePath);
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -1102,16 +1106,18 @@ extern "C" SysFile *Sys_OpenFile(const char *path, int mode)
     return file;
 }
 
-extern "C" void Sys_CloseFile(SysFile *file)
+extern "C" int Sys_CloseFile(SysFile *file)
 {
     if (file == NULL)
-        return;
+        return 0;
     const bool closed = Close(file->handle) != 0;
     if (!closed)
         Sys_Log("Close %s failed (IoErr %ld)", file->path, (long)IoErr());
+    int ok = closed ? 1 : 0;
     if (file->livePath[0] != '\0')
-        CommitStagedFile(file, closed);
+        ok = CommitStagedFile(file, closed) && closed ? 1 : 0;
     delete file;
+    return ok;
 }
 
 extern "C" uint32_t Sys_ReadFile(SysFile *file, void *buffer, uint32_t size)

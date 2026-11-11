@@ -1345,12 +1345,13 @@ extern "C" SysFile *Sys_OpenFile(const char *path, int mode)
     return file;
 }
 
-extern "C" void Sys_CloseFile(SysFile *file)
+extern "C" int Sys_CloseFile(SysFile *file)
 {
-    if (file != NULL) {
-        fclose(file->f);
-        delete file;
-    }
+    if (file == NULL)
+        return 0;
+    const int closed = fclose(file->f) == 0;
+    delete file;
+    return closed;
 }
 
 extern "C" DWORD Sys_ReadFile(SysFile *file, void *buffer, DWORD size)

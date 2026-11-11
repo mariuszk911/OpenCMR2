@@ -132,7 +132,10 @@ enum SysSeekOrigin {
 SysFile *Sys_OpenFile(const char *path, int mode);
 // Game path of the last file Sys_OpenFile could not open for reading.
 const char *Sys_GetLastMissingFile(void);
-void Sys_CloseFile(SysFile *file);
+// Returns 1 when the file closed and, for a staged write, the new content
+// replaced the live file; 0 when the close or that commit failed (the previous
+// content stays). A NULL file returns 0.
+int Sys_CloseFile(SysFile *file);
 uint32_t Sys_ReadFile(SysFile *file, void *buffer, uint32_t size);
 uint32_t Sys_WriteFile(SysFile *file, const void *buffer, uint32_t size);
 /* Returns the new position, or 0xffffffff on failure. */

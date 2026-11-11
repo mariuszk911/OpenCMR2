@@ -41,7 +41,7 @@ extern "C" SysFile *Sys_OpenFile(const char *, int) {
     if (missingFile) return nullptr;
     ++files; return new SysFile;
 }
-extern "C" void Sys_CloseFile(SysFile *file) { --files; delete file; }
+extern "C" int Sys_CloseFile(SysFile *file) { --files; delete file; return 1; }
 extern "C" DWORD Sys_GetFileSize(SysFile *) { return data.size(); }
 extern "C" DWORD Sys_SeekFile(SysFile *file, LONG offset, int) {
     if (offset < 0 || size_t(offset) > data.size()) return 0xffffffff;

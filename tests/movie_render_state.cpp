@@ -11,7 +11,7 @@ static GfxDrawState drawnState;
 static bool stretched;
 
 extern "C" SysFile *Sys_OpenFile(const char *, int) { return new SysFile; }
-extern "C" void Sys_CloseFile(SysFile *file) { delete file; }
+extern "C" int Sys_CloseFile(SysFile *file) { delete file; return 1; }
 extern "C" DWORD Sys_GetFileSize(SysFile *) { return data.size(); }
 extern "C" DWORD Sys_SeekFile(SysFile *file, LONG offset, int) { file->position = offset; return offset; }
 extern "C" DWORD Sys_ReadFile(SysFile *file, void *dst, DWORD count) {

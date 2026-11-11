@@ -343,8 +343,8 @@ int CInstallInfo::WriteFileToDisk(char *name, int mode, LPCVOID data, DWORD size
     }
 
     bytesWritten = Sys_WriteFile(file, data, size);
-    Sys_CloseFile(file);
-    if (bytesWritten == size)
+    const int closed = Sys_CloseFile(file);
+    if (bytesWritten == size && closed)
         return 1;
     return 0;
 }
