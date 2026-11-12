@@ -1066,6 +1066,41 @@ bool CommitStagedFile(SysFile *file, bool closed)
 
 } // namespace
 
+// ---- background pump -------------------------------------------------------
+// The network session has no thread (net/net_service.h), so the game's task
+// services it: from the event poll and from file reads, which is where a
+// stage load spends its time. Free when nothing is registered.
+static void (*s_backgroundPump)(void);
+static uint32_t s_pumpLast;
+static uint32_t s_pumpGapMax;
+static const uint32_t kPumpIntervalMs = 50;
+
+extern "C" void AmigaSys_SetBackgroundPump(void (*pump)(void))
+{
+    s_backgroundPump = pump;
+    s_pumpLast = pump != NULL ? Sys_GetTicks() : 0;
+    s_pumpGapMax = 0;
+}
+
+extern "C" unsigned long AmigaSys_GetPumpGapMax(void)
+{
+    return (unsigned long)s_pumpGapMax;
+}
+
+static void RunBackgroundPump(void)
+{
+    if (s_backgroundPump == NULL)
+        return;
+    const uint32_t now = Sys_GetTicks();
+    const uint32_t gap = now - s_pumpLast;
+    if (gap < kPumpIntervalMs)
+        return;
+    if (gap > s_pumpGapMax)
+        s_pumpGapMax = gap;
+    s_pumpLast = now;
+    s_backgroundPump();
+}
+
 extern "C" SysFile *Sys_OpenFile(const char *path, int mode)
 {
     char native[kNativePathSize];
@@ -1124,6 +1159,7 @@ extern "C" uint32_t Sys_ReadFile(SysFile *file, void *buffer, uint32_t size)
 {
     if (file == NULL || (buffer == NULL && size != 0))
         return 0;
+    RunBackgroundPump();
     const LONG read = Read(file->handle, buffer, (LONG)size);
     if (read < 0) {
         Sys_Log("Read %s failed (IoErr %ld)", file->path, (long)IoErr());
@@ -1708,19 +1744,20 @@ static int PollEvent(SysEvent *event, int *consumed)
             if (dik != 0 && (message->Code & 0x80) == 0) {
                 if (EnsureKeymap()) {
                     struct InputEvent ie;
-                    char text[8];
+                    char mapped[8];
+                    unsigned char text[8];
                     LONG n;
-                    LONG k;
+                    int k;
                     memset(&ie, 0, sizeof(ie));
                     ie.ie_Class = IECLASS_RAWKEY;
                     ie.ie_Code = message->Code & 0x7f;
                     ie.ie_Qualifier = message->Qualifier;
-                    n = MapRawKey(&ie, text, sizeof(text), NULL);
-                    for (k = 0; k < n; ++k) {
-                        const unsigned char c = (unsigned char)text[k];
-                        if (c >= 0x20 && c != 0x7f)
-                            QueueTextByte(c);
-                    }
+                    n = MapRawKey(&ie, mapped, sizeof(mapped), NULL);
+                    // PORT: AMIGA: cursor and function keys map to CSI
+                    // sequences ("\x9b" "A" for Up); only real text is queued.
+                    n = AmigaKey_TextFromMapped((const unsigned char *)mapped, (int)n, text);
+                    for (k = 0; k < n; ++k)
+                        QueueTextByte(text[k]);
                 }
                 event->type = SYS_EVENT_KEY_DOWN;
                 event->key = dik;
@@ -1753,6 +1790,7 @@ extern "C" int Sys_PollEvent(SysEvent *event)
 {
     if (event == NULL)
         return 0;
+    RunBackgroundPump();
     if (TakeBreak(event))
         return 1;
     if (TakePendingText(event))
@@ -1975,8 +2013,21 @@ extern "C" void Sys_Fatal(const char *format, ...)
     Sys_Exit(1);
 }
 
+static void (*s_shutdownHook)(void);
+
+extern "C" void AmigaSys_SetShutdownHook(void (*hook)(void))
+{
+    s_shutdownHook = hook;
+}
+
 extern "C" void AmigaSys_Shutdown(void)
 {
+    s_backgroundPump = NULL;
+    if (s_shutdownHook != NULL) {
+        void (*hook)(void) = s_shutdownHook;
+        s_shutdownHook = NULL;
+        hook();
+    }
     CloseTime();
     CloseInputState();
     AmigaSys_InputShutdown();

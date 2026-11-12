@@ -261,10 +261,17 @@ else()
 endif()
 
 # Sessions over ENet, without SDL: tests run hosts and clients in one process.
-add_library(opencmr2_net STATIC net/net_session.cpp)
+add_library(opencmr2_net STATIC net/net_session.cpp net/net_payload.cpp)
 target_include_directories(opencmr2_net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 find_package(Threads REQUIRED)
 target_link_libraries(opencmr2_net PUBLIC enet Threads::Threads)
+
+# The same sessions serviced cooperatively, as on AmigaOS (no thread, no lock):
+# built on the host so the whole net_session suite runs against that mode too.
+add_library(opencmr2_net_cooperative STATIC net/net_session.cpp net/net_payload.cpp)
+target_include_directories(opencmr2_net_cooperative PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(opencmr2_net_cooperative PUBLIC NET_SESSION_THREADED=0)
+target_link_libraries(opencmr2_net_cooperative PUBLIC enet)
 
 # ---- platform subsystems ---------------------------------------------------------
 set(POTRACE_DIR ${PROJECT_SOURCE_DIR}/third_party/potrace)
@@ -288,7 +295,8 @@ target_sources(opencmr2_platform PRIVATE
     input/bindings.cpp
     input/input_sdl.cpp
     video/movie.cpp
-    net/net_api.cpp)
+    net/net_api.cpp
+    net/net_api_common.cpp)
 if(OPENCMR2_RENDERER_GL)
     target_sources(opencmr2_platform PRIVATE render/gfx_gl.cpp)
     target_compile_definitions(opencmr2_platform PRIVATE OPENCMR2_RENDERER_GL)

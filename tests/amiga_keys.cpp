@@ -77,6 +77,35 @@ int main()
     Check(AmigaKey_UpdateState(keys, 0xff), 0, "release unmapped");
     Check(keys[0x7f], 0, "unmapped key untouched");
 
+    // MapRawKey results: letters are text, cursor/function keys are not.
+    unsigned char text[8];
+    const unsigned char letter[] = { 'a' };
+    Check(AmigaKey_TextFromMapped(letter, 1, text), 1, "letter is text");
+    Check(text[0], 'a', "letter kept");
+    const unsigned char latin1[] = { 0xe9 };
+    Check(AmigaKey_TextFromMapped(latin1, 1, text), 1, "Latin-1 letter is text");
+    const unsigned char up[] = { 0x9b, 'A' };
+    Check(AmigaKey_TextFromMapped(up, 2, text), 0, "cursor up (CSI A) is not text");
+    const unsigned char down[] = { 0x9b, 'B' };
+    Check(AmigaKey_TextFromMapped(down, 2, text), 0, "cursor down (CSI B) is not text");
+    const unsigned char f1[] = { 0x9b, '0', '~' };
+    Check(AmigaKey_TextFromMapped(f1, 3, text), 0, "F1 (CSI 0 ~) is not text");
+    // Backspace, Return and Esc reach the game's text entries as on Windows.
+    const unsigned char backspace[] = { 0x08 };
+    Check(AmigaKey_TextFromMapped(backspace, 1, text), 1, "Backspace is a character");
+    Check(text[0], 8, "Backspace is 8");
+    const unsigned char ret[] = { 0x0d };
+    Check(AmigaKey_TextFromMapped(ret, 1, text), 1, "Return is a character");
+    Check(text[0], 13, "Return is 13");
+    const unsigned char esc[] = { 0x1b };
+    Check(AmigaKey_TextFromMapped(esc, 1, text), 1, "Esc is a character");
+    Check(text[0], 27, "Esc is 27");
+    const unsigned char escSequence[] = { 0x1b, '[', 'A' };
+    Check(AmigaKey_TextFromMapped(escSequence, 3, text), 0, "ESC sequence is not text");
+    const unsigned char controls[] = { 0x09, 0x7f, 0x85 };
+    Check(AmigaKey_TextFromMapped(controls, 3, text), 0, "other control characters are not text");
+    Check(AmigaKey_TextFromMapped(letter, 0, text), 0, "empty result");
+
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

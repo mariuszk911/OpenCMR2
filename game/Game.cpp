@@ -3128,7 +3128,9 @@ bool Network_TestLocalPlayerStatus(void)
 // FUNCTION: CMR2 0x004a1480
 unsigned int Network_GetEnumeratedSessionCount(void)
 {
-    return *(unsigned int *)&CGameInfo::m_unk0x005a01bc & 0xff;
+    // PORT: AMIGA: the original reads the BYTE count through a 32-bit load and
+    // keeps the low byte, which is the count only on little-endian machines.
+    return CGameInfo::m_unk0x005a01bc;
 }
 
 // FUNCTION: CMR2 0x004a1490

@@ -13,24 +13,24 @@
 // protocol), 1 unreliable (other messages, such as car states), so a
 // retransmitted packet never delays positions.
 //
-// A thread services the socket, so connections survive while the game does
-// not poll (stage loading). Every public method locks the session.
+// Servicing (net_service.h): a thread runs the socket, so connections survive
+// while the game does not poll (stage loading), and every public method locks
+// the session; or, on AmigaOS, the game's own task pumps the session (Pump).
 
 #ifndef OPENCMR2_NET_SESSION_H
 #define OPENCMR2_NET_SESSION_H
 
+#include "net/net_payload.h"
+#include "net/net_service.h"
 #include "port/net.h"
 
 #include <stdint.h>
 
-#include <atomic>
-#include <condition_variable>
 #include <deque>
 #include <map>
-#include <mutex>
 #include <random>
+#include <set>
 #include <string>
-#include <thread>
 #include <vector>
 
 struct _ENetHost;
@@ -51,6 +51,19 @@ struct Config {
     // More hosts to search, asked for on the service thread (Tailscale peers).
     std::vector<std::string> (*extraPeers)() = nullptr;
     void (*log)(const char *format, ...) = nullptr;
+    // Milliseconds from a monotonic clock, and a random seed. Optional when the
+    // session runs a thread (std::chrono and std::random_device are used); the
+    // cooperative mode has neither on AmigaOS and needs both.
+    uint32_t (*now)() = nullptr;
+    uint64_t (*seed)() = nullptr;
+    // Cooperative mode: Open(JOIN) waits for the host with the game's task
+    // blocked, as DirectPlay's did; this is called on every pass of the wait,
+    // so the owner can keep its own loop (window events, other sessions) alive.
+    void (*idle)() = nullptr;
+    // Byte order of the machine, for the conversion of the game's payloads
+    // (net_payload.h). Tests set it to run a big-endian machine on a
+    // little-endian host.
+    ByteOrder payloadOrder = kNativeOrder;
 };
 
 // A session as seen by the search.
@@ -68,8 +81,14 @@ public:
     explicit Session(const Config &config);
     ~Session();
 
-    // Opens the socket and starts the service thread (InitializeConnection).
+    // Opens the socket and starts servicing it (InitializeConnection).
     HRESULT Start();
+
+    // Cooperative mode: services the socket once (events, timeouts, search).
+    // Every public method does it first; the game's task calls it besides, at
+    // least every few hundred milliseconds, so that the connections are
+    // answered while it loads. Nothing to do when a thread services.
+    void Pump();
     uint16_t BoundPort() const { return boundPort; }
 
     HRESULT EnumSessions(const NetGuid *application, NetSessionCallback callback, void *context);
@@ -119,7 +138,14 @@ private:
         NetSessionDesc desc = {};
     };
 
+    class Entry;
+    uint32_t Now() const;
+    bool Step(uint32_t now);
+    bool AwaitJoin(Entry &entry);
+    void Notify();
+#if NET_SESSION_THREADED
     void Run();
+#endif
     void Service(uint32_t now);
     void Search(uint32_t now);
     void ResolvePeers();
@@ -156,11 +182,18 @@ private:
     NetPlayerID FirstLocalPlayer() const;
     uint32_t SessionPlayerCount() const;
 
+    // Payload byte order: the session keeps and relays every payload and GUID
+    // in the wire form; these convert at the API boundary. A payload that
+    // cannot be converted is refused and reported once per kind and type.
+    bool WireImage(Payload kind, const void *data, size_t size, std::vector<uint8_t> &out);
+    bool NativeImage(Payload kind, const uint8_t *data, size_t size, std::vector<uint8_t> &out);
+    void ReportUnknown(const char *what, Payload kind, const uint8_t *data, size_t size);
+
     Config config;
-    std::mutex mutex;
-    std::condition_variable changed;    // join and migration results
-    std::thread thread;
-    std::atomic<bool> running{false};
+    ServiceState service;
+    bool transportUp = false;           // this session initialised ENet and releases it
+    bool pumping = false;               // Pump is running: it does not nest
+    uint32_t lastPump = 0;
     _ENetHost *host = nullptr;
     uint16_t boundPort = 0;
 
@@ -181,6 +214,7 @@ private:
     std::vector<std::vector<uint8_t>> pendingReliable;  // sent while migrating
     std::map<_ENetPeer *, uint32_t> pendingPeers;       // host: connected, not yet joined
     std::mt19937_64 rng;
+    std::set<uint32_t> reportedPayloads;    // (what, kind, type) already logged
 
     // Search.
     uint32_t lastSearchCall = 0, lastQuery = 0;

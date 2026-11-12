@@ -1,5 +1,10 @@
 // net::Session end to end on the loopback: a host and clients in one process,
 // through the DirectPlay-style API the game uses.
+//
+// Built twice: with the service thread (the host builds) and cooperative
+// (NET_SESSION_THREADED=0, the AmigaOS mode), where nobody services a session
+// but the code that calls it. There the test plays the game's main loop: every
+// wait pumps all the sessions of the process, as the game's frame does.
 
 #include "net/net_session.h"
 
@@ -43,14 +48,40 @@ void Log(const char *format, ...)
 
 const NetGuid kApp = { { 0x43, 0x4d, 0x52, 0x32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 } };
 
+// Every session of the process, for the cooperative mode's main loop.
+std::vector<net::Session *> s_sessions;
+
+void PumpAll()
+{
+    for (net::Session *session : s_sessions)
+        session->Pump();    // nothing to do when a thread services
+}
+
+#if !NET_SESSION_THREADED
+uint32_t TestNow()
+{
+    static const auto start = std::chrono::steady_clock::now();
+    return (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+        .count();
+}
+
+uint64_t TestSeed()
+{
+    static uint64_t n = 0x2545f4914f6cdd1dull;
+    return n += 0x9e3779b97f4a7c15ull;
+}
+#endif
+
 bool WaitFor(const std::function<bool()> &condition, int ms = 3000)
 {
     auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
     while (std::chrono::steady_clock::now() < end) {
+        PumpAll();
         if (condition())
             return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
+    PumpAll();
     return condition();
 }
 
@@ -71,9 +102,10 @@ struct Node {
     std::vector<Message> received;
     NetPlayerID player = 0;
 
-    explicit Node(uint16_t port, uint16_t hostPort = 0)
+    explicit Node(uint16_t port, uint16_t hostPort = 0, net::ByteOrder order = net::kNativeOrder)
     {
         net::Config config;
+        config.payloadOrder = order;
         config.port = port;
         config.broadcast = false;
         config.timeoutMs = 1500;
@@ -81,8 +113,21 @@ struct Node {
         if (hostPort != 0)
             config.peers.push_back("127.0.0.1:" + std::to_string(hostPort));
         config.log = Log;
+#if !NET_SESSION_THREADED
+        config.now = TestNow;
+        config.seed = TestSeed;
+        config.idle = PumpAll;      // a blocking join must not stop the host in this process
+#endif
         session.reset(new net::Session(config));
         CHECK(session->Start() == NET_OK);
+        s_sessions.push_back(session.get());
+    }
+
+    ~Node()
+    {
+        for (size_t i = 0; i < s_sessions.size(); i++)
+            if (s_sessions[i] == session.get())
+                s_sessions.erase(s_sessions.begin() + (long)i);
     }
 
     // Moves every waiting message into received. Each is received into its
@@ -218,6 +263,7 @@ void Intruder(uint16_t port, const std::vector<uint8_t> &packet)
     bool connected = false, dropped = false;
     auto end = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (std::chrono::steady_clock::now() < end && !dropped) {
+        PumpAll();
         if (enet_host_service(client, &e, 10) > 0) {
             if (e.type == ENET_EVENT_TYPE_CONNECT) {
                 connected = true;
@@ -247,6 +293,7 @@ void Impostor(uint16_t port, const NetGuid &instance, const char *password, NetP
     bool accepted = false, dropped = false;
     auto end = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (std::chrono::steady_clock::now() < end && !dropped) {
+        PumpAll();
         if (enet_host_service(client, &e, 10) <= 0)
             continue;
         if (e.type == ENET_EVENT_TYPE_CONNECT) {
@@ -277,6 +324,115 @@ void Impostor(uint16_t port, const NetGuid &instance, const char *password, NetP
     CHECK(accepted);
     CHECK(dropped);
     enet_host_destroy(client);
+}
+
+// A big-endian machine (simulated byte for byte) and a little-endian one in
+// one session: every payload is converted at the boundary of the big one.
+void CrossEndian()
+{
+    using net::ByteOrder;
+    // The application GUID as the game declares it, int[4]: its bytes differ per byte order.
+    const uint32_t words[4] = { 0x1bff2d87, 0x11d24cb7, 0x60004cb1, 0xe0014e08 };
+    NetGuid little, big;
+    for (int i = 0; i < 4; i++)
+        for (int b = 0; b < 4; b++) {
+            little.bytes[4 * i + b] = (uint8_t)(words[i] >> (8 * b));
+            big.bytes[4 * i + b] = (uint8_t)(words[i] >> (8 * (3 - b)));
+        }
+
+    Node host(0, 0, ByteOrder::Little);
+    NetSessionDesc desc = {};
+    desc.dwSize = sizeof(desc);
+    desc.guidApplication = little;
+    desc.dwMaxPlayers = 4;
+    desc.dwUser1 = 9;
+    desc.lpszSessionNameA = (char *)"Mixed";
+    CHECK(host.session->Open(&desc, NET_OPEN_CREATE) == NET_OK);
+    host.Create("host", "");
+    Node guest(0, host.session->BoundPort(), ByteOrder::Big);
+
+    // The big-endian guest searches with its own int[4] and sees the same GUID back.
+    Found found;
+    bool seen = WaitFor([&] {
+        guest.session->EnumSessions(&big,
+                                    [](const NetSessionDesc *d, void *context) -> BOOL {
+                                        Found *f = (Found *)context;
+                                        f->desc = *d;
+                                        f->name = d->lpszSessionNameA;
+                                        return FALSE;
+                                    },
+                                    &found);
+        return !found.name.empty();
+    });
+    CHECK(seen);
+    CHECK(found.name == "Mixed" && found.desc.dwUser1 == 9);
+    CHECK(memcmp(&found.desc.guidApplication, &big, sizeof(big)) == 0);
+    CHECK(Join(guest, found, "") == NET_OK);
+    NetSessionDesc joined;
+    CHECK(guest.session->GetSessionDesc(&joined) == NET_OK && memcmp(&joined.guidApplication, &big, 16) == 0);
+
+    // Player descriptions: NetPlayerInfo, four words. The big-endian guest creates its player with an
+    // integer flags word (as the lobby does) and later publishes bitfields (as the player description does).
+    auto be32 = [](uint8_t *p, uint32_t v) {
+        for (int i = 0; i < 4; i++)
+            p[i] = (uint8_t)(v >> (8 * (3 - i)));
+    };
+    auto le32 = [](const uint8_t *p) { return (uint32_t)p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; };
+    uint8_t info[16];
+    be32(info, 0);
+    be32(info + 4, 0x8f);               // car 0x0f and active, as an integer
+    be32(info + 8, 0x01020304);
+    be32(info + 12, 0x0a0b0c0d);
+    NetName name = { sizeof(NetName), 0, (char *)"guest", (char *)"guest" };
+    NetPlayerID guestPlayer = 0;
+    CHECK(guest.session->CreatePlayer(&guestPlayer, &name, info, sizeof(info)) == NET_OK);
+    Message m;
+    CHECK(host.WaitSystem(NET_SYS_CREATEPLAYER, &m));
+    {
+        NetMsgCreatePlayer cp;
+        memcpy(&cp, m.data.data(), sizeof(cp));
+        CHECK(cp.dwDataSize == 16);
+        CHECK(le32((const uint8_t *)cp.lpData + 4) == 0x8f && le32((const uint8_t *)cp.lpData + 8) == 0x01020304 &&
+              le32((const uint8_t *)cp.lpData + 12) == 0x0a0b0c0d);
+    }
+    // Bitfields from the most significant bit: car (5), bit5, bit6, active, ready, finished, rest.
+    be32(info + 4, 0x0fu << 27 | 1u << 24 | 1u << 22);     // car 0x0f, active (the 4th field), finished (the 6th)
+    CHECK(guest.session->SetPlayerData(guestPlayer, info, sizeof(info)) == NET_OK);
+    CHECK(host.WaitSystem(NET_SYS_SETPLAYERDATA, &m));
+    {
+        NetMsgSetPlayerData pd;
+        memcpy(&pd, m.data.data(), sizeof(pd));
+        CHECK(pd.dwDataSize == 16);
+        CHECK(le32((const uint8_t *)pd.lpData + 4) == (0x0fu | 1u << 7 | 1u << 9));
+    }
+    CHECK(WaitFor([&] { return Players(guest).size() == 2 && Players(host).size() == 2; }));
+    NetPlayerID hostPlayer = host.player;
+
+    // Messages: a stage time (type 9: u8, u8, pad, i32) in both directions.
+    const uint8_t timeLittle[8] = { 9, 3, 0xa1, 0xa2, 0x56, 0x34, 0x12, 0x00 };
+    const uint8_t timeBig[8] = { 9, 3, 0xa1, 0xa2, 0x00, 0x12, 0x34, 0x56 };
+    CHECK(guest.session->Send(guestPlayer, hostPlayer, TRUE, timeBig, 8) == NET_OK);
+    CHECK(WaitFor([&] { return host.Count(guestPlayer) == 1; }));
+    for (const Message &msg : host.received)
+        if (msg.from == guestPlayer)
+            CHECK(msg.data.size() == 8 && memcmp(msg.data.data(), timeLittle, 8) == 0);
+    host.received.clear();
+    CHECK(host.session->Send(host.player, NET_ID_ALL, TRUE, timeLittle, 8) == NET_OK);
+    CHECK(WaitFor([&] { return guest.Count(hostPlayer) == 1; }));
+    for (const Message &msg : guest.received)
+        if (msg.from == hostPlayer)
+            CHECK(msg.data.size() == 8 && memcmp(msg.data.data(), timeBig, 8) == 0);
+    guest.received.clear();
+
+    // A message that is not in the catalogue is not guessed at: the big-endian
+    // machine neither sends it nor delivers it. A little-endian one passes it.
+    const uint8_t unknown[5] = { 0x7f, 1, 2, 3, 4 };
+    CHECK(guest.session->Send(guestPlayer, hostPlayer, TRUE, unknown, 5) == NET_ERR_INVALIDPARAMS);
+    CHECK(host.session->Send(host.player, NET_ID_ALL, TRUE, unknown, 5) == NET_OK);
+    CHECK(host.session->Send(host.player, NET_ID_ALL, TRUE, timeLittle, 8) == NET_OK);
+    CHECK(WaitFor([&] { return guest.Count(hostPlayer) == 1; }));    // the time, not the unknown one
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    CHECK(guest.Count(hostPlayer) == 1 && host.Count(guestPlayer) == 0);
 }
 
 } // namespace
@@ -509,10 +665,12 @@ int main()
     CHECK(b.session->IsHost());
     CHECK(Players(b).size() == 1);
 
+    CrossEndian();
+
     if (s_failures != 0) {
         fprintf(stderr, "net_session: %d failures\n", s_failures);
         return 1;
     }
-    printf("net_session: ok\n");
+    printf("net_session (%s): ok\n", NET_SESSION_THREADED ? "threaded" : "cooperative");
     return 0;
 }

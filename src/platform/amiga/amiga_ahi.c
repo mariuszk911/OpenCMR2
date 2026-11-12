@@ -57,6 +57,11 @@ static volatile uint32_t s_queued;   /* blocks handed to AHI: hook only */
 static volatile uint32_t s_rendered; /* blocks written: renderer only */
 static volatile uint32_t s_underruns;
 static int s_exitRegistered;
+/* The hook may run on the driver's own task (Emu68's HDMI AHI driver has
+   one), so it can still be running, or run once more, while Close stops the
+   playback and the mixer Process. It acts only while this is set. */
+static volatile int s_hookLive;
+static volatile uint32_t s_lateHooks;
 
 /* AHI calls this as a block starts, possibly from an interrupt. AHI_SetSound
    without AHISF_IMM queues the next block behind the one now starting. */
@@ -64,8 +69,14 @@ static ULONG SoundFunc(register struct Hook *hook __asm("a0"),
                        register struct AHIAudioCtrl *control __asm("a2"),
                        register struct AHISoundMessage *message __asm("a1"))
 {
+    struct Task *mixer = s_mixer;
+
     (void)hook;
     (void)message;
+    if (!s_hookLive || mixer == NULL) {
+        ++s_lateHooks;
+        return 0;
+    }
     if (s_queued != s_rendered) {
         AHI_SetSound(0, AHI_RING_SOUND, (s_queued % AHI_RING_BLOCKS) * s_blockFrames,
                      s_blockFrames, control, 0);
@@ -74,7 +85,7 @@ static ULONG SoundFunc(register struct Hook *hook __asm("a0"),
         AHI_SetSound(0, AHI_SILENCE_SOUND, 0, s_blockFrames, control, 0);
         ++s_underruns;
     }
-    Signal(s_mixer, s_wakeMask);
+    Signal(mixer, s_wakeMask);
     return 0;
 }
 
@@ -254,6 +265,7 @@ int AmigaAhi_Open(uint32_t *rate, uint32_t blockMs, uint32_t maxBlockFrames, Ami
     s_queued = 1;   /* block 0 goes straight to AHI_Play below */
     s_rendered = 0;
     s_underruns = 0;
+    s_lateHooks = 0;
     s_ring = (int16_t *)AllocVec(blockFrames * AHI_RING_BLOCKS * AHI_FRAME_BYTES, MEMF_PUBLIC | MEMF_CLEAR);
     s_silence = (int16_t *)AllocVec(blockFrames * AHI_FRAME_BYTES, MEMF_PUBLIC | MEMF_CLEAR);
     if (s_ring == NULL || s_silence == NULL || !LoadBlocks() || !StartMixer()) {
@@ -276,8 +288,11 @@ int AmigaAhi_Open(uint32_t *rate, uint32_t blockMs, uint32_t maxBlockFrames, Ami
              AHIP_Length, blockFrames,
              AHIP_EndChannel, 0,
              TAG_DONE);
+    s_hookLive = 1;
     if (AHI_ControlAudio(s_control, AHIC_Play, TRUE, TAG_DONE) != AHIE_OK) {
         Sys_Log("audio: AHI refused to start playback");
+        s_hookLive = 0;
+        AHI_ControlAudio(s_control, AHIC_Play, FALSE, TAG_DONE);
         StopMixer();
         FreeResources();
         return 0;
@@ -292,10 +307,13 @@ void AmigaAhi_Close(void)
 {
     if (s_control == NULL)
         return;
-    /* Stopping first ends the hook, so the Process gets no signal once gone. */
+    /* The hook goes quiet before the playback stops: on a driver with its own
+       task it may run once more, and must not signal the Process once gone. */
+    s_hookLive = 0;
     AHI_ControlAudio(s_control, AHIC_Play, FALSE, TAG_DONE);
     StopMixer();
-    Sys_Log("audio: closed after %lu blocks, %lu late", (unsigned long)s_rendered, (unsigned long)s_underruns);
+    Sys_Log("audio: closed after %lu blocks, %lu late, %lu hook calls while closing",
+            (unsigned long)s_rendered, (unsigned long)s_underruns, (unsigned long)s_lateHooks);
     FreeResources();
 }
 

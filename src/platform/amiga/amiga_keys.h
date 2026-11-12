@@ -170,4 +170,29 @@ static inline int AmigaKey_UpdateState(unsigned char keys[256], int code)
     return dik;
 }
 
+/*
+ * Keeps the typed characters of one MapRawKey result. Cursor, function and
+ * Help keys map to a CSI (0x9b) or ESC sequence ending in a printable byte
+ * (Up is CSI 'A', Down CSI 'B', F1 CSI '0' '~'): such a sequence is a key,
+ * not text, and is dropped whole. Backspace (8), Return/Enter (13) and Esc
+ * (27) are kept, as Windows gave them to the game as characters (WM_CHAR):
+ * its text entries delete, send and leave with them. Other control
+ * characters (C0, DEL and the C1 range of the ISO-8859-1 keymaps) are
+ * dropped. Returns the number of bytes written to out, which has room for
+ * count bytes.
+ */
+static inline int AmigaKey_TextFromMapped(const unsigned char *mapped, int count, unsigned char *out)
+{
+    int n = 0;
+    int i;
+    if (count <= 0 || mapped[0] == 0x9b || (mapped[0] == 0x1b && count > 1))
+        return 0;
+    for (i = 0; i < count; ++i) {
+        const unsigned char c = mapped[i];
+        if ((c >= 0x20 && c < 0x7f) || c >= 0xa0 || c == 0x08 || c == 0x0d || c == 0x1b)
+            out[n++] = c;
+    }
+    return n;
+}
+
 #endif
