@@ -9,6 +9,7 @@
 #include "port/save_image_disk.h"
 #include "port/sys.h"
 #include "diagnostics/timing.h"
+#include "diagnostics/replay_trace.h"
 #include "main.h"
 
 // AmigaOS version string, read by the Version command and installers.
@@ -35,8 +36,10 @@ int main(int argc, char **argv)
     }
     SavedImageDisk_SetRejectHandler(ReportRefusedSave);
     Diagnostics::StartProfileFromEnvironment();
+    Diagnostics::ReplayTrace_StartFromOptions();
     const unsigned int code = CMain::Initialize(Sys_GetCommandLine());
     Diagnostics::StopProfile();
+    Diagnostics::ReplayTrace_Stop();
     AmigaPlatform_Shutdown();
     return (int)code;
 }

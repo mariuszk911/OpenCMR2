@@ -92,6 +92,24 @@ def main():
     require("(int)((BYTE *)&ambient)[0] * 0x10000" in stage_objects,
             "game/StageObjects.cpp: car ambient red is not read from the byte view")
 
+    # The callback cursor is written through its BYTE member; its DWORD's low
+    # byte is that member only on little-endian, so the second player's race
+    # slot never advanced on 68k.
+    game = read("game/Game.cpp")
+    require("records[m_callbackIndex.packed & 0xff]" not in game,
+            "game/Game.cpp: callback timers index records through the DWORD's low byte")
+    require("records[m_callbackIndex.index]" in game,
+            "game/Game.cpp: callback timers do not index records by the BYTE cursor")
+
+    # The rev bar's 16.16 width (0x4b0000) truncated to 0 in a short, so the
+    # head-to-head (split-screen) bar never filled.
+    hud_dash = read("game/HudDash.cpp")
+    bar = hud_dash[hud_dash.find("void Dash_DrawBar("):hud_dash.find("// Gear and speed.")]
+    require("short scale;" not in bar,
+            "game/HudDash.cpp: Dash_DrawBar keeps its 16.16 scale in a short")
+    require("int scale;" in bar,
+            "game/HudDash.cpp: Dash_DrawBar scale is not an int")
+
     for name in ("g_optionTextColours", "g_optionTextBrightColours",
                  "g_unk0x005297ac", "g_unk0x00527378", "g_highlightRowColour"):
         require_rgba(game_info, name, "game/GameInfo.cpp")

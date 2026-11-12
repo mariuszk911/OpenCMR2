@@ -1,4 +1,5 @@
 #include "diagnostics/timing.h"
+#include "diagnostics/replay_trace.h"
 #include <SDL3/SDL.h>
 #include <cstdio>
 
@@ -41,8 +42,10 @@ void StartProfileFromEnvironment() {
         observer = &profile;
         fprintf(stderr, "CPU profile enabled: %s (up to 1000000 frames)\n", profilePath);
     } else profilePath = nullptr;
+    ReplayTrace_StartFromOptions();
 }
 void StopProfile() {
+    ReplayTrace_Stop();
     if (!profilePath) return;
     observer = nullptr;
     fprintf(stderr, "CPU profile %s: %s\n", profile.Write(profilePath) ? "saved" : "FAILED", profilePath);

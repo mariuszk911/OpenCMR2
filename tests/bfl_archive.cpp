@@ -63,6 +63,12 @@ extern "C" char *Crt_Strlwr(char *s)
     return s;
 }
 
+// The fixture's archive is read as stored; member decoding is out of scope here.
+extern "C" void *MemberDecode_Find(const char *, void *pData, unsigned int)
+{
+    return pData;
+}
+
 void *CFileBuffer::GetGenericFileBuffer(char *, BOOL)
 {
     return NULL;

@@ -49,6 +49,33 @@ int main()
     Check(AmigaKey_ToDIK(0x63), 0x1d, "Ctrl");
     Check(AmigaKey_ToDIK(0x64), 0x38, "Left Alt");
 
+    Check(AmigaKey_ToDIK(0x1a), 0x1a, "[");
+    Check(AmigaKey_ToDIK(0x1b), 0x1b, "]");
+    Check(AmigaKey_ToDIK(0x46), 0xd3, "Del");
+
+    // The keypad: player 2's default keys.
+    Check(AmigaKey_ToDIK(0x0f), 0x52, "Keypad 0");
+    Check(AmigaKey_ToDIK(0x1f), 0x51, "Keypad 3");
+    Check(AmigaKey_ToDIK(0x2d), 0x4b, "Keypad 4");
+    Check(AmigaKey_ToDIK(0x2f), 0x4d, "Keypad 6");
+    Check(AmigaKey_ToDIK(0x3d), 0x47, "Keypad 7");
+    Check(AmigaKey_ToDIK(0x3e), 0x48, "Keypad 8");
+    Check(AmigaKey_ToDIK(0x1e), 0x50, "Keypad 2");
+    Check(AmigaKey_ToDIK(0x3f), 0x49, "Keypad 9");
+    Check(AmigaKey_ToDIK(0x43), 0x9c, "Keypad Enter");
+    Check(AmigaKey_ToDIK(0x4a), 0x4a, "Keypad -");
+    Check(AmigaKey_ToDIK(0x5e), 0x4e, "Keypad +");
+
+    // Each raw key maps to its own DIK code.
+    for (int a = 0; a < 0x80; ++a) {
+        for (int b = a + 1; b < 0x80; ++b) {
+            if (AmigaKey_ToDIK(a) != 0 && AmigaKey_ToDIK(a) == AmigaKey_ToDIK(b)) {
+                std::fprintf(stderr, "FAIL: raw keys 0x%x and 0x%x share DIK 0x%x\n", a, b, AmigaKey_ToDIK(a));
+                ++failures;
+            }
+        }
+    }
+
     Check(AmigaKey_ToDIK(0x7f), 0, "unmapped key");
     Check(AmigaKey_ToDIK(0xff), 0, "unmapped release key");
 

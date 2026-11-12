@@ -73,6 +73,37 @@ static inline int AmigaKey_ToDIK(int code)
     case 0x5a: return 0x57; /* F11 */
     case 0x5b: return 0x58; /* F12 */
 
+    case 0x00: return 0x29; /* ` */
+    case 0x0b: return 0x0c; /* - */
+    case 0x0c: return 0x0d; /* = */
+    case 0x0d: return 0x2b; /* \ */
+    case 0x1a: return 0x1a; /* [ */
+    case 0x1b: return 0x1b; /* ] */
+    case 0x29: return 0x27; /* ; */
+    case 0x2a: return 0x28; /* ' */
+    case 0x38: return 0x33; /* , */
+    case 0x39: return 0x34; /* . */
+    case 0x3a: return 0x35; /* / */
+    case 0x46: return 0xd3; /* Del */
+
+    /* Numeric keypad (A500/A2000/A3000/A4000; the A1200 has none). */
+    case 0x0f: return 0x52; /* 0 */
+    case 0x1d: return 0x4f; /* 1 */
+    case 0x1e: return 0x50; /* 2 */
+    case 0x1f: return 0x51; /* 3 */
+    case 0x2d: return 0x4b; /* 4 */
+    case 0x2e: return 0x4c; /* 5 */
+    case 0x2f: return 0x4d; /* 6 */
+    case 0x3d: return 0x47; /* 7 */
+    case 0x3e: return 0x48; /* 8 */
+    case 0x3f: return 0x49; /* 9 */
+    case 0x3c: return 0x53; /* . */
+    case 0x43: return 0x9c; /* Enter */
+    case 0x4a: return 0x4a; /* - */
+    case 0x5c: return 0xb5; /* / */
+    case 0x5d: return 0x37; /* * */
+    case 0x5e: return 0x4e; /* + */
+
     case 0x60: return 0x2a; /* Left Shift */
     case 0x61: return 0x36; /* Right Shift */
     case 0x63: return 0x1d; /* Ctrl */
@@ -147,6 +178,34 @@ static inline const char *AmigaKey_DIKName(int dik)
     case 0x44: return "F10";
     case 0x57: return "F11";
     case 0x58: return "F12";
+    case 0x29: return "`";
+    case 0x0c: return "-";
+    case 0x0d: return "=";
+    case 0x2b: return "\\";
+    case 0x1a: return "[";
+    case 0x1b: return "]";
+    case 0x27: return ";";
+    case 0x28: return "'";
+    case 0x33: return ",";
+    case 0x34: return ".";
+    case 0x35: return "/";
+    case 0xd3: return "Delete";
+    case 0x52: return "Keypad 0";
+    case 0x4f: return "Keypad 1";
+    case 0x50: return "Keypad 2";
+    case 0x51: return "Keypad 3";
+    case 0x4b: return "Keypad 4";
+    case 0x4c: return "Keypad 5";
+    case 0x4d: return "Keypad 6";
+    case 0x47: return "Keypad 7";
+    case 0x48: return "Keypad 8";
+    case 0x49: return "Keypad 9";
+    case 0x53: return "Keypad .";
+    case 0x9c: return "Keypad Enter";
+    case 0x4a: return "Keypad -";
+    case 0xb5: return "Keypad /";
+    case 0x37: return "Keypad *";
+    case 0x4e: return "Keypad +";
     case 0x2a: return "Left Shift";
     case 0x36: return "Right Shift";
     case 0x1d: return "Left Ctrl";

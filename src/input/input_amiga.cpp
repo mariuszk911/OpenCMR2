@@ -29,7 +29,9 @@ struct Bindings {
     unsigned char key[INPUT_ACTION_COUNT][KEYS_PER_ACTION];
 };
 
-// DIK codes of the two keyboard players (the defaults of the SDL build).
+// DIK codes of the two keyboard players: the defaults of the SDL build,
+// except player 2's gears, which are Page Up/Page Down there; an Amiga
+// keyboard has neither, so they are Keypad + (up) and Keypad - (down).
 const Bindings s_defaults[INPUT_PLAYERS] = {
     { {
         { 0xCB, 0 }, { 0xCD, 0 }, { 0xC8, 0 }, { 0xD0, 0 }, { 0x39, 0 },
@@ -38,7 +40,7 @@ const Bindings s_defaults[INPUT_PLAYERS] = {
     } },
     { {
         { 0x4B, 0 }, { 0x4D, 0 }, { 0x48, 0 }, { 0x50, 0 }, { 0x51, 0 },
-        { 0xC9, 0 }, { 0xD1, 0 }, { 0x49, 0 }, { 0x47, 0 }, { 0x01, 0 },
+        { 0x4E, 0 }, { 0x4A, 0 }, { 0x49, 0 }, { 0x47, 0 }, { 0x01, 0 },
         { 0xCB, 0 }, { 0xCD, 0 }, { 0xC8, 0 }, { 0xD0, 0 }, { 0x1C, 0x9C }, { 0x01, 0 },
     } },
 };

@@ -360,7 +360,9 @@ void Dash_DrawBar(int player, int *pViewRect)
     int lit;
     short dx;
     short dy;
-    short scale;
+    // PORT: AMIGA: 16.16 (the bar's 75 pixels are 0x4b0000); as a short it
+    // truncated to 0 and the head-to-head bar was always empty.
+    int scale;
     int len;
     int split;
     int rest;

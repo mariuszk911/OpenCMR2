@@ -1210,7 +1210,11 @@ void CGame::AdvanceCallbackStateTimers(CallbackStateMachine *param1)
     {
         do
         {
-            m_currentCallbackRecord = &param1->records[m_callbackIndex.packed & 0xff];
+            // PORT: AMIGA: the original read the cursor as its DWORD's low byte,
+            // which is the BYTE index only on little-endian; on 68k it is the
+            // high byte, so every pass advanced record 0 and never record 1
+            // (the second player's slot of a split-screen race never started).
+            m_currentCallbackRecord = &param1->records[m_callbackIndex.index];
             tVar1 = m_currentCallbackRecord->packedState;
             if (tVar1 & 0x3000000)
             {
