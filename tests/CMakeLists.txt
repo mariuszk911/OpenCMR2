@@ -388,10 +388,9 @@ foreach(bfl_variant bfl_archive bfl_archive_be)
 endforeach()
 target_compile_definitions(bfl_archive_be_test PRIVATE OPENCMR2_TEST_FORCE_BIG_ENDIAN)
 
-# M1 stubs: an unavailable network and no-op Amiga profiling. The Amiga
+# M1 stubs: no-op Amiga profiling. The Amiga
 # target compiles the same translation units.
 add_executable(amiga_stubs_test amiga_stubs.cpp
-    ${PROJECT_SOURCE_DIR}/src/net/net_stub.cpp
     ${PROJECT_SOURCE_DIR}/src/platform/amiga/amiga_diagnostics.cpp
     ${PROJECT_SOURCE_DIR}/src/diagnostics/observer.cpp)
 target_include_directories(amiga_stubs_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
@@ -417,6 +416,13 @@ add_executable(amiga_keys_test amiga_keys.cpp)
 target_include_directories(amiga_keys_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_keys COMMAND amiga_keys_test)
 
+# The Amiga build's bounds-safe qsort, under its own name (the host keeps its
+# libc qsort, which the test also compares it with).
+add_executable(amiga_qsort_test amiga_qsort.cpp ${PROJECT_SOURCE_DIR}/src/platform/amiga/amiga_qsort.c)
+target_include_directories(amiga_qsort_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(amiga_qsort_test PRIVATE AMIGA_QSORT_HOST_TEST)
+add_test(NAME amiga_qsort COMMAND amiga_qsort_test)
+
 add_executable(amiga_paths_test amiga_paths.cpp)
 target_include_directories(amiga_paths_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_paths COMMAND amiga_paths_test)
@@ -430,11 +436,29 @@ add_executable(amiga_settings_test amiga_settings.cpp)
 target_include_directories(amiga_settings_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_settings COMMAND amiga_settings_test)
 
+add_executable(net_payload_test net_payload.cpp)
+target_link_libraries(net_payload_test PRIVATE opencmr2_net)
+target_compile_options(net_payload_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")
+add_test(NAME net_payload COMMAND net_payload_test)
+
 add_executable(net_session_test net_session.cpp)
 target_link_libraries(net_session_test PRIVATE opencmr2_net)
 target_compile_options(net_session_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")
 add_test(NAME net_session COMMAND net_session_test)
 set_tests_properties(net_session PROPERTIES TIMEOUT 60)
+
+# Manual cross-play peer: talks to tests/amiga/net_peer_test.cpp on another machine.
+add_executable(net_cross_peer net_cross_peer.cpp)
+target_link_libraries(net_cross_peer PRIVATE opencmr2_net)
+target_include_directories(net_cross_peer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(net_cross_peer PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")
+
+# The same suite against the cooperative service mode (AmigaOS): the test is the game's main loop.
+add_executable(net_session_cooperative_test net_session.cpp)
+target_link_libraries(net_session_cooperative_test PRIVATE opencmr2_net_cooperative)
+target_compile_options(net_session_cooperative_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")
+add_test(NAME net_session_cooperative COMMAND net_session_cooperative_test)
+set_tests_properties(net_session_cooperative PROPERTIES TIMEOUT 60)
 
 add_executable(bink_decoder_test bink_decoder.cpp)
 target_link_libraries(bink_decoder_test PRIVATE opencmr2_bink)
@@ -762,6 +786,11 @@ target_include_directories(credits_text_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME credits_text COMMAND credits_text_test)
 
 add_library(high_address_fixture STATIC high_address.c)
+add_executable(net_payload_game_test net_payload_game.cpp)
+target_link_libraries(net_payload_game_test PRIVATE opencmr2_platform)
+add_test(NAME net_payload_game COMMAND net_payload_game_test)
+set_tests_properties(net_payload_game PROPERTIES TIMEOUT 30)
+
 add_executable(net_frontend_test net_frontend.cpp)
 target_link_libraries(net_frontend_test PRIVATE opencmr2_platform high_address_fixture)
 add_test(NAME net_frontend COMMAND net_frontend_test)

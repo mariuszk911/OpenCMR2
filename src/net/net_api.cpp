@@ -8,7 +8,7 @@
 //                       (auto: when the tailscale command is installed)
 //   broadcast = 1       search the local network
 
-#include "net/net_session.h"
+#include "net/net_api_common.h"
 #include "platform/platform.h"
 #include "port/net.h"
 #include "port/sys.h"
@@ -22,26 +22,6 @@
 #include <vector>
 
 namespace {
-
-std::unique_ptr<net::Session> s_session;
-
-std::vector<std::string> Split(const char *list)
-{
-    std::vector<std::string> out;
-    std::string item;
-    for (const char *p = list != NULL ? list : ""; ; p++) {
-        if (*p == ',' || *p == ' ' || *p == '\t' || *p == '\0') {
-            if (!item.empty())
-                out.push_back(item);
-            item.clear();
-            if (*p == '\0')
-                break;
-        } else {
-            item += *p;
-        }
-    }
-    return out;
-}
 
 // Online Tailscale peers from `tailscale status`: one line per machine,
 // its Tailscale address first and "offline" in the status when it is.
@@ -82,7 +62,7 @@ net::Config LoadConfig()
     int port = Platform_GetSettingInt("net.port", config.port);
     if (port > 0 && port < 65536)
         config.port = (uint16_t)port;
-    config.peers = Split(Platform_GetSetting("net.peers", ""));
+    config.peers = net::SplitList(Platform_GetSetting("net.peers", ""));
     config.broadcast = Platform_GetSettingInt("net.broadcast", 1) != 0;
     const char *tailscale = Platform_GetSetting("net.tailscale", "auto");
     if (SDL_strcasecmp(tailscale, "0") != 0 && SDL_strcasecmp(tailscale, "off") != 0)
@@ -104,62 +84,5 @@ extern "C" HRESULT Net_InitializeConnection(int provider)
 {
     if (provider != 0)
         return NET_ERR_INVALIDPARAMS;
-    if (!s_session)
-        s_session.reset(new net::Session(LoadConfig()));
-    return s_session->Start();
-}
-
-extern "C" HRESULT Net_EnumSessions(const NetGuid *application, DWORD, NetSessionCallback callback, void *context)
-{
-    return s_session ? s_session->EnumSessions(application, callback, context) : NET_ERR_UNINITIALIZED;
-}
-
-extern "C" HRESULT Net_Open(const NetSessionDesc *desc, DWORD flags)
-{
-    return s_session ? s_session->Open(desc, flags) : NET_ERR_UNINITIALIZED;
-}
-
-extern "C" HRESULT Net_Close(void)
-{
-    return s_session ? s_session->Close() : NET_OK;
-}
-
-extern "C" HRESULT Net_GetSessionDesc(NetSessionDesc *desc)
-{
-    return s_session ? s_session->GetSessionDesc(desc) : NET_ERR_NOCONNECTION;
-}
-
-extern "C" HRESULT Net_SetSessionDesc(const NetSessionDesc *desc)
-{
-    return s_session ? s_session->SetSessionDesc(desc) : NET_ERR_NOCONNECTION;
-}
-
-extern "C" HRESULT Net_CreatePlayer(NetPlayerID *id, const NetName *name, const void *data, DWORD dataSize)
-{
-    return s_session ? s_session->CreatePlayer(id, name, data, dataSize) : NET_ERR_NOCONNECTION;
-}
-
-extern "C" HRESULT Net_DestroyPlayer(NetPlayerID id)
-{
-    return s_session ? s_session->DestroyPlayer(id) : NET_ERR_INVALIDPLAYER;
-}
-
-extern "C" HRESULT Net_EnumPlayers(NetPlayerCallback callback, void *context)
-{
-    return s_session ? s_session->EnumPlayers(callback, context) : NET_ERR_NOCONNECTION;
-}
-
-extern "C" HRESULT Net_SetPlayerData(NetPlayerID id, const void *data, DWORD dataSize)
-{
-    return s_session ? s_session->SetPlayerData(id, data, dataSize) : NET_ERR_NOCONNECTION;
-}
-
-extern "C" HRESULT Net_Send(NetPlayerID from, NetPlayerID to, BOOL guaranteed, const void *data, DWORD dataSize)
-{
-    return s_session ? s_session->Send(from, to, guaranteed, data, dataSize) : NET_ERR_NOCONNECTION;
-}
-
-extern "C" HRESULT Net_Receive(NetPlayerID *from, NetPlayerID *to, void *data, DWORD *dataSize)
-{
-    return s_session ? s_session->Receive(from, to, data, dataSize) : NET_ERR_NOMESSAGES;
+    return net::ApiStart(LoadConfig());
 }

@@ -93,6 +93,7 @@ set_source_files_properties(${GAME_QIFIST_UNITS} TARGET_DIRECTORY cmr2_game
 add_library(opencmr2_platform OBJECT
     platform/msvcrt.cpp
     platform/amiga/amiga_libfix.c
+    platform/amiga/amiga_qsort.c
     platform/amiga/amiga_sys.cpp
     platform/amiga/amiga_platform.cpp
     platform/amiga/amiga_modes.c
@@ -115,11 +116,58 @@ target_include_directories(opencmr2_platform PRIVATE ${MINIGL_INCLUDE_DIR})
 # __builtin_sqrt must expand to fsqrt instead of a fallback call to sqrt.
 set_source_files_properties(platform/amiga/amiga_libfix.c PROPERTIES COMPILE_FLAGS "-fno-builtin -fno-math-errno")
 
+# ---- Network transport (Domain B) ------------------------------------------
+# ENet 1.3.18's core, unmodified, with bsdsocket.library in place of unix.c.
+# net/amiga_compat holds the two empty headers unix.h wants (unistd.h,
+# sys/time.h) and is ahead of the system headers for this target only.
+set(ENET_DIR ${PROJECT_SOURCE_DIR}/third_party/enet)
+add_library(opencmr2_enet STATIC
+    ${ENET_DIR}/callbacks.c ${ENET_DIR}/compress.c ${ENET_DIR}/host.c ${ENET_DIR}/list.c
+    ${ENET_DIR}/packet.c ${ENET_DIR}/peer.c ${ENET_DIR}/protocol.c
+    net/enet_bsdsocket.c)
+target_include_directories(opencmr2_enet BEFORE PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/net/amiga_compat)
+target_include_directories(opencmr2_enet PUBLIC ${ENET_DIR}/include)
+target_include_directories(opencmr2_enet PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Sessions over that transport, serviced by the game's own task: no thread, no
+# lock (net/net_service.h). The Net_* entry points are net_api_amiga.cpp.
+add_library(opencmr2_net STATIC
+    net/net_session.cpp
+    net/net_payload.cpp
+    net/net_api_common.cpp
+    net/net_api_amiga.cpp)
+target_compile_definitions(opencmr2_net PUBLIC NET_SESSION_THREADED=0)
+target_include_directories(opencmr2_net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
+target_link_libraries(opencmr2_net PUBLIC opencmr2_enet)
+
+# Two sessions through the loopback with this compiler's own bitfields, the
+# payload conversion and a blocking, pumped join (target only).
+add_executable(amiga_net_loopback_test ${PROJECT_SOURCE_DIR}/tests/amiga/net_loopback_test.cpp
+    platform/amiga/amiga_sys.cpp)
+target_include_directories(amiga_net_loopback_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(amiga_net_loopback_test PRIVATE opencmr2_net)
+opencmr2_amiga_stack(amiga_net_loopback_test)
+
+# Hosts through the real Net_* entry points and trades the game's messages with
+# a Linux machine running tests/net_cross_peer (target only).
+add_executable(amiga_net_peer_test ${PROJECT_SOURCE_DIR}/tests/amiga/net_peer_test.cpp
+    platform/amiga/amiga_sys.cpp)
+target_include_directories(amiga_net_peer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(amiga_net_peer_test PRIVATE opencmr2_net)
+opencmr2_amiga_stack(amiga_net_peer_test)
+
+# The backend against the real stack: address handling, WaitSelect, gathered
+# datagrams and two ENet hosts through the loopback (target only).
+add_executable(amiga_enet_test ${PROJECT_SOURCE_DIR}/tests/amiga/enet_test.c
+    platform/amiga/amiga_sys.cpp)
+target_include_directories(amiga_enet_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(amiga_enet_test PRIVATE opencmr2_enet)
+opencmr2_amiga_stack(amiga_enet_test)
+
 # ---- Stubs (Domain B) ------------------------------------------------------
-# The features left out on this target: network, profiling and the host-only
+# The features left out on this target: profiling and the host-only
 # render enhancements.
 add_library(opencmr2_amiga_stubs OBJECT
-    net/net_stub.cpp
     platform/amiga/amiga_diagnostics.cpp
     render/amiga_enhancement_stubs.cpp)
 target_include_directories(opencmr2_amiga_stubs PUBLIC
@@ -140,7 +188,7 @@ add_executable(opencmr2
     $<TARGET_OBJECTS:opencmr2_amiga_stubs>)
 opencmr2_amiga_stack(opencmr2)
 target_compile_definitions(opencmr2 PRIVATE OPENCMR2_AMIGA_STACK=${OPENCMR2_AMIGA_STACK})
-target_link_libraries(opencmr2 PRIVATE opencmr2_domain_a opencmr2_platform opencmr2_bink)
+target_link_libraries(opencmr2 PRIVATE opencmr2_domain_a opencmr2_platform opencmr2_bink opencmr2_net)
 # bridge_client.c is compiled into opencmr2_platform; no prebuilt library
 # (the SDK .a is not in a format the GCC hunk linker accepts).
 target_link_directories(opencmr2 PRIVATE ${MINIGL_LIBRARY_DIR})

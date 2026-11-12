@@ -12,6 +12,20 @@ void AmigaSys_SetCommandLine(const char *line);
 /* Game data and user directories. Default and supported layout: PROGDIR:. */
 void AmigaSys_SetDataDir(const char *path);
 void AmigaSys_SetUserDir(const char *path);
+
+/* A function the platform layer calls from the game's own task while the game
+   is busy: on every event poll and every file read, at most once per 50 ms
+   (what keeps the network session answering during a stage load). NULL
+   removes it. The call comes from the task that registered it. */
+void AmigaSys_SetBackgroundPump(void (*pump)(void));
+/* Longest time between two calls of the pump since it was registered, in
+   milliseconds (a measurement, logged by the network layer). */
+unsigned long AmigaSys_GetPumpGapMax(void);
+
+/* Runs once at the start of AmigaSys_Shutdown, before the timer, the log and
+   the libraries are closed: for subsystems that own OS resources of their own
+   (the network session closes its sockets and bsdsocket.library). */
+void AmigaSys_SetShutdownHook(void (*hook)(void));
 const char *AmigaSys_GetDataDir(void);
 const char *AmigaSys_GetUserDir(void);
 /* Creates opencmr2.ini in the user directory with the v1 defaults if it is

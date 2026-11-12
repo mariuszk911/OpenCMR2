@@ -10,6 +10,13 @@
  * game reads by offset.
  *
  * Result codes and system message types have DirectPlay's values.
+ *
+ * Payloads (Net_Send, Net_CreatePlayer, Net_SetPlayerData, and the application
+ * GUID of the session description) are the game's own structures in the
+ * machine's native layout. On the wire they are the original PC layout; a
+ * big-endian machine converts at this boundary (src/net/net_payload.h). The
+ * player data given to Net_SetPlayerData is the NetPlayerInfo filled through
+ * its bitfields; the one given to Net_CreatePlayer has an integer flags word.
  */
 #ifndef OPENCMR2_PORT_NET_H
 #define OPENCMR2_PORT_NET_H
