@@ -416,6 +416,13 @@ add_executable(amiga_keys_test amiga_keys.cpp)
 target_include_directories(amiga_keys_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_keys COMMAND amiga_keys_test)
 
+# The Amiga build's bounds-safe qsort, under its own name (the host keeps its
+# libc qsort, which the test also compares it with).
+add_executable(amiga_qsort_test amiga_qsort.cpp ${PROJECT_SOURCE_DIR}/src/platform/amiga/amiga_qsort.c)
+target_include_directories(amiga_qsort_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(amiga_qsort_test PRIVATE AMIGA_QSORT_HOST_TEST)
+add_test(NAME amiga_qsort COMMAND amiga_qsort_test)
+
 add_executable(amiga_paths_test amiga_paths.cpp)
 target_include_directories(amiga_paths_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_paths COMMAND amiga_paths_test)

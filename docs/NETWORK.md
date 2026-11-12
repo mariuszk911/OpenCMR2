@@ -146,6 +146,15 @@ and rules:
 - `Open(JOIN)` waits up to 5 s for the host with the game blocked, as
   DirectPlay did.
 - The sockets and the library are closed when the game exits (`AmigaSys_Shutdown`).
+- Amiga host crash at race start (fixed 2026-11-12, `src/platform/amiga/amiga_qsort.c`):
+  pressing Start sorts the player ids (`NetPlayers_RebuildSortedPlayerIDs`)
+  with a comparator that never returns 0. libnix's `qsort` ran off the array
+  when the ids were already in order, which is the case only on the host
+  (its own id, machine 1, is the smaller one), and its swaps scrambled the
+  program's BSS; the AHI driver then called a dead sound hook (Guru 80000004
+  in "Emu68 HDMI AHI") or the machine froze. The network code was not
+  involved: a trace showed the send of the setup packet completing and the
+  game crashing before its next frame.
 
 Target checks (PiStorm, Roadshow 4.106, under `tests/amiga/`): `amiga_enet_test`
 (the backend over the loopback), `amiga_net_loopback_test` (two sessions with this

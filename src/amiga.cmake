@@ -93,6 +93,7 @@ set_source_files_properties(${GAME_QIFIST_UNITS} TARGET_DIRECTORY cmr2_game
 add_library(opencmr2_platform OBJECT
     platform/msvcrt.cpp
     platform/amiga/amiga_libfix.c
+    platform/amiga/amiga_qsort.c
     platform/amiga/amiga_sys.cpp
     platform/amiga/amiga_platform.cpp
     platform/amiga/amiga_modes.c
