@@ -53,6 +53,14 @@ bool s_changed = false;
 int s_localPlayers = 2;
 bool s_textEntryOpen = false;
 
+// Delete or Backspace clears a binding on the controls pages; the Amiga has
+// no gamepad, so the west face button never does.
+const unsigned char DIK_CLEAR_DELETE = 0xD3;
+const unsigned char DIK_CLEAR_BACKSPACE = 0x0E;
+bool s_clearHeld = false;
+bool s_clearPressed = false;
+int s_shownProfile = -1;
+
 // Capture of the next key for an action.
 bool s_capturing = false;
 int s_capturePlayer = 0;
@@ -116,6 +124,9 @@ bool ActionDown(const Bindings &bindings, int action)
 extern "C" void Input_Update(void)
 {
     Load();
+    bool clear = AmigaSys_IsKeyDown(DIK_CLEAR_DELETE) || AmigaSys_IsKeyDown(DIK_CLEAR_BACKSPACE);
+    s_clearPressed = clear && !s_clearHeld;
+    s_clearHeld = clear;
 }
 
 extern "C" void Input_SetLocalPlayers(int count)
@@ -324,6 +335,53 @@ extern "C" void Input_ReloadBindings(void)
     Load();
     memcpy(s_bindings, s_saved, sizeof(s_bindings));
     s_changed = false;
+}
+
+extern "C" int Input_GetProfileAction(int profile, int action)
+{
+    Load();
+    if (profile < 0 || profile >= INPUT_PLAYERS || action < 0 || action >= INPUT_ACTION_COUNT)
+        return 0;
+    return ActionDown(s_bindings[profile], action) ? INPUT_FULL : 0;
+}
+
+extern "C" void Input_ClearBinding(int profile, int action)
+{
+    Load();
+    if (profile < 0 || profile >= INPUT_PLAYERS || action < 0 || action >= INPUT_ACTION_COUNT)
+        return;
+    if (s_bindings[profile].key[action][0] == 0 && s_bindings[profile].key[action][1] == 0)
+        return;
+    s_bindings[profile].key[action][0] = 0;
+    s_bindings[profile].key[action][1] = 0;
+    s_changed = true;
+}
+
+extern "C" BOOL Input_IsClearPressed(void)
+{
+    return s_clearPressed;
+}
+
+extern "C" const char *Input_GetClearButtonName(void)
+{
+    return NULL;
+}
+
+extern "C" void Input_SetShownProfile(int profile)
+{
+    s_shownProfile = profile < 0 || profile >= INPUT_PLAYERS ? -1 : profile;
+}
+
+extern "C" BOOL Input_HasForceFeedback(int profile)
+{
+    (void)profile;
+    return FALSE;
+}
+
+extern "C" unsigned int Input_GetFeedbackStrength(int player)
+{
+    (void)player;
+    return 0x8000;
 }
 
 // ---- raw keyboard and mouse ---------------------------------------------------------
