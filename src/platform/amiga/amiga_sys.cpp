@@ -1226,6 +1226,42 @@ extern "C" void Sys_FlushFile(SysFile *file)
         Sys_Log("Flush %s failed (IoErr %ld)", file->path, (long)IoErr());
 }
 
+// Writes the whole file under a staging name next to it and puts it in place
+// with ReplaceFile, so a failed or interrupted write leaves the previous file.
+extern "C" int Sys_SaveFile(const char *path, const void *data, uint32_t size)
+{
+    char native[kNativePathSize];
+    char staging[kNativePathSize];
+
+    if (path == NULL || (data == NULL && size != 0))
+        return 0;
+    if (!Sys_ResolvePath(path, 1, native, sizeof(native)))
+        return 0;
+    if (!AppendSuffix(staging, sizeof(staging), native, AMIGA_STAGING_SUFFIX)) {
+        Sys_Log("save: path too long: %s", native);
+        return 0;
+    }
+    BPTR handle = Open((STRPTR)staging, MODE_NEWFILE);
+    if (handle == 0) {
+        Sys_Log("save: cannot create %s (IoErr %ld)", staging, (long)IoErr());
+        return 0;
+    }
+    const LONG written = size != 0 ? Write(handle, (APTR)data, (LONG)size) : 0;
+    const LONG writeError = IoErr();
+    const bool closed = Close(handle) != 0;
+    if (written != (LONG)size || !closed) {
+        Sys_Log("save: cannot write %s (%ld of %lu bytes, IoErr %ld)", staging, (long)written,
+                (unsigned long)size, (long)(closed ? writeError : IoErr()));
+        DeleteFile((STRPTR)staging);
+        return 0;
+    }
+    if (!ReplaceFile(staging, native)) {
+        Sys_Log("save: cannot replace %s", native);
+        return 0;
+    }
+    return 1;
+}
+
 extern "C" int Sys_FileExists(const char *path)
 {
     char native[kNativePathSize];

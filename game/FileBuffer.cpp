@@ -78,8 +78,10 @@ void *CFileBuffer::GetGenericFileBuffer(char *fileName, BOOL isLocalFile)
     {
         // PORT: AMIGA: BFL archiveSize is little-endian on disk.
         pFileHeaderOut.archiveSize = ReadLE32(&pFileHeaderOut.archiveSize);
-        if (pFileHeaderOut.archiveSize == 0xffffffff)
+        if (pFileHeaderOut.archiveSize == 0xffffffff) {
+            gzclose(unk0x004bdee0);   // PORT: the original left it open
             return NULL;
+        }
 
         lpBuffer = AllocateLockedBuffer(pFileHeaderOut.archiveSize);
         // PORT: AMIGA: a short read must not return a partly filled buffer.
