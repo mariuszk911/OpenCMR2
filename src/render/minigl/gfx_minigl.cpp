@@ -1122,7 +1122,13 @@ void BuildModeList(void)
         if (windowed)
             n = 1;   // the default; the window is shrunk to fit
     }
-    s_modeCount = DisplayModes_Trim(s_modeList, n, DISPLAY_MODES_GAME_MAX);
+    {
+        // Keep the Workbench screen's size in the list, then spread the rest.
+        int wbWidth = 0;
+        int wbHeight = 0;
+        Sys_GetDesktopSize(&wbWidth, &wbHeight);
+        s_modeCount = DisplayModes_Select(s_modeList, n, DISPLAY_MODES_GAME_MAX, wbWidth, wbHeight);
+    }
     for (int i = 0; i < s_modeCount; ++i)
         Sys_Log("gfx: %s mode %d: %dx%d", ModeKind(!windowed), i, s_modeList[i].width, s_modeList[i].height);
 }

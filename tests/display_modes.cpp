@@ -45,6 +45,28 @@ int main()
     for (int i = 1; i < n; ++i)
         REQUIRE(DisplayModes_Less(list[i - 1].width, list[i - 1].height, list[i].width, list[i].height));
 
+    // Select keeps the smallest, the largest and the Workbench size, and
+    // spreads the rest.
+    n = 0;
+    for (int w = 640; w < 640 + 30 * 32; w += 32)
+        n = DisplayModes_Add(list, n, DISPLAY_MODES_COLLECT_MAX, w, 480);
+    REQUIRE(n == 30);
+    n = DisplayModes_Select(list, n, DISPLAY_MODES_GAME_MAX, 640 + 3 * 32, 480);
+    REQUIRE(n == DISPLAY_MODES_GAME_MAX);
+    REQUIRE(list[0].width == 640);
+    REQUIRE(list[n - 1].width == 640 + 29 * 32);
+    bool hasWb = false;
+    for (int i = 0; i < n; ++i)
+        hasWb = hasWb || list[i].width == 640 + 3 * 32;
+    REQUIRE(hasWb);
+    for (int i = 1; i < n; ++i)
+        REQUIRE(DisplayModes_Less(list[i - 1].width, list[i - 1].height, list[i].width, list[i].height));
+    // A short list, or a Workbench size not in it, is handled.
+    REQUIRE(DisplayModes_Select(list, 4, DISPLAY_MODES_GAME_MAX, 1, 1) == 4);
+    n = 30;
+    for (int i = 0; i < n; ++i) { list[i].width = 640 + i * 32; list[i].height = 480; }
+    REQUIRE(DisplayModes_Select(list, n, DISPLAY_MODES_GAME_MAX, 1, 1) == DISPLAY_MODES_GAME_MAX);
+
     printf("display_modes: OK\n");
     return 0;
 }

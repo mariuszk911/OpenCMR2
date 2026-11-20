@@ -5,8 +5,10 @@
  * The list is sorted by width, then height, holds each size once and keeps at
  * most the game's 10 entries. Sizes under 640x480 are left out, as the game's
  * own check (CGraphics::EnumerateCompatibleDisplayModes) does. A full list
- * drops its second-smallest entry, as gfx_core's BuildModes does, so 640x480
- * and the largest modes stay.
+ * is thinned by DisplayModes_Select: 640x480, the largest mode and the
+ * Workbench size stay, the rest are spread evenly. (DisplayModes_Trim is the
+ * older rule that drops the second-smallest entry, as gfx_core's BuildModes
+ * does.)
  */
 #ifndef OPENCMR2_PORT_DISPLAY_MODES_H
 #define OPENCMR2_PORT_DISPLAY_MODES_H
@@ -58,6 +60,58 @@ static inline int DisplayModes_Trim(DisplayModeSize *list, int count, int max)
         --count;
     }
     return count;
+}
+
+/* Reduces the sorted list to at most max entries. Always keeps the smallest,
+ * the largest and the keepWidth x keepHeight size (the Workbench screen) when
+ * the list holds it, then fills the remaining slots with evenly spaced
+ * entries. Returns the new count; the list stays sorted. */
+static inline int DisplayModes_Select(DisplayModeSize *list, int count, int max, int keepWidth, int keepHeight)
+{
+    unsigned char marked[DISPLAY_MODES_COLLECT_MAX];
+    int marks = 0;
+    int i;
+    int kept = 0;
+
+    if (count <= max || max < 1 || count > DISPLAY_MODES_COLLECT_MAX)
+        return count;
+    for (i = 0; i < count; ++i)
+        marked[i] = 0;
+    marked[0] = 1;
+    marks = 1;
+    if (max >= 2) {
+        marked[count - 1] = 1;
+        ++marks;
+    }
+    for (i = 0; i < count && marks < max; ++i) {
+        if (!marked[i] && list[i].width == keepWidth && list[i].height == keepHeight) {
+            marked[i] = 1;
+            ++marks;
+        }
+    }
+    {
+        const int extra = max - marks;
+        int k;
+        for (k = 1; k <= extra; ++k) {
+            const int target = k * (count - 1) / (extra + 1);
+            int best = -1;
+            int bestDist = count;
+            for (i = 0; i < count; ++i) {
+                const int d = i > target ? i - target : target - i;
+                if (!marked[i] && d < bestDist) {
+                    best = i;
+                    bestDist = d;
+                }
+            }
+            if (best >= 0)
+                marked[best] = 1;
+        }
+    }
+    for (i = 0; i < count; ++i) {
+        if (marked[i])
+            list[kept++] = list[i];
+    }
+    return kept;
 }
 
 /* Keeps only the sizes that fit in maxWidth x maxHeight. Returns the count. */
