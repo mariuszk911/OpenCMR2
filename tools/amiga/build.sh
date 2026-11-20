@@ -25,7 +25,7 @@ usage() {
     cat <<'EOF'
 usage: tools/amiga/build.sh [--clean] [--info] [--probe] [--layout]
 
-  --clean   remove build/amiga and dist/amiga before configuring
+  --clean   remove build/amiga, dist/amiga and dist/amiga-tests before configuring
   --info    print the resolved mode, image, compiler, CMake, SDK and flags
   --probe   run the M0.4 compiler/toolchain probes instead of building
   --layout  run the M0.5 layout probe instead of building
@@ -162,11 +162,11 @@ if [ "$info" = 1 ]; then
 fi
 
 if [ "$clean" = 1 ]; then
-    rm -rf "$REPO/build/amiga" "$REPO/dist/amiga"
+    rm -rf "$REPO/build/amiga" "$REPO/dist/amiga" "$REPO/dist/amiga-tests"
 fi
 
 fix_ownership() {
-    for dir in "$REPO/build/amiga" "$REPO/dist/amiga"; do
+    for dir in "$REPO/build/amiga" "$REPO/dist/amiga" "$REPO/dist/amiga-tests"; do
         [ -e "$dir" ] || continue
         if find "$dir" ! -user "$(id -u)" -print -quit 2>/dev/null | grep -q .; then
             case "$dir" in
@@ -230,18 +230,19 @@ else
 fi
 
 # ---- staging ----------------------------------------------------------------
-mkdir -p "$REPO/dist/amiga/Libs" "$REPO/dist/amiga/tests"
+# dist/amiga is the release drawer (tools/amiga/package.sh archives it as is);
+# the diagnostics go to dist/amiga-tests, never next to the release files.
+mkdir -p "$REPO/dist/amiga/Libs" "$REPO/dist/amiga-tests"
 cp "$REPO/build/amiga/opencmr2" "$REPO/dist/amiga/opencmr2"
 chmod 755 "$REPO/dist/amiga/opencmr2"
 # Workbench icon (made by tools/amiga/make_info_icon.py).
 cp "$REPO/res/amiga/opencmr2.info" "$REPO/dist/amiga/opencmr2.info"
 chmod 644 "$REPO/dist/amiga/opencmr2.info"
-# Diagnostics and Sys smoke tests live under tests/, never next to the
-# deployment files.
+rm -rf "$REPO/dist/amiga/tests"
 for binary in "$REPO"/build/amiga/amiga_smoke "$REPO"/build/amiga/amiga_*_test; do
     [ -f "$binary" ] || continue
-    cp "$binary" "$REPO/dist/amiga/tests/"
-    chmod 755 "$REPO/dist/amiga/tests/$(basename "$binary")"
+    cp "$binary" "$REPO/dist/amiga-tests/"
+    chmod 755 "$REPO/dist/amiga-tests/$(basename "$binary")"
 done
 # Compiled GLES2 shaders (ogles2 finds them in PROGDIR:shaders/ by the hash of
 # the shader text; see tools/amiga/shaders/README). Missing binaries are
@@ -257,28 +258,9 @@ cp "$PISTORM3D_ROOT/bin/minigl.library" "$REPO/dist/amiga/Libs/minigl.library"
 chmod 644 "$REPO/dist/amiga/Libs/minigl.library"
 cp "$PISTORM3D_ROOT/licences/License_MiniGL_Library.txt" "$REPO/dist/amiga/License_MiniGL_Library.txt"
 chmod 644 "$REPO/dist/amiga/License_MiniGL_Library.txt"
-
-cat > "$REPO/dist/amiga/README" <<'EOF'
-OpenCMR2 for AmigaOS 3.2 / PiStorm
-
-  opencmr2                    the game executable
-  opencmr2.info               its Workbench icon (double-click to start)
-  tests/                     Sys/platform diagnostics; not deployment files
-  Libs/minigl.library         MiniGL 29.1, matching the SDK it was built with
-  shaders/                    compiled GLES2 shaders (renderer = gles2), see below
-  License_MiniGL_Library.txt  MiniGL licence
-
-Requirements: AmigaOS 3.2, PiStorm, RTG (640x480 baseline), AHI and the
-original PC game data. The binary targets 68040 + FPU; acceptance testing
-uses the 68060/PAL PiStorm.
-
-Install Libs/minigl.library in LIBS:, keep the game data next to opencmr2,
-and run:
-
-  opencmr2
-
-The diagnostics under tests/ are for development only. amiga_smoke writes a
-PPM and a Shell log; the Sys tests use PROGDIR: fixtures next to the binary.
-EOF
+cp "$REPO/LICENSE" "$REPO/dist/amiga/LICENSE"
+chmod 644 "$REPO/dist/amiga/LICENSE"
+cp "$REPO/res/amiga/README" "$REPO/dist/amiga/README"
+chmod 644 "$REPO/dist/amiga/README"
 
 printf 'build.sh: staged %s\n' "$REPO/dist/amiga"
