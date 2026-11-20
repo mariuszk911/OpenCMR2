@@ -1411,10 +1411,11 @@ extern "C" void Gfx_SetVirtualScreen(int width, int height)
         return;
     s_tlScreenActive = 0;
     const bool wasMenus = s_virtualWidth > 0 && s_virtualHeight > 0;
-    if (wasMenus && width == 0) {
+    // The frontend leaves the menus' screen at the end of every menu frame
+    // (MenuScreen_End), so this only arms the log: the first 3D draw on the
+    // real screen reports the stage entry.
+    if (wasMenus && width == 0)
         s_stageEntryPending = 1;
-        Sys_Log("AMIGA: stage: gameplay screen entered");
-    }
     if (width > 0 && height > 0 && s_diag.inStage) {
         // Returning from gameplay (virtual screen 0x0) to frontend menus.
         FlushStageDiagnostics("stage-exit");
@@ -3368,10 +3369,12 @@ void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexC
     if (!s_caps.probed)
         ProbeCapabilities();
 
-    s_diag.inStage = 1;
-    if (s_stageEntryPending) {
+    // 3D drawn on the menus' screen (a frontend scene) is not a stage.
+    if (s_virtualWidth == 0)
+        s_diag.inStage = 1;
+    if (s_stageEntryPending && s_virtualWidth == 0) {
         s_stageEntryPending = 0;
-        Sys_Log("AMIGA: stage: first 3D draw primitive=%d vertices=%u indices=%u",
+        Sys_Log("AMIGA: stage: gameplay screen entered, first 3D draw primitive=%d vertices=%u indices=%u",
                 primitive, (unsigned)vertexCount, (unsigned)indexCount);
     }
     s_diag.drawCalls3D++;
