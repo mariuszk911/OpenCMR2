@@ -1,7 +1,7 @@
 // The OpenGL ES 2.0 executor for AmigaOS (ogles2.library on a PiStorm's V3D):
 // runs a frame recorded by gfx_core.cpp, as gfx_gl.cpp does on OpenGL 3.3, with
 // the shaders of gfx_gles2_shaders.h and the uniform packing of
-// gles2_uniforms.h. See docs/AMIGA_GLES2_PLAN.md.
+// gles2_uniforms.h. See docs/AMIGA_PORT.md, "Renderer selection".
 //
 // Images keep Direct3D's rows, as in gfx_gl.cpp: the first row of every target
 // is its top, the vertex shaders flip y, faces wind the other way round, and

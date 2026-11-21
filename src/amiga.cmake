@@ -273,8 +273,7 @@ target_include_directories(opencmr2_bink PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # GCC 6.5 for m68k keeps values in call-clobbered registers (a0/a1/d0/d1) across
 # calls when -fcaller-saves is on and does not save them, so the decoder's
 # changed-macroblock map was corrupted (a crash at frame 46 of cm.bik, or wrong
-# flags, depending on code layout). Approved for the Bink library only; see the
-# gotcha in docs/AMIGA_PORT.md for the evidence.
+# flags, depending on code layout). Approved for the Bink library only.
 set_source_files_properties(video/bink_decoder.cpp video/yuv_rgba.cpp
     PROPERTIES COMPILE_OPTIONS -fno-caller-saves)
 

@@ -12,7 +12,7 @@ sync) and reports, per file, the changed lines and the `PORT: AMIGA` markers.
 
 --check fails when:
   * a game/ file differs from upstream but is not named in the divergence
-    manifest (docs/AMIGA_PORT.md), or
+    manifest (docs/GAME_DIVERGENCE.md), or
   * the number of differing files or changed lines exceeds
     tools/game_divergence_budget.json (a ratchet: lower it as hooks move into
     port/, never raise it without approval).
@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BASE_FILE = ROOT / "tools" / "game_divergence_base"
 BUDGET_FILE = ROOT / "tools" / "game_divergence_budget.json"
-MANIFEST = ROOT / "docs" / "AMIGA_PORT.md"
+MANIFEST = ROOT / "docs" / "GAME_DIVERGENCE.md"
 MARKER = "PORT: AMIGA"
 
 

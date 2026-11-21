@@ -3,7 +3,7 @@
  * (minigl_draw_bench.c, ogles2_draw_bench.c; Domain B, target only).
  *
  * One frame mirrors the measured shape of an OpenCMR2 stage frame on the
- * PiStorm (attract bench, TODO.md 2026-11-01 rows): about 411 3D draws of
+ * PiStorm (attract bench, measured 2026-11-01): about 411 3D draws of
  * about 10 triangles, a new modelview on about 60% of them (mvLoads), a
  * texture switch on about half, about 30% lit by one directional light and
  * the rest pre-lit vertex colours. The per-draw CPU cost, not the GPU, is

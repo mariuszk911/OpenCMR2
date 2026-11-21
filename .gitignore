@@ -14,3 +14,5 @@ SDKs/
 .codegraph/
 .mcp*
 opencode*
+# Internal working docs (handoffs, plans, status, TODO). Never tracked.
+/docs-internal/

@@ -6,7 +6,7 @@
  * They are constant strings on purpose: ogles2 finds a compiled program by a
  * hash of the exact text (PROGDIR:shaders/<hash>.v3dp), so nothing may be
  * added to them at run time. Any edit needs new binaries (see
- * docs/AMIGA_GLES2_PLAN.md, "Shipping the shader binaries").
+ * tools/amiga/shaders/README).
  *
  * Differences from the host shaders, all forced by GLSL ES 1.00 or chosen to
  * keep the Amiga's GPU work small:

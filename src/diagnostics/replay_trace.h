@@ -1,5 +1,5 @@
 /* Per-tick trace of car 0 for comparing a replay between builds
- * (docs/ATTRACT_REPLAY_DEBUG_PLAN.md, step 1). Domain A: it reads the game's
+ * (compare two traces with tools/replay_trace_diff.py). Domain A: it reads the game's
  * Car and ReplayStream records with the game's layout.
  *
  * On with the ini option [debug] replay_trace = <file>. Every simulation tick

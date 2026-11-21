@@ -3,8 +3,7 @@
  *
  * Opens the MiniGL renderer the way a small program does, straight with
  * Gfx_SetVideoMode and nothing before it: the case that crashed with a Line-A
- * Guru while AmigaSys_SetWindow used a NULL IntuitionBase
- * (docs/BINK_AMIGA_HANDOFF.md, section 5). Then it exercises the movie stream
+ * Guru while AmigaSys_SetWindow used a NULL IntuitionBase. Then it exercises the movie stream
  * textures (gfx_minigl_movie.h): creation, the padded GL size, refusal of
  * Gfx_LockTexture, a full upload, two row-run uploads, drawing and presenting
  * a few frames, and reuse of a destroyed texture's GL name. Run from a Shell:
