@@ -40,8 +40,17 @@ build (`linux-x86` preset) and `python3 tools/gen_disk_layouts.py --check`.
 
 ### Amiga
 
-The Amiga build needs the PiStorm3D SDK 29.1 in `SDKs/PiStorm3D` (not in the
-repository) and goes through one wrapper:
+The Amiga build needs three SDKs under `SDKs/` (not in the repository):
+
+| Directory | Source |
+| --- | --- |
+| `SDKs/PiStorm3D` | [PiStorm3D.lha](https://aminet.net/util/libs/PiStorm3D.lha) on Aminet (minigl.library 30.0 with the 29.1 client SDK) |
+| `SDKs/ogles2-sdk-1.3.3` | `ogles2-1.3.3-sdk.zip` from the [ogles2 v1.3.3 release](https://github.com/ladislawv/ogles2/releases/tag/v1.3.3) |
+| `SDKs/m68k-amigaos-ahi` | the AHI developer files in the toolchain image (`/root/build/ahi/m68k-amigaos-ahi`) |
+
+`.github/workflows/build.yml` fetches them with pinned SHA-256 checksums,
+builds, packages and attaches the `.lha` to a release for every `v*` tag.
+Locally the build goes through one wrapper:
 
 ```sh
 tools/amiga/build.sh            # incremental build
@@ -61,8 +70,8 @@ force-included header.
 **The SDK version is pinned.** A 29.1 client does not run on a 29.0
 `minigl.library`: the 29.1 dispatch table is one slot longer and
 `MiniGLOpen()` refuses the older library without a diagnostic. The wrapper
-rejects an SDK that is not 29.1, and the build checks
-`sizeof(MGLDispatchTable) == 840`. At run time the game tells the player when
+rejects a client SDK that is not 29.1 or a library older than 29.1, and the
+build checks `sizeof(MGLDispatchTable) == 840`. At run time the game tells the player when
 the library is missing or too old.
 
 ### Packaging

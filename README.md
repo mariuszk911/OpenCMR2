@@ -102,8 +102,9 @@ with your Amiga setup (PiStorm model, CPU, RTG mode, AHI driver).
 
 ## Building from source
 
-The port is cross-compiled on Linux with Bebbo's m68k-amigaos GCC and the
-PiStorm3D SDK 29.1, which is not included here. See
+The port is cross-compiled on Linux with Bebbo's m68k-amigaos GCC against the
+PiStorm3D, ogles2 and AHI SDKs, which are downloaded, not included here.
+Release archives are built by GitHub Actions for every version tag. See
 [docs/AMIGA_PORT.md](docs/AMIGA_PORT.md) for the toolchain, build and
 packaging, and [AGENTS.md](AGENTS.md) for the contribution rules. The original
 OpenCMR2 README for the Linux, Windows, macOS and Android builds is kept in
