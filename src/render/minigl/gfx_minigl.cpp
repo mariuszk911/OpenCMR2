@@ -18,6 +18,7 @@
 #include "port/sys.h"
 #include "platform/amiga/amiga_sys.h"
 #include "platform/amiga/amiga_modes.h"
+#include "platform/amiga/amiga_minigl_notice.h"
 #include "port/display_modes.h"
 
 #include <stdio.h>
@@ -1133,6 +1134,37 @@ void BuildModeList(void)
         Sys_Log("gfx: %s mode %d: %dx%d", ModeKind(!windowed), i, s_modeList[i].width, s_modeList[i].height);
 }
 
+// MiniGLOpen() fails silently both when minigl.library is missing and when it
+// is too old for this client (the release does not ship it). Tell the player
+// which, once per run, from the library's own version.
+void ReportMiniGLOpenFailure(void)
+{
+    static int s_reported;
+    if (s_reported)
+        return;
+    s_reported = 1;
+
+    int present = 0;
+    unsigned version = 0;
+    unsigned revision = 0;
+    struct Library *library = OpenLibrary((CONST_STRPTR)"minigl.library", 0);
+    if (library != NULL) {
+        present = 1;
+        version = library->lib_Version;
+        revision = library->lib_Revision;
+        CloseLibrary(library);
+    }
+    if (!present)
+        Sys_Log("gfx: MiniGLOpen failed: minigl.library not found");
+    else
+        Sys_Log("gfx: MiniGLOpen failed: minigl.library %u.%u (29.1 or newer required)",
+                version, revision);
+
+    char text[256];
+    AmigaMiniGLNotice_Text(text, sizeof(text), present, version, revision);
+    Sys_MessageBox("OpenCMR2", text, SYS_MESSAGEBOX_OK);
+}
+
 } // namespace
 
 extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
@@ -1146,7 +1178,7 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
         return ChangeMode(width, height, fullscreen);
     }
     if (!MiniGLOpen()) {
-        Sys_Log("gfx: MiniGLOpen failed");
+        ReportMiniGLOpenFailure();
         return 0;
     }
     s_miniglOpen = 1;

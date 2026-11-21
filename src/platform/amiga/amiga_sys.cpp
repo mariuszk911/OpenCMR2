@@ -1986,7 +1986,10 @@ extern "C" int Sys_MessageBox(const char *title, const char *text, int buttons)
         const BOOL retry = AutoRequest(NULL, &lines[0], &positive, &negative, 0, 0, 400, height);
         return retry ? SYS_MESSAGEBOX_RESULT_RETRY : SYS_MESSAGEBOX_RESULT_CANCEL;
     }
-    AutoRequest(NULL, &lines[0], NULL, NULL, 0, 0, 400, height);
+    // AutoRequest needs the negative gadget: without its text Intuition
+    // returns at once and nothing is shown.
+    negative.IText = (UBYTE *)"OK";
+    AutoRequest(NULL, &lines[0], NULL, &negative, 0, 0, 400, height);
     return SYS_MESSAGEBOX_RESULT_OK;
 }
 

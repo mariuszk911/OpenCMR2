@@ -432,6 +432,10 @@ add_executable(amiga_save_notice_test amiga_save_notice.cpp)
 target_include_directories(amiga_save_notice_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_save_notice COMMAND amiga_save_notice_test)
 
+add_executable(amiga_minigl_notice_test amiga_minigl_notice.cpp)
+target_include_directories(amiga_minigl_notice_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME amiga_minigl_notice COMMAND amiga_minigl_notice_test)
+
 add_executable(amiga_settings_test amiga_settings.cpp)
 target_include_directories(amiga_settings_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME amiga_settings COMMAND amiga_settings_test)
