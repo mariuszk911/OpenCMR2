@@ -64,7 +64,7 @@ for arg in "$@"; do
     esac
 done
 
-# ---- SDK pin (29.1) ---------------------------------------------------------
+# ---- SDK pin (29.1 client SDK) -----------------------------------------------------
 [ -d "$PISTORM3D_ROOT" ] || fail "PiStorm3D SDK not found: $PISTORM3D_ROOT (set PISTORM3D)"
 case "$PISTORM3D_ROOT" in
     /*) ;;
@@ -85,8 +85,15 @@ SDK="$PISTORM3D_ROOT/SDK"
 [ -f "$PISTORM3D_ROOT/bin/minigl.library" ] || fail "missing $PISTORM3D_ROOT/bin/minigl.library"
 head -n 1 "$SDK/README.txt" 2>/dev/null | grep -q '29\.1' \
     || fail "SDK README is not 29.1: $SDK/README.txt"
-grep -aq '\$VER: minigl.library 29.1' "$PISTORM3D_ROOT/bin/minigl.library" \
-    || fail "$PISTORM3D_ROOT/bin/minigl.library is not 29.1"
+# The client SDK is the pin (its README above, and sizeof(MGLDispatchTable) in
+# minigl_abi_check.cpp). The library beside it may be any release with the same
+# dispatch ABI: 29.1 or newer (PiStorm3D 30.0 ships the 29.1 client SDK).
+lib_ver=$(grep -ao '\$VER: minigl.library [0-9]*\.[0-9]*' "$PISTORM3D_ROOT/bin/minigl.library" \
+    | head -n 1 | sed 's/.* //')
+lib_major=${lib_ver%%.*}
+lib_minor=${lib_ver#*.}
+[ -n "$lib_ver" ] && { [ "$lib_major" -gt 29 ] || { [ "$lib_major" -eq 29 ] && [ "$lib_minor" -ge 1 ]; }; } \
+    || fail "$PISTORM3D_ROOT/bin/minigl.library is not 29.1 or newer (found '${lib_ver:-none}')"
 
 # ---- runner selection -------------------------------------------------------
 DOCKER_VIA_FLATPAK=0
