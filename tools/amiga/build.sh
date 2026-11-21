@@ -83,8 +83,6 @@ SDK="$PISTORM3D_ROOT/SDK"
 [ -f "$SDK/minigl-shared-library/include/proto/minigl.h" ] \
     || fail "missing MiniGL headers under $SDK/minigl-shared-library/include"
 [ -f "$PISTORM3D_ROOT/bin/minigl.library" ] || fail "missing $PISTORM3D_ROOT/bin/minigl.library"
-[ -f "$PISTORM3D_ROOT/licences/License_MiniGL_Library.txt" ] \
-    || fail "missing $PISTORM3D_ROOT/licences/License_MiniGL_Library.txt"
 head -n 1 "$SDK/README.txt" 2>/dev/null | grep -q '29\.1' \
     || fail "SDK README is not 29.1: $SDK/README.txt"
 grep -aq '\$VER: minigl.library 29.1' "$PISTORM3D_ROOT/bin/minigl.library" \
@@ -232,13 +230,16 @@ fi
 # ---- staging ----------------------------------------------------------------
 # dist/amiga is the release drawer (tools/amiga/package.sh archives it as is);
 # the diagnostics go to dist/amiga-tests, never next to the release files.
-mkdir -p "$REPO/dist/amiga/Libs" "$REPO/dist/amiga-tests"
+mkdir -p "$REPO/dist/amiga" "$REPO/dist/amiga-tests"
 cp "$REPO/build/amiga/opencmr2" "$REPO/dist/amiga/opencmr2"
 chmod 755 "$REPO/dist/amiga/opencmr2"
 # Workbench icon (made by tools/amiga/make_info_icon.py).
 cp "$REPO/res/amiga/opencmr2.info" "$REPO/dist/amiga/opencmr2.info"
 chmod 644 "$REPO/dist/amiga/opencmr2.info"
 rm -rf "$REPO/dist/amiga/tests"
+# minigl.library is a user requirement, not part of the release; drop the copy
+# older builds staged.
+rm -rf "$REPO/dist/amiga/Libs" "$REPO/dist/amiga/License_MiniGL_Library.txt"
 for binary in "$REPO"/build/amiga/amiga_smoke "$REPO"/build/amiga/amiga_*_test; do
     [ -f "$binary" ] || continue
     cp "$binary" "$REPO/dist/amiga-tests/"
@@ -254,10 +255,6 @@ if [ -d "$REPO/tools/amiga/shaders" ]; then
         cp "$shader" "$REPO/dist/amiga/shaders/"
     done
 fi
-cp "$PISTORM3D_ROOT/bin/minigl.library" "$REPO/dist/amiga/Libs/minigl.library"
-chmod 644 "$REPO/dist/amiga/Libs/minigl.library"
-cp "$PISTORM3D_ROOT/licences/License_MiniGL_Library.txt" "$REPO/dist/amiga/License_MiniGL_Library.txt"
-chmod 644 "$REPO/dist/amiga/License_MiniGL_Library.txt"
 cp "$REPO/LICENSE" "$REPO/dist/amiga/LICENSE"
 chmod 644 "$REPO/dist/amiga/LICENSE"
 cp "$REPO/res/amiga/README" "$REPO/dist/amiga/README"

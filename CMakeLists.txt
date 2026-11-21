@@ -52,8 +52,7 @@ if(AMIGAOS)
     foreach(required
             "${PISTORM3D}/SDK/lib/libminigl.a"
             "${PISTORM3D}/SDK/minigl-shared-library/include/proto/minigl.h"
-            "${PISTORM3D}/bin/minigl.library"
-            "${PISTORM3D}/licences/License_MiniGL_Library.txt")
+            "${PISTORM3D}/bin/minigl.library")
         if(NOT EXISTS "${required}")
             message(FATAL_ERROR "OpenCMR2: missing ${required}; set PISTORM3D to the PiStorm3D SDK root")
         endif()

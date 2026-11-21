@@ -9,33 +9,33 @@ Contents
 
   opencmr2                    the game
   opencmr2.info               its Workbench icon
-  Libs/minigl.library         MiniGL 29.1, the version the game is built for
   shaders/                    compiled shaders for the GLES2 renderer
   LICENSE                     OpenCMR2 licence (GNU GPL version 3)
-  License_MiniGL_Library.txt  MiniGL licence
 
 Requirements
 ------------
 
   - AmigaOS 3.2
-  - PiStorm on a Raspberry Pi 4 / CM4 (68040 + FPU build; tested on the
-    68060 PAL setup)
+  - PiStorm running Emu68 (68040 + FPU build). Tested only on a PiStorm32
+    with Emu68 1.1 beta on a CM4 (4 GB) at stock clock; not tested on a
+    real 68040/68060 or other accelerators.
   - RTG with a 32-bit screen mode, 640x480 or larger
   - AHI (no AHI means no sound)
+  - minigl.library 29.1 or newer in LIBS: (not included; 29.0 does not
+    work)
   - optional, for the GLES2 renderer: ogles2.library 1.3.3 or newer
   - the original PC installation of Colin McRae Rally 2.0
 
 Installing
 ----------
 
-1. Copy Libs/minigl.library to LIBS:.
-2. Make a COPY of the PC installation on an Amiga drive. Do not use your
+1. Make a COPY of the PC installation on an Amiga drive. Do not use your
    only copy: the Amiga version writes its settings and driver profiles in
    its own format, which the PC version cannot read (and the other way
    round). Saved games are kept apart from PC saves.
-3. Copy opencmr2, opencmr2.info and the shaders drawer into that copy,
+2. Copy opencmr2, opencmr2.info and the shaders drawer into that copy,
    next to the game data.
-4. Start the game from its icon, or from a Shell in that drawer:
+3. Start the game from its icon, or from a Shell in that drawer:
 
      opencmr2
 
@@ -79,5 +79,4 @@ and the OpenCMR2 project it is based on is at
 
   https://github.com/pablocpas/OpenCMR2
 
-MiniGL is distributed under its own licence (License_MiniGL_Library.txt).
 Colin McRae Rally 2.0 and its data belong to their owners.

@@ -16,10 +16,11 @@ fail() { printf 'package.sh: %s\n' "$1" >&2; exit 1; }
 
 command -v docker >/dev/null 2>&1 || fail "docker not found"
 [ -f "$DIST/opencmr2" ] || fail "no $DIST/opencmr2; run tools/amiga/build.sh --clean"
-for file in opencmr2.info README LICENSE License_MiniGL_Library.txt Libs/minigl.library; do
+for file in opencmr2.info README LICENSE; do
     [ -f "$DIST/$file" ] || fail "missing $DIST/$file"
 done
 [ ! -e "$DIST/tests" ] || fail "$DIST/tests is a stale diagnostics drawer; rebuild with --clean"
+[ ! -e "$DIST/Libs" ] || fail "$DIST/Libs must not be shipped (minigl.library is a user requirement); rebuild"
 
 version=$(strings "$DIST/opencmr2" | sed -n 's/^\$VER: OpenCMR2 \([0-9][0-9.]*\) .*/\1/p' | head -n 1)
 [ -n "$version" ] || fail "no \$VER: OpenCMR2 string in $DIST/opencmr2"
