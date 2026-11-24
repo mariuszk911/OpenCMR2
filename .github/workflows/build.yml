@@ -79,4 +79,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dist/*.lha dist/*.zip --verify-tag --generate-notes
+        run: |
+          # The tag must match the version compiled into the executable.
+          version=${RELEASE_TAG#v}
+          for f in "dist/OpenCMR2-amiga-$version.lha" "dist/OpenCMR2-amiga-$version.zip"; do
+            [ -f "$f" ] || { echo "::error::$f missing: tag $RELEASE_TAG does not match the \$VER version"; ls dist; exit 1; }
+          done
+          gh release create "$RELEASE_TAG" dist/*.lha dist/*.zip --verify-tag --generate-notes
