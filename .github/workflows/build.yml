@@ -15,6 +15,9 @@ permissions:
 jobs:
   amiga:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     env:
       # Pinned SDK downloads. A changed archive fails the checksum: update the
       # URL and hash together, after checking the new SDK keeps the dispatch
@@ -23,11 +26,28 @@ jobs:
       PISTORM3D_SHA256: 57f9e733eda999a7c5472f43249857e18bf1009caa228559c79c603a2fe5dc37
       OGLES2_URL: https://github.com/ladislawv/ogles2/releases/download/v1.3.3/ogles2-1.3.3-sdk.zip
       OGLES2_SHA256: 90d0469f95852c256cde159f432868b27225fd3c1d40ac00ccc8fe2824892858
-      IMAGE: opencmr2/amiga-toolchain:latest
     steps:
       - uses: actions/checkout@v4
+      # The toolchain image lives in GHCR, tagged with a hash of its Dockerfile:
+      # it is built and pushed only when the Dockerfile changes, otherwise
+      # pulled. Build.sh and package.sh pick it up through IMAGE.
       - name: Toolchain image
-        run: docker build -t "$IMAGE" -f tools/amiga/Dockerfile tools/amiga
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          tag=$(sha256sum tools/amiga/Dockerfile | cut -c1-16)
+          image="ghcr.io/$owner/opencmr2-amiga-toolchain:$tag"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          if docker pull "$image"; then
+            exit 0
+          fi
+          docker build -t "$image" -f tools/amiga/Dockerfile tools/amiga
+          # Pull requests from forks get a read-only token: build, don't push.
+          if [ "${{ github.event_name }}" != pull_request ]; then
+            docker push "$image"
+          fi
       - name: SDKs
         run: |
           mkdir -p SDKs "$RUNNER_TEMP/sdk"
