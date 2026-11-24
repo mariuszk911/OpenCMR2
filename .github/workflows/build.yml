@@ -93,6 +93,8 @@ jobs:
         with:
           pattern: OpenCMR2-amiga-*
           merge-multiple: true
+          # Keep the .zip a file: by default it is extracted into dist/.
+          skip-decompress: true
           path: dist
       - name: Publish tagged release
         env:
