@@ -1,5 +1,6 @@
 #!/bin/sh
-# Archives the release drawer dist/amiga as dist/OpenCMR2-amiga-<version>.lha,
+# Archives the release drawer dist/amiga as dist/OpenCMR2-amiga-<version>.lha
+# and .zip,
 # with everything inside a top-level OpenCMR2/ drawer. The version is read
 # from the executable's $VER string. Run tools/amiga/build.sh --clean first.
 #
@@ -33,4 +34,7 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$work":/w -w /w "$IMAGE" \
     sh -c "lha ao5q '$name' OpenCMR2 && lha t '$name' >/dev/null" \
     || fail "lha failed"
 cp "$work/$name" "$REPO/dist/$name"
-printf 'package.sh: %s (%s files)\n' "$REPO/dist/$name" "$(find "$work/OpenCMR2" -type f | wc -l)"
+zipname="OpenCMR2-amiga-$version.zip"
+(cd "$work" && python3 -I -m zipfile -c "$zipname" OpenCMR2) || fail "zip failed"
+cp "$work/$zipname" "$REPO/dist/$zipname"
+printf 'package.sh: %s, %s (%s files)\n' "$REPO/dist/$name" "$REPO/dist/$zipname" "$(find "$work/OpenCMR2" -type f | wc -l)"

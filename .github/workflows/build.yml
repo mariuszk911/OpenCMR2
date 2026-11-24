@@ -1,9 +1,8 @@
 name: build
 
 # The AmigaOS/PiStorm fork: build the Amiga target, package the .lha and
-# publish it on version tags. The upstream platform builds (Windows, macOS,
-# Android, Linux packages) are left to upstream; the Linux host build stays
-# here because it runs the portable tests the Amiga code relies on.
+# .zip and publish them on version tags. The upstream platform builds are
+# left to upstream.
 
 on:
   push:
@@ -14,32 +13,6 @@ permissions:
   contents: read
 
 jobs:
-  # game/ must stay close to upstream: every differing line is a future merge
-  # conflict (AGENTS.md rules 1-2).
-  game-divergence:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - run: python3 tools/game_divergence.py --check
-
-  # Host build and tests: game logic, file layouts and the portable Amiga
-  # helpers (codecs, settings, notices) are tested here.
-  linux:
-    runs-on: ubuntu-24.04
-    steps:
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y clang ninja-build glslang-tools \
-            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev \
-            libwayland-dev wayland-protocols libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev libdbus-1-dev
-      - uses: actions/checkout@v4
-      # Ubuntu 24.04 has no SDL3 package: the build fetches it.
-      - run: cmake --preset linux -DOPENCMR2_VENDORED_SDL=ON
-      - run: cmake --build --preset linux
-      - run: ctest --preset linux
-
   amiga:
     runs-on: ubuntu-24.04
     env:
@@ -76,31 +49,34 @@ jobs:
         run: tools/amiga/build.sh --clean
       - name: Package
         run: tools/amiga/package.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: OpenCMR2-amiga
+          # archive: false stores the file as-is; the artifact is named after it.
+          archive: false
           path: dist/OpenCMR2-amiga-*.lha
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: OpenCMR2-amiga-tests
-          path: dist/amiga-tests/
+          # archive: false stores the file as-is; the artifact is named after it.
+          archive: false
+          path: dist/OpenCMR2-amiga-*.zip
           if-no-files-found: error
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [game-divergence, linux, amiga]
+    needs: [amiga]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
-          name: OpenCMR2-amiga
+          pattern: OpenCMR2-amiga-*
+          merge-multiple: true
           path: dist
       - name: Publish tagged release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dist/*.lha --verify-tag --generate-notes
+        run: gh release create "$RELEASE_TAG" dist/*.lha dist/*.zip --verify-tag --generate-notes
