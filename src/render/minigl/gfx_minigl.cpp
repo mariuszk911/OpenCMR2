@@ -1134,31 +1134,40 @@ void BuildModeList(void)
         Sys_Log("gfx: %s mode %d: %dx%d", ModeKind(!windowed), i, s_modeList[i].width, s_modeList[i].height);
 }
 
-// MiniGLOpen() fails silently both when minigl.library is missing and when it
-// is too old for this client (the release does not ship it). Tell the player
-// which, once per run, from the library's own version.
-void ReportMiniGLOpenFailure(void)
+// The runtime library is a separate requirement from the 29.1 client SDK:
+// 29.1 accepts this client (same dispatch ABI) but can stall in its present
+// path right after the first picture, so 30.0 or newer is required.
+int QueryMiniGLVersion(int *present, unsigned *version, unsigned *revision)
+{
+    *present = 0;
+    *version = 0;
+    *revision = 0;
+    struct Library *library = OpenLibrary((CONST_STRPTR)"minigl.library", 0);
+    if (library == NULL)
+        return 0;
+    *present = 1;
+    *version = library->lib_Version;
+    *revision = library->lib_Revision;
+    CloseLibrary(library);
+    return 1;
+}
+
+// Tells the player, once per run, that the library is missing, too old, or
+// present with the right version but unable to start (e.g. no Emu68 3D).
+void ReportMiniGLFailure(int present, unsigned version, unsigned revision)
 {
     static int s_reported;
     if (s_reported)
         return;
     s_reported = 1;
 
-    int present = 0;
-    unsigned version = 0;
-    unsigned revision = 0;
-    struct Library *library = OpenLibrary((CONST_STRPTR)"minigl.library", 0);
-    if (library != NULL) {
-        present = 1;
-        version = library->lib_Version;
-        revision = library->lib_Revision;
-        CloseLibrary(library);
-    }
     if (!present)
-        Sys_Log("gfx: MiniGLOpen failed: minigl.library not found");
-    else
-        Sys_Log("gfx: MiniGLOpen failed: minigl.library %u.%u (29.1 or newer required)",
+        Sys_Log("gfx: MiniGLOpen failed: minigl.library not found (30.0 or newer required)");
+    else if (AmigaMiniGLNotice_IsTooOld(version, revision))
+        Sys_Log("gfx: minigl.library %u.%u is too old (30.0 or newer required)",
                 version, revision);
+    else
+        Sys_Log("gfx: MiniGLOpen failed: minigl.library %u.%u", version, revision);
 
     char text[256];
     AmigaMiniGLNotice_Text(text, sizeof(text), present, version, revision);
@@ -1177,8 +1186,16 @@ extern "C" int Gfx_SetVideoMode(int width, int height, int fullscreen)
             return 1;
         return ChangeMode(width, height, fullscreen);
     }
+    int present = 0;
+    unsigned version = 0;
+    unsigned revision = 0;
+    QueryMiniGLVersion(&present, &version, &revision);
+    if (!present || AmigaMiniGLNotice_IsTooOld(version, revision)) {
+        ReportMiniGLFailure(present, version, revision);
+        return 0;
+    }
     if (!MiniGLOpen()) {
-        ReportMiniGLOpenFailure();
+        ReportMiniGLFailure(present, version, revision);
         return 0;
     }
     s_miniglOpen = 1;

@@ -2,7 +2,8 @@
 # OpenCMR2 AmigaOS 68k build wrapper.
 #
 # Picks a native m68k-amigaos-gcc, Docker, or Docker through flatpak-spawn (the
-# VS Code Flatpak sandbox), validates the pinned PiStorm3D 29.1 SDK, configures
+# VS Code Flatpak sandbox), validates the pinned PiStorm3D 29.1 client SDK
+# (the runtime library must be minigl.library 30.0 or newer), configures
 # CMake with cmake/amigaos.toolchain.cmake and stages dist/amiga/.
 #
 # Do not invoke the cross compiler for a project build; use this script.
@@ -86,14 +87,15 @@ SDK="$PISTORM3D_ROOT/SDK"
 head -n 1 "$SDK/README.txt" 2>/dev/null | grep -q '29\.1' \
     || fail "SDK README is not 29.1: $SDK/README.txt"
 # The client SDK is the pin (its README above, and sizeof(MGLDispatchTable) in
-# minigl_abi_check.cpp). The library beside it may be any release with the same
-# dispatch ABI: 29.1 or newer (PiStorm3D 30.0 ships the 29.1 client SDK).
+# minigl_abi_check.cpp). The SDK's own minigl.library is only a build-time
+# fixture; the player must install a runtime library 30.0 or newer (29.1 has
+# the same dispatch ABI but can stall right after the first picture).
 lib_ver=$(grep -ao '\$VER: minigl.library [0-9]*\.[0-9]*' "$PISTORM3D_ROOT/bin/minigl.library" \
     | head -n 1 | sed 's/.* //')
 lib_major=${lib_ver%%.*}
 lib_minor=${lib_ver#*.}
 [ -n "$lib_ver" ] && { [ "$lib_major" -gt 29 ] || { [ "$lib_major" -eq 29 ] && [ "$lib_minor" -ge 1 ]; }; } \
-    || fail "$PISTORM3D_ROOT/bin/minigl.library is not 29.1 or newer (found '${lib_ver:-none}')"
+    || fail "SDK bundle $PISTORM3D_ROOT/bin/minigl.library is not 29.1 or newer (found '${lib_ver:-none}')"
 
 # ---- runner selection -------------------------------------------------------
 DOCKER_VIA_FLATPAK=0
@@ -149,7 +151,8 @@ if [ "$info" = 1 ]; then
     printf 'repo:       %s\n' "$REPO"
     printf 'mode:       %s\n' "$mode_line"
     printf 'sdk:        %s\n' "$PISTORM3D_ROOT"
-    printf 'sdk pin:    29.1 (README, minigl.library and MGLDispatchTable check)\n'
+    printf 'client sdk: 29.1 (README, SDK library and MGLDispatchTable check)\n'
+    printf 'runtime:    minigl.library 30.0 or newer (installed by the player)\n'
     printf 'compiler:   %s\n' "$compiler"
     printf 'cmake:      %s\n' "$cmake_line"
     printf 'generator:  Ninja\n'

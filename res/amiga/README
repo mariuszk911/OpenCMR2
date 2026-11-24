@@ -21,8 +21,8 @@ Requirements
     real 68040/68060 or other accelerators.
   - RTG with a 32-bit screen mode, 640x480 or larger
   - AHI (no AHI means no sound)
-  - minigl.library 29.1 or newer in LIBS: (not included; 29.0 does not
-    work)
+  - minigl.library 30.0 or newer in LIBS: (not included). PiStorm3D:
+    https://aminet.net/package/util/libs/PiStorm3D
   - optional, for the GLES2 renderer: ogles2.library 1.3.3 or newer
   - the original PC installation of Colin McRae Rally 2.0
 

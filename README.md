@@ -33,8 +33,8 @@ GLES2) renderer, AHI sound and keyboard controls. There is no emulation.
 - AHI (without AHI the game runs silently)
 - For network play: a TCP/IP stack with bsdsocket.library 4 or newer
   (Roadshow, Miami or Genesis)
-- `minigl.library` 29.1 or newer in `LIBS:` (not included; version 29.0 does
-  not work)
+- `minigl.library` 30.0 or newer in `LIBS:` (not included). Download PiStorm3D from Aminet:
+  https://aminet.net/package/util/libs/PiStorm3D
 - Optional, for the GLES2 renderer: ogles2.library 1.3.3 or newer
 - The original PC installation of Colin McRae Rally 2.0
 

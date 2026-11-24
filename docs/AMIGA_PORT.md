@@ -17,7 +17,7 @@ reference for game logic and file layout.
 | Hardware | PiStorm running Emu68. Tested only on a PiStorm32 with Emu68 1.1 beta on a CM4 (4 GB) at stock clock |
 | Display | RTG, 32-bit mode, 640x480 or larger |
 | Audio | AHI (without it the game runs silent) |
-| 3D | `minigl.library` 29.1 or newer, installed by the user (not shipped); optionally ogles2.library 1.3.3 or newer |
+| 3D | `minigl.library` 30.0 or newer, installed by the user (not shipped). [PiStorm3D from Aminet](https://aminet.net/package/util/libs/PiStorm3D); optionally ogles2.library 1.3.3 or newer |
 | Game data | The user's original PC installation, next to the executable (`PROGDIR:`) |
 
 SDL3 is not linked into the Amiga binary. The platform layer, renderers, audio
@@ -67,12 +67,15 @@ Incremental builds on this toolchain do not notice every header or flag
 change. Use `--clean` after changing a structure, a compiler flag or a
 force-included header.
 
-**The SDK version is pinned.** A 29.1 client does not run on a 29.0
-`minigl.library`: the 29.1 dispatch table is one slot longer and
-`MiniGLOpen()` refuses the older library without a diagnostic. The wrapper
-rejects a client SDK that is not 29.1 or a library older than 29.1, and the
-build checks `sizeof(MGLDispatchTable) == 840`. At run time the game tells the player when
-the library is missing or too old.
+**The client SDK and the runtime library are separate pins.** The client is
+built against the PiStorm3D 29.1 SDK (`MINIGL_VERSION 29`, dispatch ABI 5,
+`sizeof(MGLDispatchTable) == 840`); a 29.0 library reports 836 bytes and
+`MiniGLOpen()` refuses it without a diagnostic. The library that runs the
+game must be `minigl.library` 30.0 or newer: 29.1 has the same dispatch ABI
+and accepts the client, but its present path can stall right after the first
+picture. The game checks the runtime version before opening the context and
+shows a requester with the Aminet package when it is missing or too old. The
+wrapper validates the 29.1 client SDK; it does not stage a runtime library.
 
 ### Packaging
 
