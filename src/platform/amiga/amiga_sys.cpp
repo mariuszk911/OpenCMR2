@@ -366,6 +366,49 @@ int RootFile(char *out, size_t size, const char *root, const char *name)
     return 1;
 }
 
+const char *GetSettingText(const char *name);
+
+// The edition (install.sku), unless the data has no CountrySpecific folder for
+// it and has one for a single other edition: the text and speech of the game
+// are there. A copy of a Polish or American installation then starts without
+// editing the settings (the rule of src/platform/sys.cpp on the hosts).
+// Decided once: every Lock is an OS call.
+const char *InstalledSku()
+{
+    static const char *const skus[][2] = {
+        { "EUROPE", "Europe" }, { "AMERICA", "Usa" }, { "JAPAN", "Japan" }, { "POLAND", "Poland" } };
+    static std::string s_sku;
+    if (!s_sku.empty())
+        return s_sku.c_str();
+    const char *configured = GetSettingText("install.sku");
+    if (configured == NULL)
+        configured = "EUROPE";
+    const char *found = NULL;
+    for (const auto &sku : skus) {
+        char folder[64];
+        char path[512];
+        snprintf(folder, sizeof(folder), "CountrySpecific/%s", sku[1]);
+        if (!RootFile(path, sizeof(path), s_dataDir, folder))
+            continue;
+        const BPTR lock = Lock((STRPTR)path, ACCESS_READ);
+        if (lock == 0)
+            continue;
+        UnLock(lock);
+        if (AmigaSettings::Lower(sku[0]) == AmigaSettings::Lower(configured)) {
+            s_sku = configured;
+            return s_sku.c_str();
+        }
+        found = found == NULL ? sku[0] : "";
+    }
+    if (found == NULL || *found == 0) {
+        s_sku = configured;
+    } else {
+        Sys_Log("install: no CountrySpecific folder for sku %s; the data is the %s edition", configured, found);
+        s_sku = found;
+    }
+    return s_sku.c_str();
+}
+
 void RememberMissing(const char *path)
 {
     CopyPath(s_lastMissing, sizeof(s_lastMissing), path);
@@ -1406,10 +1449,8 @@ extern "C" const char *Sys_GetInstallSetting(const char *name)
         const char *value = GetSettingText("install.language");
         return value != NULL ? value : "English";
     }
-    if (key == "sku_type") {
-        const char *value = GetSettingText("install.sku");
-        return value != NULL ? value : "EUROPE";
-    }
+    if (key == "sku_type")
+        return InstalledSku();
     return "";
 }
 
