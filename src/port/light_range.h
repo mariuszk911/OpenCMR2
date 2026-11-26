@@ -30,15 +30,18 @@ static inline int LightRange_Bounds(const void *first, size_t stride, const uint
 
     if (count == 0)
         return 0;
-    for (i = 0; i < count; ++i) {
+    /* The first vertex starts the box; the rest only widen it. */
+    memcpy(lo, (const unsigned char *)first + (size_t)(indices != NULL ? indices[0] : 0u) * stride, sizeof(lo));
+    memcpy(hi, lo, sizeof(hi));
+    for (i = 1; i < count; ++i) {
         const uint32_t v = indices != NULL ? indices[i] : i;
         float p[3];
         int k;
         memcpy(p, (const unsigned char *)first + (size_t)v * stride, sizeof(p));
         for (k = 0; k < 3; ++k) {
-            if (i == 0 || p[k] < lo[k])
+            if (p[k] < lo[k])
                 lo[k] = p[k];
-            if (i == 0 || p[k] > hi[k])
+            if (p[k] > hi[k])
                 hi[k] = p[k];
         }
     }
