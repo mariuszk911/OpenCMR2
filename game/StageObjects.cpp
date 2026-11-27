@@ -100,7 +100,7 @@ void CarSkid_ClearWheelTrails(void);
 void StageObject_LoadSkidTrailTextures(void);
 void StageObject_UpdateRaceSkidTrails(int param_1);
 void StageObject_RebuildCarExhaustPoints(int car);
-void CarEffects_DrawTyreMarks(int index);
+void CarEffects_DrawTyreMarks(int index, int view); // PORT: AMIGA: + view
 int StageObject_GetWheelSlip(int carIndex, int wheelIndex);
 int StageObject_GetNormalizedWheelSlip(int car, int wheel);
 int StageObject_ClampByteRange(int value);
@@ -1193,13 +1193,39 @@ int StageObject_ClampByteRange(int value);
 #define TRAIL_POINT(i) (&g_trailPoints[0][0][0] + (i))
 #define TRAIL_FADE(p, f) ((p)->f - (p)->f * (p)->age * 0x7c / 0x4d8)
 
+// PORT: AMIGA: a tyre-mark quad nothing of which can show. Its drawn alphas
+// are all at most 1 (the game's own test below, applied after the gravel marks'
+// alpha / 3), or all four corners are behind the camera plane, where the near
+// plane clips it anyway. Skipping them before the conversion saves several ms a
+// frame on the 68k (~1,400 triangles a frame once the trails are full).
+static bool TyreMark_IsHidden(Quad2DInputVertex *const q[4], SceneNode *pView)
+{
+    FixVector camera, forward, d;
+    int k;
+    bool behind = pView != NULL;
+
+    if (q[0]->colour[3] <= 1 && q[1]->colour[3] <= 1 && q[2]->colour[3] <= 1 && q[3]->colour[3] <= 1)
+        return true;
+    if (!behind)
+        return false;
+    FixMatrix_GetPosition(&camera, &pView->world);
+    forward = pView->world.forward;
+    for (k = 0; k < 4 && behind; k++) {
+        d.x = q[k]->x - camera.x;
+        d.y = q[k]->y - camera.y;
+        d.z = q[k]->z - camera.z;
+        behind = FixVecDot(&d, &forward) <= 0;
+    }
+    return behind;
+}
+
 // Draws the tyre marks of one car: for every wheel it walks its ring of 200
 // trail points backwards in steps of g_stageSurfaceInfo[8].flags, joins each
 // point to the previous consecutive one with a textured quad (two triangles)
 // whose alpha fades with the points' age, and picks the mark texture from the
 // surface the point was laid on.
 // FUNCTION: CMR2 0x004658e0
-void CarEffects_DrawTyreMarks(int index)
+void CarEffects_DrawTyreMarks(int index, int view)
 {
     BYTE curColour[4] = { 0, 0, 0, 25 };
     BYTE prevColour[4] = { 0, 0, 0, 25 };
@@ -1222,6 +1248,8 @@ void CarEffects_DrawTyreMarks(int index)
     int alpha2;
     int alpha3;
     Texture *pTexture;
+    Quad2DInputVertex *const quad[4] = { &a, &b, &c, &d }; // PORT: AMIGA: TyreMark_IsHidden
+    SceneNode *pView = view >= 0 && view < 3 ? g_viewNodes[view] : NULL; // PORT: AMIGA
 
     if (index >= 8 || CGameInfo::GetGraphicsOptionBits25To26() == 2)
         return;
@@ -1322,6 +1350,9 @@ void CarEffects_DrawTyreMarks(int index)
                         pTexture = g_skidTrailTexture;
                         break;
                     }
+                    // PORT: AMIGA: quads that cannot show are not converted.
+                    if (TyreMark_IsHidden(quad, pView))
+                        continue;
                     Quad2D_QueueFixedTriangle(0, &b, &a, &c, pTexture, 0x26);
                     Quad2D_QueueFixedTriangle(0, &d, &b, &c, pTexture, 0x26);
                 } while (step >= 2);
@@ -8322,7 +8353,7 @@ void StageObject_SeedRaceRandomAndCPURevs(char replay, char restart)
     }
 }
 
-void CarEffects_DrawTyreMarks(int index);
+void CarEffects_DrawTyreMarks(int index, int view); // PORT: AMIGA: + view
 
 // Refreshes the skid trails of every car in the race order, skipping the
 // replay-style modes where CGameInfo::GetGraphicsOptionBits25To26() returns 2.
@@ -8338,7 +8369,7 @@ void StageObject_UpdateRaceSkidTrails(int param_1)
         if (0 < s) {
             do {
                 if (i < 8 && StageObject_GetPairedCarValue(i, param_1) != 7)
-                    CarEffects_DrawTyreMarks(i);
+                    CarEffects_DrawTyreMarks(i, param_1); // PORT: AMIGA: + view
                 i = i + 1;
                 s = Car_GetOrderCount();
             } while (i < s);
