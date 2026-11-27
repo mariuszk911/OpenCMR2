@@ -7,6 +7,7 @@
 #include "platform/amiga/amiga_modes.h"
 #include "port/sys.h"
 
+#include "platform/amiga/amiga_os_begin.h"
 #include <exec/types.h>
 
 /* Private bases, opened for the walk only. Declared static before the proto/
@@ -23,6 +24,7 @@ static struct Library *CyberGfxBase;
 #include <proto/graphics.h>
 #include <proto/cybergraphics.h>
 #include <cybergraphx/cybergraphics.h>
+#include "platform/amiga/amiga_os_end.h"
 
 int AmigaModes_ListBGRA32(DisplayModeSize *list, int capacity)
 {

@@ -17,6 +17,9 @@
 #include "render/minigl/gfx_minigl_movie.h"
 #include "port/sys.h"
 #include "platform/amiga/amiga_sys.h"
+#if defined(OPENCMR2_WARPOS)
+#include "platform/warpos/wos_pcprof.h"
+#endif
 #include "platform/amiga/amiga_modes.h"
 #include "platform/amiga/amiga_minigl_notice.h"
 #include "port/display_modes.h"
@@ -31,10 +34,13 @@
 
 #include <new>
 
+#include "platform/amiga/amiga_os_begin.h"
 #include <exec/types.h>
 #include <exec/execbase.h>
 #include <intuition/intuition.h>
 #include <proto/exec.h>
+#include "platform/amiga/amiga_os_end.h"
+// The PPC MiniGL's own structures keep the compiler's layout: outside the block.
 #include <proto/minigl.h>
 
 struct GfxTexture {
@@ -164,6 +170,14 @@ struct GlStateCache {
     uint32_t loadedWorldViewGen;
     uint32_t loadedProjectionGen;
     GLfloat glProjection[16];
+#if defined(OPENCMR2_WARPOS)
+    // world*view*projection for the batched path's view-volume test, keyed on
+    // both generations (clipValid is cleared with the rest of the cache).
+    GfxMatrix clip;
+    uint32_t clipWorldViewGen;
+    uint32_t clipProjectionGen;
+    int clipValid;
+#endif
     // glEnableClientState bits kept across draws so a draw that needs the same
     // arrays costs no dispatch calls (bit values: kClientArray* below).
     uint32_t clientArrayMask;
@@ -255,6 +269,275 @@ CapabilityPolicy s_caps;
 GlStateCache s_glCache;
 LightingCache s_lightingCache;
 StageDiagnostics s_diag;
+
+// The clamping wrap mode. The R200 PPC stack knows GL_REPEAT and GL_CLAMP only
+// and answers GL_CLAMP_TO_EDGE with GL_INVALID_ENUM, leaving the texture
+// repeating (its porting guide maps one to the other).
+#if defined(OPENCMR2_WARPOS)
+const GLint kClampWrap = GL_CLAMP;
+#else
+const GLint kClampWrap = GL_CLAMP_TO_EDGE;
+#endif
+
+#if defined(OPENCMR2_WARPOS)
+// ---- Draw batching (WarpOS) -------------------------------------------------
+// On the R200 PPC stack a small draw costs about 17 us, any GL state change
+// between two draws about 10 us more, and the game issues 500-700 draws a
+// frame, two thirds of them four triangles or fewer (measured with
+// drawbench on the reference A4000). So consecutive triangle draws stay inside
+// one glBegin/glEnd, which is closed only when a GL call other than vertex
+// emission is made. To keep a new object matrix from being such a call, 3D
+// vertices and normals are transformed by world*view here and the GL
+// modelview stays the identity. [video] batch = 0 turns this off.
+//
+// The emission calls of the batch itself are the Raw* functions, defined
+// before the GL names are wrapped below.
+int s_batching;
+int s_modelviewIdentity;
+struct OpenBatch {
+    int open;
+    GLenum mode;
+    int format;
+    uint32_t count;
+} s_batch;
+struct BatchStats {
+    uint32_t draws, batches, vertices, presents, litDraws, litVertices, litByLights;
+    uint32_t directionalLights, positionalLights, spotLights, powCalls, inRange, sortedDraws;
+    uint32_t whyNot[6], bucketFlushes, culledTriangles, clippedTriangles;
+} s_batchStats;
+enum { kBatchMaxVertices = 3072 };  // whole triangles, below the 4096-vertex buffer
+
+inline void RawBegin(GLenum mode) { glBegin(mode); }
+inline void RawEnd(void) { glEnd(); }
+inline void RawVertex3f(float x, float y, float z) { glVertex3f(x, y, z); }
+inline void RawVertex2f(float x, float y) { glVertex2f(x, y); }
+inline void RawNormal3f(float x, float y, float z) { glNormal3f(x, y, z); }
+inline void RawTexCoord2f(float u, float v) { glTexCoord2f(u, v); }
+inline void RawTexCoord1_2f(float u, float v) { glMultiTexCoord2fARB(GL_TEXTURE1_ARB, u, v); }
+inline void RawColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a) { glColor4ub(r, g, b, a); }
+
+// [video] profile = 1: where a frame's 3D draw time goes, from the PPC time
+// base (low word; sections are far shorter than its 170 s wrap).
+int s_profile;
+enum { kProfApply, kProfLight, kProfEmit, kProfEnd, kProfTL, kProfLightLoop, kProfCount };
+uint32_t s_profTicks[kProfCount];
+inline uint32_t ProfNow(void)
+{
+    uint32_t lo;
+    __asm__ volatile("mftb %0" : "=r"(lo));
+    return lo;
+}
+struct ProfScope {
+    int bucket;
+    uint32_t t0;
+    explicit ProfScope(int b) : bucket(b), t0(s_profile ? ProfNow() : 0) {}
+    ~ProfScope()
+    {
+        if (s_profile)
+            s_profTicks[bucket] += ProfNow() - t0;
+    }
+};
+
+inline void BatchEnd(void)
+{
+    if (s_profile) {
+        const uint32_t t0 = ProfNow();
+        RawEnd();
+        s_profTicks[kProfEnd] += ProfNow() - t0;
+    } else {
+        RawEnd();
+    }
+    s_batch.open = 0;
+}
+
+// Texture-sorted buckets ([video] batch_sort, default 1). The game changes
+// texture on almost every draw, so batches kept in submission order hold one
+// draw each. Opaque, depth-tested, depth-writing triangle draws that are
+// already lit do not depend on their order: their finished vertices are
+// stored per texture pair and sent as one batch per pair, in the order the
+// pairs first appeared, when any other GL call or an order-dependent draw
+// (blended, 2D) comes. s_texCapture makes the texture-state calls of
+// Apply3DTextureStages no-ops so the wanted textures can be read from the GL
+// cache without touching GL (CaptureTextureStages).
+int s_batchSort;
+int s_batchSortBlended;
+int s_batchArrays;        // [video] batch_arrays: buckets go out as glDrawElements
+int s_batchArraysChecked;
+int s_cpuCull;            // [video] cpu_cull: back-face culling before the buckets
+int s_cpuClip;            // [video] cpu_clip: drop triangles outside the view
+int s_texCapture;
+int s_inBucketFlush;
+uint32_t s_bucketVertexTotal;
+void FlushBuckets(void);
+
+inline void BatchFlush(void)
+{
+    if (s_bucketVertexTotal != 0 && !s_inBucketFlush)
+        FlushBuckets();
+    if (s_batch.open)
+        BatchEnd();
+}
+
+// [video] batch_log = 1: which source lines close batches (the GL call that
+// follows them), to find state that is re-sent for every draw.
+int s_batchLog;
+int s_cpuLightAll;
+enum { kBatchLogLines = 6144 };
+uint16_t s_batchClosedAt[kBatchLogLines];
+inline void BatchFlushAt(int line)
+{
+    if (s_bucketVertexTotal != 0 && !s_inBucketFlush)
+        FlushBuckets();
+    if (s_batch.open) {
+        if (s_batchLog && line < (int)kBatchLogLines && s_batchClosedAt[line] != 0xffffu)
+            s_batchClosedAt[line]++;
+        BatchEnd();
+    }
+}
+
+// Opens or continues a triangle batch of this vertex format; returns how many
+// more vertices it takes (a multiple of three).
+inline uint32_t BatchBegin(int format)
+{
+    if (s_bucketVertexTotal != 0 && !s_inBucketFlush)
+        FlushBuckets();
+    if (s_batch.open && s_batch.format == format && s_batch.count + 3u <= (uint32_t)kBatchMaxVertices)
+        return (uint32_t)kBatchMaxVertices - s_batch.count;
+    BatchFlush();
+    RawBegin(GL_TRIANGLES);
+    s_batch.open = 1;
+    s_batch.mode = GL_TRIANGLES;
+    s_batch.format = format;
+    s_batch.count = 0;
+    s_batchStats.batches++;
+    return (uint32_t)kBatchMaxVertices;
+}
+
+// Every other GL entry point the renderer uses closes the batch first. The
+// dispatch header maps each gl*/mgl* name to an MGLD_* function.
+#undef glActiveTextureARB
+#define glActiveTextureARB(...) (s_texCapture ? (void)0 : (void)(BatchFlushAt(__LINE__), MGLD_glActiveTextureARB(__VA_ARGS__)))
+#undef glAlphaFunc
+#define glAlphaFunc(...) (BatchFlushAt(__LINE__), MGLD_glAlphaFunc(__VA_ARGS__))
+#undef glBegin
+#define glBegin(...) (BatchFlushAt(__LINE__), MGLD_glBegin(__VA_ARGS__))
+#undef glBindTexture
+#define glBindTexture(...) (s_texCapture ? (void)0 : (void)(BatchFlushAt(__LINE__), MGLD_glBindTexture(__VA_ARGS__)))
+#undef glBlendEquation
+#define glBlendEquation(...) (BatchFlushAt(__LINE__), MGLD_glBlendEquation(__VA_ARGS__))
+#undef glBlendFunc
+#define glBlendFunc(...) (BatchFlushAt(__LINE__), MGLD_glBlendFunc(__VA_ARGS__))
+#undef glClear
+#define glClear(...) (BatchFlushAt(__LINE__), MGLD_glClear(__VA_ARGS__))
+#undef glClearColor
+#define glClearColor(...) (BatchFlushAt(__LINE__), MGLD_glClearColor(__VA_ARGS__))
+#undef glClientActiveTextureARB
+#define glClientActiveTextureARB(...) (BatchFlushAt(__LINE__), MGLD_glClientActiveTextureARB(__VA_ARGS__))
+#undef glColorMaterial
+#define glColorMaterial(...) (BatchFlushAt(__LINE__), MGLD_glColorMaterial(__VA_ARGS__))
+#undef glColorPointer
+#define glColorPointer(...) (BatchFlushAt(__LINE__), MGLD_glColorPointer(__VA_ARGS__))
+#undef glCullFace
+#define glCullFace(...) (BatchFlushAt(__LINE__), MGLD_glCullFace(__VA_ARGS__))
+#undef glDeleteTextures
+#define glDeleteTextures(...) (BatchFlushAt(__LINE__), MGLD_glDeleteTextures(__VA_ARGS__))
+#undef glDepthFunc
+#define glDepthFunc(...) (BatchFlushAt(__LINE__), MGLD_glDepthFunc(__VA_ARGS__))
+#undef glDepthMask
+#define glDepthMask(...) (BatchFlushAt(__LINE__), MGLD_glDepthMask(__VA_ARGS__))
+#undef glDepthRange
+#define glDepthRange(...) (BatchFlushAt(__LINE__), MGLD_glDepthRange(__VA_ARGS__))
+#undef glDisable
+#define glDisable(...) (s_texCapture ? (void)0 : (void)(BatchFlushAt(__LINE__), MGLD_glDisable(__VA_ARGS__)))
+#undef glDisableClientState
+#define glDisableClientState(...) (BatchFlushAt(__LINE__), MGLD_glDisableClientState(__VA_ARGS__))
+#undef glDrawElements
+#define glDrawElements(...) (BatchFlushAt(__LINE__), MGLD_glDrawElements(__VA_ARGS__))
+#undef glEnable
+#define glEnable(...) (s_texCapture ? (void)0 : (void)(BatchFlushAt(__LINE__), MGLD_glEnable(__VA_ARGS__)))
+#undef glEnableClientState
+#define glEnableClientState(...) (BatchFlushAt(__LINE__), MGLD_glEnableClientState(__VA_ARGS__))
+#undef glFinish
+#define glFinish(...) (BatchFlushAt(__LINE__), MGLD_glFinish(__VA_ARGS__))
+#undef glFogf
+#define glFogf(...) (BatchFlushAt(__LINE__), MGLD_glFogf(__VA_ARGS__))
+#undef glFogfv
+#define glFogfv(...) (BatchFlushAt(__LINE__), MGLD_glFogfv(__VA_ARGS__))
+#undef glFogi
+#define glFogi(...) (BatchFlushAt(__LINE__), MGLD_glFogi(__VA_ARGS__))
+#undef glFrontFace
+#define glFrontFace(...) (BatchFlushAt(__LINE__), MGLD_glFrontFace(__VA_ARGS__))
+#undef glGenTextures
+#define glGenTextures(...) (BatchFlushAt(__LINE__), MGLD_glGenTextures(__VA_ARGS__))
+#undef glGetError
+#define glGetError(...) (BatchFlushAt(__LINE__), MGLD_glGetError(__VA_ARGS__))
+#undef glGetIntegerv
+#define glGetIntegerv(...) (BatchFlushAt(__LINE__), MGLD_glGetIntegerv(__VA_ARGS__))
+#undef glGetString
+#define glGetString(...) (BatchFlushAt(__LINE__), MGLD_glGetString(__VA_ARGS__))
+#undef glLightModelf
+#define glLightModelf(...) (BatchFlushAt(__LINE__), MGLD_glLightModelf(__VA_ARGS__))
+#undef glLightModelfv
+#define glLightModelfv(...) (BatchFlushAt(__LINE__), MGLD_glLightModelfv(__VA_ARGS__))
+#undef glLightf
+#define glLightf(...) (BatchFlushAt(__LINE__), MGLD_glLightf(__VA_ARGS__))
+#undef glLightfv
+#define glLightfv(...) (BatchFlushAt(__LINE__), MGLD_glLightfv(__VA_ARGS__))
+#undef glLoadIdentity
+#define glLoadIdentity(...) (BatchFlushAt(__LINE__), MGLD_glLoadIdentity(__VA_ARGS__))
+#undef glLoadMatrixf
+#define glLoadMatrixf(...) (BatchFlushAt(__LINE__), MGLD_glLoadMatrixf(__VA_ARGS__))
+#undef glMaterialf
+#define glMaterialf(...) (BatchFlushAt(__LINE__), MGLD_glMaterialf(__VA_ARGS__))
+#undef glMaterialfv
+#define glMaterialfv(...) (BatchFlushAt(__LINE__), MGLD_glMaterialfv(__VA_ARGS__))
+#undef glMatrixMode
+#define glMatrixMode(...) (BatchFlushAt(__LINE__), MGLD_glMatrixMode(__VA_ARGS__))
+#undef glNormalPointer
+#define glNormalPointer(...) (BatchFlushAt(__LINE__), MGLD_glNormalPointer(__VA_ARGS__))
+#undef glOrtho
+#define glOrtho(...) (BatchFlushAt(__LINE__), MGLD_glOrtho(__VA_ARGS__))
+#undef glPixelStorei
+#define glPixelStorei(...) (BatchFlushAt(__LINE__), MGLD_glPixelStorei(__VA_ARGS__))
+#undef glPopMatrix
+#define glPopMatrix(...) (BatchFlushAt(__LINE__), MGLD_glPopMatrix(__VA_ARGS__))
+#undef glPushMatrix
+#define glPushMatrix(...) (BatchFlushAt(__LINE__), MGLD_glPushMatrix(__VA_ARGS__))
+#undef glScissor
+#define glScissor(...) (BatchFlushAt(__LINE__), MGLD_glScissor(__VA_ARGS__))
+#undef glShadeModel
+#define glShadeModel(...) (BatchFlushAt(__LINE__), MGLD_glShadeModel(__VA_ARGS__))
+#undef glTexCoordPointer
+#define glTexCoordPointer(...) (BatchFlushAt(__LINE__), MGLD_glTexCoordPointer(__VA_ARGS__))
+#undef glTexEnvi
+#define glTexEnvi(...) (s_texCapture ? (void)0 : (void)(BatchFlushAt(__LINE__), MGLD_glTexEnvi(__VA_ARGS__)))
+#undef glTexImage2D
+#define glTexImage2D(...) (BatchFlushAt(__LINE__), MGLD_glTexImage2D(__VA_ARGS__))
+#undef glTexParameteri
+#define glTexParameteri(...) (BatchFlushAt(__LINE__), MGLD_glTexParameteri(__VA_ARGS__))
+#undef glTexSubImage2D
+#define glTexSubImage2D(...) (BatchFlushAt(__LINE__), MGLD_glTexSubImage2D(__VA_ARGS__))
+#undef glVertexPointer
+#define glVertexPointer(...) (BatchFlushAt(__LINE__), MGLD_glVertexPointer(__VA_ARGS__))
+#undef glViewport
+#define glViewport(...) (BatchFlushAt(__LINE__), MGLD_glViewport(__VA_ARGS__))
+#undef mglDeleteContext
+#define mglDeleteContext(...) (BatchFlushAt(__LINE__), MGLD_mglDeleteContext(__VA_ARGS__))
+#undef mglEnableSync
+#define mglEnableSync(...) (BatchFlushAt(__LINE__), MGLD_mglEnableSync(__VA_ARGS__))
+#undef mglLockDisplay
+#define mglLockDisplay(...) (BatchFlushAt(__LINE__), MGLD_mglLockDisplay(__VA_ARGS__))
+#undef mglLockMode
+#define mglLockMode(...) (BatchFlushAt(__LINE__), MGLD_mglLockMode(__VA_ARGS__))
+#undef mglResizeContext
+#define mglResizeContext(...) (BatchFlushAt(__LINE__), MGLD_mglResizeContext(__VA_ARGS__))
+#undef mglSwitchDisplay
+#define mglSwitchDisplay(...) (BatchFlushAt(__LINE__), MGLD_mglSwitchDisplay(__VA_ARGS__))
+#undef mglUnlockDisplay
+#define mglUnlockDisplay(...) (BatchFlushAt(__LINE__), MGLD_mglUnlockDisplay(__VA_ARGS__))
+#undef mglWriteShotPPM
+#define mglWriteShotPPM(...) (BatchFlushAt(__LINE__), MGLD_mglWriteShotPPM(__VA_ARGS__))
+#endif
 // Set when the game leaves the frontend's virtual screen for gameplay. The
 // first 3D draw consumes it with one log line, so a crash log can tell scene
 // construction apart from rendering.
@@ -390,6 +673,9 @@ int s_cpuLitDraw;
 // Grow-only scratch vertices for CPU-lit draws.
 GfxVertex *s_cpuLitVertices;
 uint32_t s_cpuLitCapacity;
+// Which scratch vertices the current draw has lit already (see CpuLightDraw).
+uint32_t *s_cpuLitStamp;
+uint32_t s_cpuLitStampGen;
 // video.light_mask: diagnostic, GL lights allowed on (bit i = GL_LIGHT0 + i).
 uint32_t s_debugLightMask = 0xffu;
 void ColourLogEndFrame(void);
@@ -469,6 +755,7 @@ enum DegradeLogKey {
     DEGRADE_LOG_SELECT_CURRENT = 13,
     DEGRADE_LOG_BACKDROP_FOG = 14,
     DEGRADE_LOG_PASSTHROUGH_ALPHA = 15,
+    DEGRADE_LOG_NO_ADD = 16,
     DEGRADE_LOG_COUNT
 };
 uint32_t s_degradeLoggedMask;
@@ -542,6 +829,9 @@ void InvalidateGlCache(void)
     s_glCache.texEnvMode[1] = 0;
     s_glCache.loadedWorldViewGen = ~0u;
     s_glCache.loadedProjectionGen = ~0u;
+#if defined(OPENCMR2_WARPOS)
+    s_modelviewIdentity = 0;
+#endif
     s_glCache.clientArrayMask = 0;
     s_glCache.lightMask = ~0u;
     InvalidateLightingCache();
@@ -676,8 +966,8 @@ void EnsureNeutralReflectionTexture(void)
     SelectActiveUnit(0);
     glBindTexture(GL_TEXTURE_2D, s_neutralReflectionTex);
     s_glCache.boundTex[0] = s_neutralReflectionTex;
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, kClampWrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, kClampWrap);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -991,6 +1281,23 @@ int CreateContext(int width, int height, int fullscreen)
     // size/2, so it needs 2 * the largest index; the immediate
     // path keeps librw's 4096.
     s_clientArraysRequested = Sys_GetOption("video.client_arrays", 0) != 0;
+#if defined(OPENCMR2_WARPOS)
+    s_batching = Sys_GetOption("video.batch", 1) != 0;
+    s_batchLog = Sys_GetOption("video.batch_log", 0) != 0;
+    s_profile = Sys_GetOption("video.profile", 0) != 0;
+    s_batchSort = s_batching && Sys_GetOption("video.batch_sort", 1) != 0;
+    s_batchSortBlended = Sys_GetOption("video.batch_sort_blended", 1) != 0;
+    // Off by default: on the reference A4000 the stack is no faster with
+    // indexed arrays than with immediate vertices (34.0 against 32.3 ms a
+    // frame at the Finland 1 start line).
+    s_batchArrays = s_batchSort && Sys_GetOption("video.batch_arrays", 0) != 0;
+    s_batchArraysChecked = 0;
+    s_cpuCull = Sys_GetOption("video.cpu_cull", 1) != 0;
+    s_cpuClip = Sys_GetOption("video.cpu_clip", 1) != 0;
+    s_cpuLightAll = Sys_GetOption("video.cpu_light_all", 1) != 0;
+    Sys_Log("gfx: CPU lighting for every lit draw %s", s_cpuLightAll ? "on" : "off");
+    Sys_Log("gfx: draw batching %s", s_batching ? "on" : "off");
+#endif
     s_colourLogEnabled = Sys_GetOption("video.colour_log", 0) != 0;
     s_debugLightMask = (uint32_t)Sys_GetOption("video.light_mask", 0xff) & 0xffu;
     s_cpuLightsEnabled = Sys_GetOption("video.cpu_lights", 1) != 0;
@@ -999,7 +1306,13 @@ int CreateContext(int width, int height, int fullscreen)
         Sys_Log("AMIGA: video.cpu_lights=0: point and spot lights are not drawn");
     if (s_debugLightMask != 0xffu)
         Sys_Log("AMIGA: diagnostic: video.light_mask=%02lx", (unsigned long)s_debugLightMask);
+#if defined(OPENCMR2_WARPOS)
+    // Array buckets index up to kBucketVertexLimit vertices; the array
+    // pipeline wants twice the largest index (see above).
+    mglChooseVertexBufferSize((s_clientArraysRequested || s_batchArrays) ? 32768 : 4096);
+#else
     mglChooseVertexBufferSize(s_clientArraysRequested ? 32768 : 4096);
+#endif
     // PORT: AMIGA: the default texture-object table is 2048 entries; the game
     // reuses one table across stage reloads, so keep headroom and avoid
     // glGenTextures returning 0 (which presents as a bad texture later).
@@ -1020,6 +1333,12 @@ int CreateContext(int width, int height, int fullscreen)
         }
     }
     if (s_context == NULL) {
+#if defined(OPENCMR2_WARPOS)
+        // The R200 stack's fullscreen setup: a 16-bit screen (its fast path)
+        // and two buffers, presented by blit (sync off, below).
+        mglChoosePixelDepth(Sys_GetOption("video.depth", 16));
+        mglChooseNumberOfBuffers(2);
+#endif
         s_context = mglCreateContext(0, 0, width, height);
         if (s_context == NULL) {
             Sys_Log("gfx: mglCreateContext %dx%d failed", width, height);
@@ -1031,6 +1350,16 @@ int CreateContext(int width, int height, int fullscreen)
         AmigaSys_SetWindow(inputWindow);
         Sys_Log("gfx: MiniGL %dx%d context ready (screen), input window %lx",
                 width, height, (unsigned long)inputWindow);
+#if defined(OPENCMR2_WARPOS)
+        // Present by blit. With sync on (vertical-blank flips) the stack
+        // fails mglSwitchDisplay with GL_INVALID_OPERATION once a frame is
+        // presented while the previous flip is still pending (from about
+        // the 12th frame of a light scene, on the reference A4000 with the
+        // 2026-11-05 minigl_ppc.dll), and the screen stays empty. The blit
+        // path has no such limit.
+        mglEnableSync(GL_FALSE);
+        mglLockMode(MGL_LOCK_SMART);
+#endif
     } else {
         Sys_Log("gfx: MiniGL %dx%d context ready (window)", width, height);
     }
@@ -1290,11 +1619,103 @@ void Gfx_PresentBody(int vsync)
     if (s_colourLogEnabled)
         ColourLogEndFrame();
     s_tlScreenActive = 0;
+#if !defined(OPENCMR2_WARPOS)
     if (s_locked) {
         mglUnlockDisplay();
         s_locked = 0;
     }
+#endif
+#if defined(OPENCMR2_WARPOS)
+    if (s_batching && ++s_batchStats.presents >= 480) {
+        Sys_Log("gfx: batching, 480 frames: per frame %lu draws in %lu batches, %lu vertices, "
+                "%lu lit on the CPU (%lu by lights) in %lu draws with %lu directional and %lu point/spot lights%s",
+                (unsigned long)(s_batchStats.draws / 480u), (unsigned long)(s_batchStats.batches / 480u),
+                (unsigned long)(s_batchStats.vertices / 480u), (unsigned long)(s_batchStats.litVertices / 480u),
+                (unsigned long)(s_batchStats.litByLights / 480u), (unsigned long)(s_batchStats.litDraws / 480u),
+                (unsigned long)(s_batchStats.directionalLights / 480u),
+                (unsigned long)(s_batchStats.positionalLights / 480u),
+                s_normalizeNormals ? ", normals normalised" : "");
+        Sys_Log("gfx: culling, per frame: %lu back-facing and %lu outside the view dropped on the CPU",
+                (unsigned long)(s_batchStats.culledTriangles / 480u),
+                (unsigned long)(s_batchStats.clippedTriangles / 480u));
+        Sys_Log("gfx: sorting, per frame: %lu draws through texture buckets, %lu bucket flushes; not sorted: "
+                "%lu GL-lit, %lu blended, %lu no depth test, %lu no depth write, %lu not triangles, %lu texture not ready",
+                (unsigned long)(s_batchStats.sortedDraws / 480u), (unsigned long)(s_batchStats.bucketFlushes / 480u),
+                (unsigned long)(s_batchStats.whyNot[0] / 480u), (unsigned long)(s_batchStats.whyNot[1] / 480u),
+                (unsigned long)(s_batchStats.whyNot[2] / 480u), (unsigned long)(s_batchStats.whyNot[3] / 480u),
+                (unsigned long)(s_batchStats.whyNot[4] / 480u), (unsigned long)(s_batchStats.whyNot[5] / 480u));
+
+        memset(&s_batchStats, 0, sizeof(s_batchStats));
+        if (s_profile) {
+            // Time base ticks to microseconds per frame; 24.74 MHz is the
+            // reference board's rate (the game clock measures the real one).
+            const uint32_t perUs480 = 24740u * 480u / 1000u;
+            {
+                unsigned long fileCalls = 0, fileBytes = 0, audioCalls = 0;
+                const unsigned long feed = AmigaSys_TakePumpMicros();
+                const unsigned long file = AmigaSys_TakeFileMicros(&fileCalls, &fileBytes);
+                const unsigned long audio = AmigaSys_TakeAudioMicros(&audioCalls);
+                Sys_Log("gfx: profile, us/frame: audio feed %lu, file I/O %lu (%lu calls, %lu bytes), "
+                        "audio API %lu (%lu calls)",
+                        feed / 480u, file / 480u, fileCalls / 480u, fileBytes / 480u, audio / 480u, audioCalls / 480u);
+            }
+            Sys_Log("gfx: profile, us/frame: state apply %lu, closing batches %lu, CPU light %lu (vertex loop %lu), "
+                    "3D emit %lu, 2D emit %lu",
+                    (unsigned long)(s_profTicks[kProfApply] / perUs480),
+                    (unsigned long)(s_profTicks[kProfEnd] / perUs480),
+                    (unsigned long)(s_profTicks[kProfLight] / perUs480),
+                    (unsigned long)(s_profTicks[kProfLightLoop] / perUs480),
+                    (unsigned long)(s_profTicks[kProfEmit] / perUs480),
+                    (unsigned long)(s_profTicks[kProfTL] / perUs480));
+            memset(s_profTicks, 0, sizeof(s_profTicks));
+        }
+        if (s_batchLog) {
+            // The eight lines that closed the most batches in this window.
+            for (int rank = 0; rank < 8; rank++) {
+                int best = 0;
+                for (int line = 1; line < (int)kBatchLogLines; line++) {
+                    if (s_batchClosedAt[line] > s_batchClosedAt[best])
+                        best = line;
+                }
+                if (s_batchClosedAt[best] == 0)
+                    break;
+                Sys_Log("gfx: batches closed at line %d: %lu per frame", best,
+                        (unsigned long)(s_batchClosedAt[best] / 480u));
+                s_batchClosedAt[best] = 0;
+            }
+            memset(s_batchClosedAt, 0, sizeof(s_batchClosedAt));
+        }
+    }
+    // SetEnv OPENCMR2_SHOT 1: the rendered frame goes to PROGDIR:shot.ppm, a
+    // picture of what the card drew that neither a remote screenshot nor a
+    // camera gives. Checked once a second (the check is a 68k call).
+    {
+        static uint32_t s_lastShotCheck;
+        const uint32_t now = Sys_GetTicks();
+        if (now - s_lastShotCheck >= 1000) {
+            s_lastShotCheck = now;
+            if (AmigaSys_TakeEnvFlag("OPENCMR2_PCPROF"))
+                WosPcProf_Start();
+            if (AmigaSys_TakeEnvFlag("OPENCMR2_SHOT")) {
+                mglWriteShotPPM((char *)"PROGDIR:shot.ppm");
+                Sys_Log("gfx: frame written to PROGDIR:shot.ppm");
+            }
+        }
+    }
+#endif
+#if defined(OPENCMR2_WARPOS)
+    // The R200 stack presents only from a locked display: its own host
+    // switches and then unlocks, as does its gears demo. Switching after
+    // the unlock left the screen showing its empty bitmap.
+    if (!EnsureLocked())
+        return;
     mglSwitchDisplay();
+    mglUnlockDisplay();
+    s_locked = 0;
+    WosPcProf_Poll();
+#else
+    mglSwitchDisplay();
+#endif
 }
 
 #if defined(OPENCMR2_MINIGL_SECTION_TIMING)
@@ -1756,6 +2177,13 @@ extern "C" void Gfx_SetTexture(int stage, GfxTexture *texture)
     }
     if (s_caps.probed && stage >= s_caps.maxTexUnits)
         return;
+#if defined(OPENCMR2_WARPOS)
+    // With texture-sorted batching the bind waits for the draw: every draw
+    // path binds what it needs from s_stages / s_boundTexture itself, and a
+    // bind here would close the buckets on every texture change.
+    if (s_batchSort)
+        return;
+#endif
     // Select the unit first: uploads and the neutral fallback operate on the
     // active unit, and the fallback switches to unit 0 when it is created.
     SelectActiveUnit(stage);
@@ -1834,7 +2262,7 @@ extern "C" void Gfx_SetStageAlphaArg2(int stage, int arg)
 static GLint StageWrapMode(int stage)
 {
     switch (s_stages[stage].address) {
-    case GFX_ADDRESS_CLAMP: return GL_CLAMP_TO_EDGE;
+    case GFX_ADDRESS_CLAMP: return kClampWrap;
     case GFX_ADDRESS_MIRROR: return GL_REPEAT;
     default: return GL_REPEAT;
     }
@@ -2312,6 +2740,21 @@ void Apply3DTransforms(GfxMatrix *outWorldView)
         modeIsModelView = false;
     }
 
+#if defined(OPENCMR2_WARPOS)
+    if (s_batching) {
+        // Vertices are transformed by world*view on the CPU (BatchEmit3D).
+        if (!s_modelviewIdentity) {
+            glMatrixMode(GL_MODELVIEW);
+            glLoadIdentity();
+            s_modelviewIdentity = 1;
+            s_diag.matrixModeSwitches++;
+        } else if (!modeIsModelView) {
+            glMatrixMode(GL_MODELVIEW);
+            s_diag.matrixModeSwitches++;
+        }
+        return;
+    }
+#endif
     if (!worldViewHit) {
         glMatrixMode(GL_MODELVIEW);
         glLoadMatrixf(&s_glCache.worldView._11);
@@ -2438,6 +2881,24 @@ struct DrawGeometry {
     LightRangeSphere world;
 };
 
+// 1/sqrt(x) for normalising a normal. newlib's sqrtf is software on the PPC
+// targets (about a microsecond); frsqrte gives 5 bits and each Newton step
+// doubles them, so three steps exceed single precision.
+inline float InverseSqrt(float x)
+{
+#if defined(OPENCMR2_WARPOS)
+    double estimate;
+    const double value = x;
+    __asm__("frsqrte %0,%1" : "=f"(estimate) : "f"(value));
+    estimate = estimate * (1.5 - 0.5 * value * estimate * estimate);
+    estimate = estimate * (1.5 - 0.5 * value * estimate * estimate);
+    estimate = estimate * (1.5 - 0.5 * value * estimate * estimate);
+    return (float)estimate;
+#else
+    return 1.0f / sqrtf(x);
+#endif
+}
+
 const LightRangeSphere *DrawWorldSphere(DrawGeometry *geometry)
 {
     if (geometry->state == 0) {
@@ -2471,7 +2932,24 @@ const LightRangeSphere *DrawWorldSphere(DrawGeometry *geometry)
                 world = s_transforms[GFX_TRANSFORM_WORLD];
             else
                 Identity(&world);
+#if defined(OPENCMR2_WARPOS)
+            // LightRange_ToWorld with the largest axis scale from one
+            // reciprocal square root instead of three newlib sqrtf calls
+            // (software on the PPC targets, about 0.45 us each).
+            const float *m = &world._11;
+            float largest = 0.0f;
+            for (int r = 0; r < 3; ++r) {
+                const float axis = m[r * 4] * m[r * 4] + m[r * 4 + 1] * m[r * 4 + 1] + m[r * 4 + 2] * m[r * 4 + 2];
+                if (axis > largest)
+                    largest = axis;
+            }
+            geometry->world.x = model.x * m[0] + model.y * m[4] + model.z * m[8] + m[12];
+            geometry->world.y = model.x * m[1] + model.y * m[5] + model.z * m[9] + m[13];
+            geometry->world.z = model.x * m[2] + model.y * m[6] + model.z * m[10] + m[14];
+            geometry->world.radius = largest > 0.0f ? model.radius * largest * InverseSqrt(largest) : 0.0f;
+#else
             geometry->world = LightRange_ToWorld(model, &world._11);
+#endif
             geometry->state = 1;
         }
     }
@@ -2498,15 +2976,46 @@ bool PositionalLightReachesDraw(DrawGeometry *geometry)
         if (l.range <= 0.0f)
             return true;
         const LightRangeSphere *sphere = DrawWorldSphere(geometry);
-        if (sphere == NULL ||
-            LightRange_NearestDistance(l.position.x, l.position.y, l.position.z, *sphere) <= l.range)
+        if (sphere == NULL)
             return true;
+#if defined(OPENCMR2_WARPOS)
+        // LightRange_NearestDistance(...) <= range, without the square root:
+        // |centre - light| - radius <= range  <=>  |centre - light|^2 <=
+        // (range + radius)^2, both sides being non-negative.
+        const float dx = sphere->x - l.position.x, dy = sphere->y - l.position.y, dz = sphere->z - l.position.z;
+        const float reach = l.range + sphere->radius;
+        if (dx * dx + dy * dy + dz * dz <= reach * reach)
+            return true;
+#else
+        if (LightRange_NearestDistance(l.position.x, l.position.y, l.position.z, *sphere) <= l.range)
+            return true;
+#endif
     }
     return false;
 }
 
+// Byte to [0,1] without an integer-to-float conversion (slow on a 32-bit
+// PowerPC: it goes through memory).
+const float *ByteToUnitTable(void)
+{
+    static float table[256];
+    static int built;
+    if (!built) {
+        for (int i = 0; i < 256; ++i)
+            table[i] = (float)i / 255.0f;
+        built = 1;
+    }
+    return table;
+}
+
 GfxColorValue UnpackColorValue(uint32_t argb)
 {
+#if defined(OPENCMR2_WARPOS)
+    const float *unit = ByteToUnitTable();
+    const GfxColorValue fast = { unit[(argb >> 16) & 0xffu], unit[(argb >> 8) & 0xffu], unit[argb & 0xffu],
+                                 unit[argb >> 24] };
+    return fast;
+#endif
     float f[4];
     UnpackColorFloats(argb, f);
     const GfxColorValue c = { f[0], f[1], f[2], f[3] };
@@ -2531,76 +3040,270 @@ uint32_t PackColorValue(const GfxColorValue &c)
            (uint32_t)(c.g * 255.0f + 0.5f) << 8 | (uint32_t)(c.b * 255.0f + 0.5f);
 }
 
+
 // Lights the vertices a draw uses with Direct3D's vertex lighting and returns
 // a copy (same indexing) whose diffuse colour is the lit colour, for the
 // unlit path; NULL when the scratch buffer cannot grow.
-const GfxVertex *CpuLightDraw(const GfxVertex *vertices, uint32_t vertexCount, const uint16_t *indices,
-                              uint32_t indexCount)
+// Everything about a draw's lighting that does not depend on the vertex,
+// computed once: the unit vector of a directional light, a spot light's axis
+// and cone cosines, the constant ambient sum. D3DLight_Vertex
+// (port/d3d_light.h) is the reference for the arithmetic; it recomputes these
+// per vertex with newlib's software sqrtf and cosf, about a microsecond each
+// on the PPC targets.
+struct DrawLight {
+    const GfxLight *light;
+    int type;
+    float vector[3];   // directional: unit vector to the light
+    float axis[3];     // spot: unit direction
+    float inner, outer;
+    int hasAxis;
+};
+struct LightSetup {
+    DrawLight lights[8];
+    int count, positional;
+    float ambientSum[3];
+    GfxMatrix world;
+    // Without any light: colour = emissive + ambient sum * ambient, in integers.
+    bool vertexDiffuse, vertexAmbient, vertexEmissive;
+    uint32_t materialDiffuse, materialAmbient, materialEmissive;
+    int32_t factor[3];
+};
+
+// positionalReach: whether a point or spot light can reach the draw at all
+// (PositionalLightReachesDraw); when not, those lights are left out, and a
+// draw lit only by them takes the integer no-light path.
+void BuildLightSetup(LightSetup *setup, bool positionalReach)
 {
-    uint32_t lo = 0;
-    uint32_t hi = vertexCount - 1;
-    if (indices != NULL) {
-        lo = 0xffffu;
-        hi = 0;
-        for (uint32_t i = 0; i < indexCount; ++i) {
-            if (indices[i] < lo)
-                lo = indices[i];
-            if (indices[i] > hi)
-                hi = indices[i];
-        }
-    }
-    if (hi + 1 > s_cpuLitCapacity) {
-        GfxVertex *grown = new (std::nothrow) GfxVertex[hi + 1];
-        if (grown == NULL) {
-            Sys_Log("AMIGA: CPU lighting: cannot grow scratch to %lu vertices", (unsigned long)(hi + 1));
-            return NULL;
-        }
-        delete[] s_cpuLitVertices;
-        s_cpuLitVertices = grown;
-        s_cpuLitCapacity = hi + 1;
-    }
     if (s_specularEnabled) {
         LogDegradationOnce(DEGRADE_LOG_COLOR_SOURCE,
                            "AMIGA: CPU vertex lighting does not light specular");
     }
-
-    GfxMatrix world;
     if (s_transformSet[GFX_TRANSFORM_WORLD])
-        world = s_transforms[GFX_TRANSFORM_WORLD];
+        setup->world = s_transforms[GFX_TRANSFORM_WORLD];
     else
-        Identity(&world);
-    int on[8];
-    for (int i = 0; i < 8; ++i)
-        on[i] = LightOn(i) ? 1 : 0;
+        Identity(&setup->world);
     const GfxColorValue globalAmbient = UnpackColorValue(s_ambient);
-
-    for (uint32_t i = lo; i <= hi; ++i) {
-        const GfxVertex &v = vertices[i];
-        GfxVertex &out = s_cpuLitVertices[i];
-        out = v;
-        const float pos[3] = {
-            v.x * world._11 + v.y * world._21 + v.z * world._31 + world._41,
-            v.x * world._12 + v.y * world._22 + v.z * world._32 + world._42,
-            v.x * world._13 + v.y * world._23 + v.z * world._33 + world._43
-        };
-        float n[3] = {
-            v.nx * world._11 + v.ny * world._21 + v.nz * world._31,
-            v.nx * world._12 + v.ny * world._22 + v.nz * world._32,
-            v.nx * world._13 + v.ny * world._23 + v.nz * world._33
-        };
-        if (s_normalizeNormals) {
-            const float len = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-            if (len > 0.0f) {
-                n[0] /= len;
-                n[1] /= len;
-                n[2] /= len;
+    setup->ambientSum[0] = globalAmbient.r;
+    setup->ambientSum[1] = globalAmbient.g;
+    setup->ambientSum[2] = globalAmbient.b;
+    setup->count = 0;
+    setup->positional = 0;
+    for (int i = 0; i < 8; ++i) {
+        if (!LightOn(i))
+            continue;
+        const GfxLight &l = s_lights[i];
+        if (l.type != GFX_LIGHT_DIRECTIONAL && !positionalReach)
+            continue;
+        DrawLight &d = setup->lights[setup->count];
+        d.light = &l;
+        d.type = l.type;
+        d.hasAxis = 0;
+        const float squared = l.direction.x * l.direction.x + l.direction.y * l.direction.y +
+                              l.direction.z * l.direction.z;
+        const float inverse = squared > 0.0f ? InverseSqrt(squared) : 0.0f;
+        if (l.type == GFX_LIGHT_DIRECTIONAL) {
+            if (squared <= 0.0f)
+                continue;
+            d.vector[0] = -l.direction.x * inverse;
+            d.vector[1] = -l.direction.y * inverse;
+            d.vector[2] = -l.direction.z * inverse;
+            // A directional light's ambient term is the same for every vertex.
+            setup->ambientSum[0] += l.ambient.r;
+            setup->ambientSum[1] += l.ambient.g;
+            setup->ambientSum[2] += l.ambient.b;
+        } else {
+            if (l.type == GFX_LIGHT_SPOT) {
+                // The cone angles rarely change; newlib's cosf is software.
+                static float cachedTheta[8], cachedPhi[8], cachedInner[8], cachedOuter[8];
+                static unsigned char cachedValid[8];
+                if (!cachedValid[i] || cachedTheta[i] != l.theta || cachedPhi[i] != l.phi) {
+                    cachedTheta[i] = l.theta;
+                    cachedPhi[i] = l.phi;
+                    cachedInner[i] = cosf(l.theta * 0.5f);
+                    cachedOuter[i] = cosf(l.phi * 0.5f);
+                    cachedValid[i] = 1;
+                }
+                d.inner = cachedInner[i];
+                d.outer = cachedOuter[i];
+                if (squared > 0.0f) {
+                    d.axis[0] = l.direction.x * inverse;
+                    d.axis[1] = l.direction.y * inverse;
+                    d.axis[2] = l.direction.z * inverse;
+                    d.hasAxis = 1;
+                }
             }
+            setup->positional++;
         }
-        D3DLightMaterial m;
-        m.diffuse = MaterialSourceColor(s_diffuseSource, s_material.diffuse, v);
-        m.ambient = MaterialSourceColor(s_ambientSource, s_material.ambient, v);
-        m.emissive = MaterialSourceColor(s_emissiveSource, s_material.emissive, v);
-        out.diffuse = PackColorValue(D3DLight_Vertex(s_lights, on, 8, &globalAmbient, &m, pos, n));
+        setup->count++;
+    }
+    setup->vertexDiffuse = s_colorVertex && (s_diffuseSource == GFX_MCS_COLOR1 || s_diffuseSource == GFX_MCS_COLOR2);
+    setup->vertexAmbient = s_colorVertex && (s_ambientSource == GFX_MCS_COLOR1 || s_ambientSource == GFX_MCS_COLOR2);
+    setup->vertexEmissive = s_colorVertex && (s_emissiveSource == GFX_MCS_COLOR1 || s_emissiveSource == GFX_MCS_COLOR2);
+    setup->materialDiffuse = PackColorValue(s_material.diffuse);
+    setup->materialAmbient = PackColorValue(s_material.ambient);
+    setup->materialEmissive = PackColorValue(s_material.emissive);
+    for (int c = 0; c < 3; ++c) {
+        const float f = setup->ambientSum[c] < 0.0f ? 0.0f : (setup->ambientSum[c] > 255.0f ? 255.0f : setup->ambientSum[c]);
+        setup->factor[c] = (int32_t)(f * 65536.0f + 0.5f);
+    }
+#if defined(OPENCMR2_WARPOS)
+    s_batchStats.litDraws++;
+    s_batchStats.directionalLights += (uint32_t)(setup->count - setup->positional);
+    s_batchStats.positionalLights += (uint32_t)setup->positional;
+#endif
+}
+
+// The lit colour (0xAARRGGBB) of one vertex: Direct3D's vertex lighting,
+// alpha = the diffuse alpha.
+inline uint32_t LightVertex(const LightSetup &setup, const GfxVertex &v)
+{
+#if defined(OPENCMR2_WARPOS)
+    s_batchStats.litVertices++;
+#endif
+    if (setup.count == 0) {
+        // No light is on: integers only (16.16 ambient factors, byte
+        // colours). Converting a vertex colour to floats and back is the
+        // expensive part on a 32-bit PowerPC, and most of a stage's lit draws
+        // are of this kind.
+        const uint32_t diffuse = !setup.vertexDiffuse ? setup.materialDiffuse
+            : (s_diffuseSource == GFX_MCS_COLOR1 ? v.diffuse : v.specular);
+        const uint32_t ambient = !setup.vertexAmbient ? setup.materialAmbient
+            : (s_ambientSource == GFX_MCS_COLOR1 ? v.diffuse : v.specular);
+        const uint32_t emissive = !setup.vertexEmissive ? setup.materialEmissive
+            : (s_emissiveSource == GFX_MCS_COLOR1 ? v.diffuse : v.specular);
+        uint32_t lit = diffuse & 0xff000000u;
+        for (int c = 0; c < 3; ++c) {
+            const int shift = 16 - 8 * c;   // r, g, b
+            const int64_t scaled = (int64_t)setup.factor[c] * (int32_t)((ambient >> shift) & 0xffu);
+            int32_t value = (int32_t)((emissive >> shift) & 0xffu) + (int32_t)((scaled + 32768) >> 16);
+            if (value > 255)
+                value = 255;
+            lit |= (uint32_t)value << shift;
+        }
+        return lit;
+    }
+#if defined(OPENCMR2_WARPOS)
+    s_batchStats.litByLights++;
+#endif
+    const GfxMatrix &world = setup.world;
+    float n[3] = {
+        v.nx * world._11 + v.ny * world._21 + v.nz * world._31,
+        v.nx * world._12 + v.ny * world._22 + v.nz * world._32,
+        v.nx * world._13 + v.ny * world._23 + v.nz * world._33
+    };
+    if (s_normalizeNormals) {
+        const float squared = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+        if (squared > 0.0f) {
+            const float scale = InverseSqrt(squared);
+            n[0] *= scale;
+            n[1] *= scale;
+            n[2] *= scale;
+        }
+    }
+    float pos[3] = { 0.0f, 0.0f, 0.0f };
+    if (setup.positional != 0) {
+        pos[0] = v.x * world._11 + v.y * world._21 + v.z * world._31 + world._41;
+        pos[1] = v.x * world._12 + v.y * world._22 + v.z * world._32 + world._42;
+        pos[2] = v.x * world._13 + v.y * world._23 + v.z * world._33 + world._43;
+    }
+    float amb[3] = { setup.ambientSum[0], setup.ambientSum[1], setup.ambientSum[2] };
+    float dif[3] = { 0.0f, 0.0f, 0.0f };
+    for (int d = 0; d < setup.count; ++d) {
+        const DrawLight &dl = setup.lights[d];
+        const GfxLight &l = *dl.light;
+        float scale = 1.0f;
+        float nDotL;
+        if (dl.type == GFX_LIGHT_DIRECTIONAL) {
+            nDotL = n[0] * dl.vector[0] + n[1] * dl.vector[1] + n[2] * dl.vector[2];
+        } else {
+            const float tx = l.position.x - pos[0];
+            const float ty = l.position.y - pos[1];
+            const float tz = l.position.z - pos[2];
+            const float squared = tx * tx + ty * ty + tz * tz;
+            if (l.range > 0.0f && squared > l.range * l.range)
+                continue;
+            float L[3] = { 0.0f, 0.0f, 1.0f };
+            float distance = 0.0f;
+            if (squared > 0.0f) {
+                const float inverse = InverseSqrt(squared);
+                distance = squared * inverse;
+                L[0] = tx * inverse;
+                L[1] = ty * inverse;
+                L[2] = tz * inverse;
+            }
+            const float denom = l.attenuation0 + l.attenuation1 * distance + l.attenuation2 * squared;
+            scale = denom > 0.0f ? 1.0f / denom : 1.0f;
+            if (dl.type == GFX_LIGHT_SPOT) {
+                const float rho = dl.hasAxis
+                    ? -(L[0] * dl.axis[0] + L[1] * dl.axis[1] + L[2] * dl.axis[2]) : 1.0f;
+                if (rho <= dl.outer) {
+                    scale = 0.0f;
+                } else if (rho < dl.inner) {
+                    const float span = dl.inner - dl.outer > 1e-6f ? dl.inner - dl.outer : 1e-6f;
+                    scale *= powf((rho - dl.outer) / span, l.falloff);
+                }
+            }
+            amb[0] += l.ambient.r * scale;
+            amb[1] += l.ambient.g * scale;
+            amb[2] += l.ambient.b * scale;
+            nDotL = n[0] * L[0] + n[1] * L[1] + n[2] * L[2];
+        }
+        if (nDotL > 0.0f) {
+            dif[0] += l.diffuse.r * nDotL * scale;
+            dif[1] += l.diffuse.g * nDotL * scale;
+            dif[2] += l.diffuse.b * nDotL * scale;
+        }
+    }
+    const GfxColorValue diffuse = MaterialSourceColor(s_diffuseSource, s_material.diffuse, v);
+    const GfxColorValue ambient = MaterialSourceColor(s_ambientSource, s_material.ambient, v);
+    const GfxColorValue emissive = MaterialSourceColor(s_emissiveSource, s_material.emissive, v);
+    // Clamped to [0,1], then to bytes with signed conversions (an unsigned
+    // float-to-integer conversion is a branchy sequence on PPC).
+    const float r = D3DLight_Clamp01(emissive.r + amb[0] * ambient.r + dif[0] * diffuse.r);
+    const float g = D3DLight_Clamp01(emissive.g + amb[1] * ambient.g + dif[1] * diffuse.g);
+    const float b = D3DLight_Clamp01(emissive.b + amb[2] * ambient.b + dif[2] * diffuse.b);
+    const float alpha = D3DLight_Clamp01(diffuse.a);
+    return (uint32_t)(int32_t)(alpha * 255.0f + 0.5f) << 24 | (uint32_t)(int32_t)(r * 255.0f + 0.5f) << 16 |
+           (uint32_t)(int32_t)(g * 255.0f + 0.5f) << 8 | (uint32_t)(int32_t)(b * 255.0f + 0.5f);
+}
+
+// Lights the vertices a draw uses and returns a copy (same indexing) whose
+// diffuse colour is the lit colour, for the unlit path; NULL when the scratch
+// buffer cannot grow. An indexed draw lights the vertices it references, each
+// once: a small draw out of a large vertex buffer spans far more than it uses.
+const GfxVertex *CpuLightDraw(const LightSetup &setup, const GfxVertex *vertices, uint32_t vertexCount,
+                              const uint16_t *indices, uint32_t indexCount)
+{
+    if (vertexCount > s_cpuLitCapacity) {
+        GfxVertex *grown = new (std::nothrow) GfxVertex[vertexCount];
+        uint32_t *stamps = new (std::nothrow) uint32_t[vertexCount];
+        if (grown == NULL || stamps == NULL) {
+            delete[] grown;
+            delete[] stamps;
+            Sys_Log("AMIGA: CPU lighting: cannot grow scratch to %lu vertices", (unsigned long)vertexCount);
+            return NULL;
+        }
+        memset(stamps, 0, vertexCount * sizeof(uint32_t));
+        delete[] s_cpuLitVertices;
+        delete[] s_cpuLitStamp;
+        s_cpuLitVertices = grown;
+        s_cpuLitStamp = stamps;
+        s_cpuLitCapacity = vertexCount;
+        s_cpuLitStampGen = 0;
+    }
+    if (++s_cpuLitStampGen == 0) {
+        memset(s_cpuLitStamp, 0, s_cpuLitCapacity * sizeof(uint32_t));
+        s_cpuLitStampGen = 1;
+    }
+    const uint32_t count = indices != NULL ? indexCount : vertexCount;
+    for (uint32_t k = 0; k < count; ++k) {
+        const uint32_t i = indices != NULL ? indices[k] : k;
+        if (s_cpuLitStamp[i] == s_cpuLitStampGen)
+            continue;
+        s_cpuLitStamp[i] = s_cpuLitStampGen;
+        GfxVertex &out = s_cpuLitVertices[i];
+        out = vertices[i];
+        out.diffuse = LightVertex(setup, vertices[i]);
     }
     return s_cpuLitVertices;
 }
@@ -2907,9 +3610,18 @@ int Apply3DTextureStages(void)
         if (passThrough && GfxStage_AlphaReadsTexture(st.alphaOp, st.alphaArg1, st.alphaArg2))
             LogDegradationOnce(DEGRADE_LOG_PASSTHROUGH_ALPHA,
                                "AMIGA: pass-through stage left off; its texture alpha is not applied");
+        // An additive second stage (the car's reflection, glows) on a library
+        // without GL_ADD is left off: modulating by its texture instead
+        // darkens the whole surface (the car turned almost black on the R200
+        // PPC stack). Without the stage the surface keeps its own colours.
+        const bool additiveWithoutAdd = stage == 1 && !s_caps.hasAdd &&
+            (st.colorOp == GFX_TOP_ADD || st.colorOp == GFX_TOP_ADDSIGNED || st.colorOp == GFX_TOP_ADDSIGNED2X);
+        if (additiveWithoutAdd && st.texture != NULL)
+            LogDegradationOnce(DEGRADE_LOG_NO_ADD,
+                               "AMIGA: no GL_ADD; additive second stages (reflections) are left off");
         const bool stageDisabled = (stage == 0 && st.colorOp == GFX_TOP_DISABLE) ||
                                    (stage == 1 && (s_stages[0].colorOp == GFX_TOP_DISABLE || st.colorOp == GFX_TOP_DISABLE)) ||
-                                   passThrough || st.texture == NULL;
+                                   passThrough || additiveWithoutAdd || st.texture == NULL;
         if (stageDisabled) {
             if (s_glCache.texEnabled[stage] != 0) {
                 glDisable(GL_TEXTURE_2D);
@@ -3129,6 +3841,520 @@ EmitPlan BuildEmitPlan(bool prelit, GLenum mode, int activeStages)
     return plan;
 }
 
+#if defined(OPENCMR2_WARPOS)
+// One 3D vertex of an open batch: Emit3DVertex with the position and normal
+// taken through world*view (row vectors, as the D3D matrices are stored).
+void BatchEmit3D(const GfxVertex *v, bool normals, const EmitPlan &plan, int activeStages,
+                 const GfxMatrix &m)
+{
+    if (activeStages >= 1) {
+        float u0, v0;
+        ComputeStageTexCoord(0, v, m, &u0, &v0);
+        RawTexCoord2f(u0, v0);
+    }
+    if (activeStages >= 2) {
+        float u1, v1;
+        ComputeStageTexCoord(1, v, m, &u1, &v1);
+        RawTexCoord1_2f(u1, v1);
+    }
+    if (plan.emitColor) {
+        const uint32_t rgb = plan.overrideColor ? plan.color : v->diffuse;
+        const uint32_t alpha = plan.overrideAlpha ? plan.color : v->diffuse;
+        RawColor4ub((GLubyte)((rgb >> 16) & 0xffu), (GLubyte)((rgb >> 8) & 0xffu),
+                    (GLubyte)(rgb & 0xffu), (GLubyte)((alpha >> 24) & 0xffu));
+    }
+    if (normals)
+        RawNormal3f(v->nx * m._11 + v->ny * m._21 + v->nz * m._31,
+                    v->nx * m._12 + v->ny * m._22 + v->nz * m._32,
+                    v->nx * m._13 + v->ny * m._23 + v->nz * m._33);
+    RawVertex3f(v->x * m._11 + v->y * m._21 + v->z * m._31 + m._41,
+                v->x * m._12 + v->y * m._22 + v->z * m._32 + m._42,
+                v->x * m._13 + v->y * m._23 + v->z * m._33 + m._43);
+}
+#endif
+
+#if defined(OPENCMR2_WARPOS)
+struct BucketVertex {
+    float x, y, z;
+    uint32_t argb;
+    float u0, v0, u1, v1;
+};
+// The texture state a draw wants, as Apply3DTextureStages leaves the GL cache.
+struct TexKey {
+    unsigned int tex[2];
+    int enabled[2];
+    GLint env[2];
+};
+// The game's raster state a bucket is drawn with: what Apply3DRasterState
+// reads.
+struct RasterKey {
+    int depthTest, depthWrite, depthFunc, cullMode;
+    int alphaBlend, srcBlend, dstBlend;
+    int alphaTest, alphaFunc;
+    uint32_t alphaRef;
+};
+
+RasterKey CurrentRasterKey(void)
+{
+    const RasterKey key = { s_depthTest, s_depthWrite, s_depthFunc, s_cullMode, s_alphaBlend, s_srcBlend,
+                            s_dstBlend, s_alphaTest, s_alphaFunc, s_alphaRef };
+    return key;
+}
+
+void SetRasterGlobals(const RasterKey &key)
+{
+    s_depthTest = key.depthTest;
+    s_depthWrite = key.depthWrite;
+    s_depthFunc = key.depthFunc;
+    s_cullMode = key.cullMode;
+    s_alphaBlend = key.alphaBlend;
+    s_srcBlend = key.srcBlend;
+    s_dstBlend = key.dstBlend;
+    s_alphaTest = key.alphaTest;
+    s_alphaFunc = key.alphaFunc;
+    s_alphaRef = key.alphaRef;
+}
+
+bool SameRasterKey(const RasterKey &a, const RasterKey &b)
+{
+    return a.depthTest == b.depthTest && a.depthWrite == b.depthWrite && a.depthFunc == b.depthFunc &&
+           a.cullMode == b.cullMode && a.alphaBlend == b.alphaBlend && a.srcBlend == b.srcBlend &&
+           a.dstBlend == b.dstBlend && a.alphaTest == b.alphaTest && a.alphaFunc == b.alphaFunc &&
+           a.alphaRef == b.alphaRef;
+}
+
+// A bucket holds each vertex of a draw once, with 16-bit indices: the stack
+// sends shared vertices to the card once (the Zorro bus is the bottleneck,
+// about 0.3 us per vertex), and nothing is copied twice on the way.
+struct Bucket {
+    TexKey key;
+    RasterKey raster;
+    int format;
+    BucketVertex *vertices;
+    uint16_t *indices;
+    uint32_t count, capacity;             // vertices
+    uint32_t indexCount, indexCapacity;
+};
+enum { kMaxBuckets = 256, kBucketVertexLimit = 4096, kBucketIndexLimit = 16384 };
+Bucket s_buckets[kMaxBuckets];
+int s_bucketCount;
+// Per draw and source vertex: its clip outcode (computed when a triangle that
+// survived back-face culling first references it) and, once a kept triangle
+// uses it, its place in the bucket.
+struct SourceVertex {
+    uint32_t codeStamp, slotStamp;
+    uint16_t slot;
+    uint8_t outcode;
+};
+SourceVertex *s_source;
+uint32_t s_sourceCapacity, s_sourceGen;
+// Direct-mapped lookup from a draw's state to its bucket (index + 1).
+unsigned char s_bucketLookup[256];
+
+// Whether the stages' textures can be read without GL work: nothing to
+// upload, no fallback texture to create, the sampler state already on the
+// texture object.
+bool StagesCapturable(void)
+{
+    for (int stage = 0; stage < 2; ++stage) {
+        const StageState &st = s_stages[stage];
+        GfxTexture *t = st.texture;
+        if (t == NULL)
+            continue;
+        if (st.colorOp == GFX_TOP_BUMPENVMAP || st.colorOp == GFX_TOP_BUMPENVMAPLUMINANCE)
+            return false;
+        // The neutral stand-in of a cube or render-target texture has its
+        // sampler set on every draw (it is not tracked): not capturable.
+        if ((t->flags & (GFX_TEXTURE_CUBE | GFX_TEXTURE_RENDER_TARGET)) != 0)
+            return false;
+        if (t->dirty || t->glId == 0 || !t->samplerValid || t->samplerWrap != StageWrapMode(stage) ||
+            t->samplerMinFilter != FilterMode(st.minFilter) || t->samplerMagFilter != FilterMode(st.magFilter))
+            return false;
+    }
+    return true;
+}
+
+// Runs Apply3DTextureStages with its GL calls suppressed and returns the
+// texture state it would have set; the GL cache is put back to what GL holds.
+int CaptureTextureStages(TexKey *key)
+{
+    const unsigned int tex0 = s_glCache.boundTex[0], tex1 = s_glCache.boundTex[1];
+    const int enabled0 = s_glCache.texEnabled[0], enabled1 = s_glCache.texEnabled[1];
+    const GLint env0 = s_glCache.texEnvMode[0], env1 = s_glCache.texEnvMode[1];
+    const int unit = s_glCache.activeUnit;
+    s_texCapture = 1;
+    const int stages = Apply3DTextureStages();
+    s_texCapture = 0;
+    for (int i = 0; i < 2; ++i) {
+        key->enabled[i] = s_glCache.texEnabled[i] == 1 ? 1 : 0;
+        key->tex[i] = key->enabled[i] ? s_glCache.boundTex[i] : 0;
+        key->env[i] = key->enabled[i] ? s_glCache.texEnvMode[i] : 0;
+    }
+    s_glCache.boundTex[0] = tex0;
+    s_glCache.boundTex[1] = tex1;
+    s_glCache.texEnabled[0] = enabled0;
+    s_glCache.texEnabled[1] = enabled1;
+    s_glCache.texEnvMode[0] = env0;
+    s_glCache.texEnvMode[1] = env1;
+    s_glCache.activeUnit = unit;
+    return stages;
+}
+
+// Sets GL's texture state to a bucket's key, through the cache.
+void ApplyTexKey(const TexKey &key)
+{
+    const int units = s_caps.maxTexUnits > 1 ? 2 : 1;
+    for (int stage = units - 1; stage >= 0; --stage) {
+        const int want = key.enabled[stage];
+        if (s_glCache.texEnabled[stage] == want &&
+            (!want || (s_glCache.boundTex[stage] == key.tex[stage] && s_glCache.texEnvMode[stage] == key.env[stage])))
+            continue;
+        SelectActiveUnit(stage);
+        if (s_glCache.texEnabled[stage] != want) {
+            if (want)
+                glEnable(GL_TEXTURE_2D);
+            else
+                glDisable(GL_TEXTURE_2D);
+            s_glCache.texEnabled[stage] = want;
+        }
+        if (!want)
+            continue;
+        if (s_glCache.boundTex[stage] != key.tex[stage]) {
+            glBindTexture(GL_TEXTURE_2D, key.tex[stage]);
+            s_glCache.boundTex[stage] = key.tex[stage];
+        }
+        if (s_glCache.texEnvMode[stage] != key.env[stage]) {
+            glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, key.env[stage]);
+            s_glCache.texEnvMode[stage] = key.env[stage];
+        }
+    }
+    if (units > 1)
+        SelectActiveUnit(0);
+}
+
+void FlushBuckets(void)
+{
+    if (s_bucketVertexTotal == 0 || s_inBucketFlush)
+        return;
+    s_inBucketFlush = 1;
+    s_batchStats.bucketFlushes++;
+    // Each bucket is drawn with the raster state its draws had: the game's
+    // state variables are set to it for Apply3DRasterState and put back at
+    // the end. Opaque buckets go first, then the blended ones.
+    const RasterKey current = CurrentRasterKey();
+    bool usedArrays = false;
+    if (s_batchArrays && !s_batchArraysChecked) {
+        // Errors left by earlier calls must not be read as the arrays' own.
+        while (glGetError() != GL_NO_ERROR) {}
+    }
+    for (int pass = 0; pass < 2; ++pass)
+    for (int b = 0; b < s_bucketCount; ++b) {
+        Bucket &bucket = s_buckets[b];
+        if (bucket.indexCount == 0 || (bucket.raster.alphaBlend != 0) != (pass == 1))
+            continue;
+        SetRasterGlobals(bucket.raster);
+        Apply3DRasterState();
+        ApplyTexKey(bucket.key);
+        const int stages = (bucket.format >> 1) & 3;
+        if (s_batchArrays) {
+            const GLsizei stride = (GLsizei)sizeof(BucketVertex);
+            glVertexPointer(3, GL_FLOAT, stride, &bucket.vertices[0].x);
+            SetClientArray(kClientArrayVertex, GL_VERTEX_ARRAY, 1);
+            SetClientArray(kClientArrayNormal, GL_NORMAL_ARRAY, 0);
+            // 0xAARRGGBB is A,R,G,B in memory on this big-endian target.
+            glColorPointer(4, MGL_UBYTE_ARGB, stride, &bucket.vertices[0].argb);
+            SetClientArray(kClientArrayColor, GL_COLOR_ARRAY, 1);
+            if (stages >= 1)
+                glTexCoordPointer(2, GL_FLOAT, stride, &bucket.vertices[0].u0);
+            SetClientArray(kClientArrayTex0, GL_TEXTURE_COORD_ARRAY, stages >= 1 ? 1 : 0);
+            if (stages >= 2) {
+                glClientActiveTextureARB(GL_TEXTURE1_ARB);
+                glTexCoordPointer(2, GL_FLOAT, stride, &bucket.vertices[0].u1);
+                SetClientArray(kClientArrayTex1, GL_TEXTURE_COORD_ARRAY, 1);
+                glClientActiveTextureARB(GL_TEXTURE0_ARB);
+            } else if ((s_glCache.clientArrayMask & kClientArrayTex1) != 0) {
+                glClientActiveTextureARB(GL_TEXTURE1_ARB);
+                SetClientArray(kClientArrayTex1, GL_TEXTURE_COORD_ARRAY, 0);
+                glClientActiveTextureARB(GL_TEXTURE0_ARB);
+            }
+            glDrawElements(GL_TRIANGLES, (GLsizei)bucket.indexCount, GL_UNSIGNED_SHORT, bucket.indices);
+            s_batchStats.batches++;
+            usedArrays = true;
+        } else {
+            for (uint32_t i = 0; i < bucket.indexCount;) {
+                const uint32_t room = BatchBegin(bucket.format);
+                const uint32_t end = bucket.indexCount - i > room ? i + room : bucket.indexCount;
+                const uint32_t emitted = end - i;
+                for (; i < end; ++i) {
+                    const BucketVertex &v = bucket.vertices[bucket.indices[i]];
+                    if (stages >= 1)
+                        RawTexCoord2f(v.u0, v.v0);
+                    if (stages >= 2)
+                        RawTexCoord1_2f(v.u1, v.v1);
+                    RawColor4ub((GLubyte)((v.argb >> 16) & 0xffu), (GLubyte)((v.argb >> 8) & 0xffu),
+                                (GLubyte)(v.argb & 0xffu), (GLubyte)(v.argb >> 24));
+                    RawVertex3f(v.x, v.y, v.z);
+                }
+                s_batch.count += emitted;
+            }
+        }
+        bucket.count = 0;
+        bucket.indexCount = 0;
+    }
+    if (usedArrays) {
+        // The immediate paths never read a client array; leave none armed.
+        ClearClientArrays();
+        if (!s_batchArraysChecked) {
+            // The first array flush decides whether the library takes them.
+            s_batchArraysChecked = 1;
+            const GLenum error = glGetError();
+            if (error != GL_NO_ERROR) {
+                s_batchArrays = 0;
+                Sys_Log("gfx: array buckets rejected by MiniGL (error %x); using immediate mode", (unsigned)error);
+            }
+        }
+    }
+    SetRasterGlobals(current);
+    memset(s_bucketLookup, 0, sizeof(s_bucketLookup));
+    // The last batch stays open; the next GL call closes it. GL is left with
+    // the last bucket's raster and texture state, as the cache records.
+    s_bucketCount = 0;
+    s_bucketVertexTotal = 0;
+    s_inBucketFlush = 0;
+}
+
+// Adds a draw to the bucket of its texture and raster state. Triangles that
+// face away are dropped here when the draw culls (cpu_cull): their vertices
+// are then never lit, stored, sent over the bus or seen by the stack. Each
+// vertex a kept triangle references is lit (when `light` is given),
+// transformed by world*view and stored once; the triangles are indices into
+// the bucket. Returns false when the draw must go the immediate way (too
+// large, no memory).
+bool BucketAppend(const TexKey &key, const RasterKey &raster, int format, GLenum mode, const GfxVertex *vertices,
+                  uint32_t vertexCount, const uint16_t *indices, uint32_t sourceCount, const EmitPlan &plan,
+                  int activeStages, const GfxMatrix &m, const LightSetup *light)
+{
+    const uint32_t total = FlattenedCount(mode, sourceCount);
+    // The most vertices and indices this draw can add.
+    const uint32_t mostVertices = total < vertexCount ? total : vertexCount;
+    if (mostVertices > (uint32_t)kBucketVertexLimit || total > (uint32_t)kBucketIndexLimit)
+        return false;
+    if (vertexCount > s_sourceCapacity) {
+        SourceVertex *grown = (SourceVertex *)realloc(s_source, vertexCount * sizeof(SourceVertex));
+        if (grown == NULL)
+            return false;
+        s_source = grown;
+        memset(s_source, 0, vertexCount * sizeof(SourceVertex));
+        s_sourceCapacity = vertexCount;
+        s_sourceGen = 0;
+    }
+    const unsigned hash = (key.tex[0] * 31u + key.tex[1] * 7u + (unsigned)format + (unsigned)raster.alphaBlend * 3u +
+                           (unsigned)raster.cullMode * 5u + (unsigned)raster.alphaTest * 11u) & 255u;
+    Bucket *bucket = NULL;
+    if (s_bucketLookup[hash] != 0 && (int)s_bucketLookup[hash] <= s_bucketCount) {
+        Bucket &c = s_buckets[s_bucketLookup[hash] - 1];
+        if (c.format == format && SameRasterKey(c.raster, raster) && c.key.tex[0] == key.tex[0] &&
+            c.key.tex[1] == key.tex[1] && c.key.enabled[0] == key.enabled[0] && c.key.enabled[1] == key.enabled[1] &&
+            c.key.env[0] == key.env[0] && c.key.env[1] == key.env[1])
+            bucket = &c;
+    }
+    if (bucket == NULL) {
+        for (int b = 0; b < s_bucketCount; ++b) {
+            Bucket &c = s_buckets[b];
+            if (c.format == format && SameRasterKey(c.raster, raster) && c.key.tex[0] == key.tex[0] &&
+                c.key.tex[1] == key.tex[1] &&
+                c.key.enabled[0] == key.enabled[0] && c.key.enabled[1] == key.enabled[1] &&
+                c.key.env[0] == key.env[0] && c.key.env[1] == key.env[1]) {
+                bucket = &c;
+                s_bucketLookup[hash] = (unsigned char)(b + 1);
+                break;
+            }
+        }
+    }
+    if (bucket != NULL && (bucket->count + mostVertices > (uint32_t)kBucketVertexLimit ||
+                           bucket->indexCount + total > (uint32_t)kBucketIndexLimit)) {
+        // Full: send everything (the order of the buckets is kept) and start over.
+        FlushBuckets();
+        bucket = NULL;
+    }
+    if (bucket == NULL) {
+        if (s_bucketCount == (int)kMaxBuckets)
+            FlushBuckets();
+        bucket = &s_buckets[s_bucketCount++];
+        bucket->key = key;
+        bucket->raster = raster;
+        bucket->format = format;
+        bucket->count = 0;
+        bucket->indexCount = 0;
+        s_bucketLookup[hash] = (unsigned char)s_bucketCount;
+    }
+    // Grown to the largest frame seen and kept: no steady-state allocation.
+    if (bucket->count + mostVertices > bucket->capacity) {
+        uint32_t capacity = (bucket->count + mostVertices) * 2u + 64u;
+        if (capacity > (uint32_t)kBucketVertexLimit)
+            capacity = (uint32_t)kBucketVertexLimit;
+        BucketVertex *grown = (BucketVertex *)realloc(bucket->vertices, capacity * sizeof(BucketVertex));
+        if (grown == NULL)
+            return false;
+        bucket->vertices = grown;
+        bucket->capacity = capacity;
+    }
+    if (bucket->indexCount + total > bucket->indexCapacity) {
+        uint32_t capacity = (bucket->indexCount + total) * 2u + 96u;
+        if (capacity > (uint32_t)kBucketIndexLimit)
+            capacity = (uint32_t)kBucketIndexLimit;
+        uint16_t *grown = (uint16_t *)realloc(bucket->indices, capacity * sizeof(uint16_t));
+        if (grown == NULL)
+            return false;
+        bucket->indices = grown;
+        bucket->indexCapacity = capacity;
+    }
+    if (++s_sourceGen == 0) {
+        memset(s_source, 0, s_sourceCapacity * sizeof(SourceVertex));
+        s_sourceGen = 1;
+    }
+    const uint32_t gen = s_sourceGen;
+    // Plain lists and plain texture coordinates skip the general mappings.
+    const bool plainList = mode == GL_TRIANGLES;
+    const bool directUV = plan.directTexCoord;
+    const bool uv0FromU1 = plan.stageUsesU1[0], uv1FromU1 = plan.stageUsesU1[1];
+    // Direct3D culls by winding on screen; in its left-handed eye space a
+    // clockwise triangle has (b-a)x(c-a) . a < 0. GFX_CULL_CW drops those,
+    // GFX_CULL_CCW the others. Degenerate triangles (0) are kept for GL.
+    //
+    // The test is made in object space, so a culled triangle's vertices are
+    // never transformed: with p_eye = p R + T (row vectors), the same value
+    // is det(R) * ((b-a)x(c-a) . (a - e)), where e = -T R^-1 is the eye in
+    // object space. A matrix that cannot be inverted turns culling off for
+    // the draw (GL then culls, as for the immediate path).
+    int cullSign = !s_cpuCull ? 0 : raster.cullMode == GFX_CULL_CW ? -1 : raster.cullMode == GFX_CULL_CCW ? 1 : 0;
+    float eyeX = 0.0f, eyeY = 0.0f, eyeZ = 0.0f;
+    if (cullSign != 0) {
+        const float c11 = m._22 * m._33 - m._23 * m._32, c12 = m._23 * m._31 - m._21 * m._33,
+                    c13 = m._21 * m._32 - m._22 * m._31;
+        const float det = m._11 * c11 + m._12 * c12 + m._13 * c13;
+        if (det > 1e-12f || det < -1e-12f) {
+            const float inv = 1.0f / det;
+            // R^-1 = adjugate / det; e = -T R^-1.
+            const float i11 = c11 * inv, i12 = (m._13 * m._32 - m._12 * m._33) * inv,
+                        i13 = (m._12 * m._23 - m._13 * m._22) * inv;
+            const float i21 = c12 * inv, i22 = (m._11 * m._33 - m._13 * m._31) * inv,
+                        i23 = (m._13 * m._21 - m._11 * m._23) * inv;
+            const float i31 = c13 * inv, i32 = (m._12 * m._31 - m._11 * m._32) * inv,
+                        i33 = (m._11 * m._22 - m._12 * m._21) * inv;
+            eyeX = -(m._41 * i11 + m._42 * i21 + m._43 * i31);
+            eyeY = -(m._41 * i12 + m._42 * i22 + m._43 * i32);
+            eyeZ = -(m._41 * i13 + m._42 * i23 + m._43 * i33);
+            if (det < 0.0f)
+                cullSign = -cullSign;   // a mirroring matrix reverses the winding
+        } else {
+            cullSign = 0;
+        }
+    }
+    // Triangles wholly outside one plane of the view volume are dropped too:
+    // GL would clip them away, after they had cost the stack about a
+    // microsecond per vertex. object -> clip is world*view*projection; in
+    // Direct3D's clip space the view volume is -w<=x<=w, -w<=y<=w, 0<=z<=w.
+    // m is the world*view of the current generation (Apply3DTransforms), so
+    // the product is reused until WORLD, VIEW or PROJECTION is set again.
+    const bool clipTest = s_cpuClip != 0;
+    if (clipTest && (!s_glCache.clipValid || s_glCache.clipWorldViewGen != s_worldViewGeneration ||
+                     s_glCache.clipProjectionGen != s_projectionGeneration)) {
+        GfxMatrix projection;
+        if (s_transformSet[GFX_TRANSFORM_PROJECTION])
+            projection = s_transforms[GFX_TRANSFORM_PROJECTION];
+        else
+            Identity(&projection);
+        MultiplyRowMatrices(m, projection, &s_glCache.clip);
+        s_glCache.clipWorldViewGen = s_worldViewGeneration;
+        s_glCache.clipProjectionGen = s_projectionGeneration;
+        s_glCache.clipValid = 1;
+    }
+    const GfxMatrix &clip = s_glCache.clip;
+    uint16_t *outIndex = bucket->indices + bucket->indexCount;
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i + 3 <= total; i += 3) {
+        uint32_t src[3];
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t flat = plainList ? i + (uint32_t)k : FlattenedSource(mode, i + (uint32_t)k);
+            src[k] = indices != NULL ? indices[flat] : flat;
+        }
+        if (cullSign != 0) {
+            const GfxVertex *a = &vertices[src[0]], *b = &vertices[src[1]], *c = &vertices[src[2]];
+            const float ux = b->x - a->x, uy = b->y - a->y, uz = b->z - a->z;
+            const float wx = c->x - a->x, wy = c->y - a->y, wz = c->z - a->z;
+            const float facing = (uy * wz - uz * wy) * (a->x - eyeX) + (uz * wx - ux * wz) * (a->y - eyeY) +
+                                 (ux * wy - uy * wx) * (a->z - eyeZ);
+            if ((cullSign < 0 && facing < 0.0f) || (cullSign > 0 && facing > 0.0f)) {
+                s_batchStats.culledTriangles++;
+                continue;
+            }
+        }
+        if (clipTest) {
+            unsigned outside = 0x3fu;
+            for (int k = 0; k < 3; ++k) {
+                SourceVertex *e = &s_source[src[k]];
+                if (e->codeStamp != gen) {
+                    e->codeStamp = gen;
+                    const GfxVertex *v = &vertices[src[k]];
+                    const float cx = v->x * clip._11 + v->y * clip._21 + v->z * clip._31 + clip._41;
+                    const float cy = v->x * clip._12 + v->y * clip._22 + v->z * clip._32 + clip._42;
+                    const float cz = v->x * clip._13 + v->y * clip._23 + v->z * clip._33 + clip._43;
+                    const float cw = v->x * clip._14 + v->y * clip._24 + v->z * clip._34 + clip._44;
+                    e->outcode = (uint8_t)((cx > cw ? 1u : 0u) | (cx < -cw ? 2u : 0u) | (cy > cw ? 4u : 0u) |
+                                           (cy < -cw ? 8u : 0u) | (cz < 0.0f ? 16u : 0u) | (cz > cw ? 32u : 0u));
+                }
+                outside &= e->outcode;
+            }
+            if (outside != 0) {
+                s_batchStats.clippedTriangles++;
+                continue;
+            }
+        }
+        for (int k = 0; k < 3; ++k) {
+            SourceVertex *e = &s_source[src[k]];
+            if (e->slotStamp != gen) {
+                e->slotStamp = gen;
+                e->slot = (uint16_t)bucket->count;
+                const GfxVertex *v = &vertices[src[k]];
+                BucketVertex *out = &bucket->vertices[bucket->count++];
+                if (directUV) {
+                    const float *uv0 = uv0FromU1 ? &v->u1 : &v->u0;
+                    const float *uv1 = uv1FromU1 ? &v->u1 : &v->u0;
+                    out->u0 = uv0[0];
+                    out->v0 = uv0[1];
+                    out->u1 = uv1[0];
+                    out->v1 = uv1[1];
+                } else {
+                    out->u0 = out->v0 = out->u1 = out->v1 = 0.0f;
+                    if (activeStages >= 1)
+                        ComputeStageTexCoord(0, v, m, &out->u0, &out->v0);
+                    if (activeStages >= 2)
+                        ComputeStageTexCoord(1, v, m, &out->u1, &out->v1);
+                }
+                const uint32_t base = light != NULL ? LightVertex(*light, *v) : v->diffuse;
+                const uint32_t rgb = plan.overrideColor ? plan.color : base;
+                const uint32_t alpha = plan.overrideAlpha ? plan.color : base;
+                out->argb = (rgb & 0x00ffffffu) | (alpha & 0xff000000u);
+                out->x = v->x * m._11 + v->y * m._21 + v->z * m._31 + m._41;
+                out->y = v->x * m._12 + v->y * m._22 + v->z * m._32 + m._42;
+                out->z = v->x * m._13 + v->y * m._23 + v->z * m._33 + m._43;
+            }
+            *outIndex++ = e->slot;
+        }
+        kept += 3;
+    }
+    bucket->indexCount += kept;
+    // Counts the draw even when every triangle was culled: the bucket list
+    // must still be flushed in order.
+    s_bucketVertexTotal += kept != 0 ? kept : 1u;
+    s_batchStats.draws++;
+    s_batchStats.vertices += kept;
+    s_batchStats.sortedDraws++;
+    return true;
+}
+#endif
+
 void Emit3DVertex(const GfxVertex *v, bool normals, const EmitPlan &plan, int activeStages,
                   const GfxMatrix &worldView)
 {
@@ -3254,6 +4480,26 @@ void Submit3DBlocks(GLenum mode, const GfxVertex *vertices, const uint16_t *indi
                     uint32_t sourceCount, const EmitPlan &plan, bool normals, int activeStages,
                     const GfxMatrix &worldView)
 {
+#if defined(OPENCMR2_WARPOS)
+    if (s_batching && FlattenedMode(mode) == GL_TRIANGLES) {
+        const uint32_t total = FlattenedCount(mode, sourceCount);
+        const int format = 1 | (activeStages << 1) | (plan.emitColor ? 8 : 0) | (normals ? 16 : 0);
+        s_batchStats.draws++;
+        s_batchStats.vertices += total;
+        for (uint32_t i = 0; i < total;) {
+            const uint32_t room = BatchBegin(format);
+            const uint32_t end = total - i > room ? i + room : total;
+            const uint32_t emitted = end - i;
+            for (; i < end; ++i) {
+                const uint32_t src = FlattenedSource(mode, i);
+                BatchEmit3D(indices != NULL ? &vertices[indices[src]] : &vertices[src],
+                            normals, plan, activeStages, worldView);
+            }
+            s_batch.count += emitted;
+        }
+        return;
+    }
+#endif
     // Eligibility: the client-array path needs plain indexed
     // triangles above librw's threshold, plus texcoords that come straight
     // from the vertex (plan.directTexCoord).
@@ -3327,6 +4573,28 @@ void SubmitTLBlocks(GLenum mode, const GfxTLVertex *vertices, const uint16_t *in
 {
     const GLenum flattened = FlattenedMode(mode);
     const uint32_t total = FlattenedCount(mode, sourceCount);
+#if defined(OPENCMR2_WARPOS)
+    if (s_batching && flattened == GL_TRIANGLES) {
+        const ProfScope prof(kProfTL);
+        s_batchStats.draws++;
+        s_batchStats.vertices += total;
+        for (uint32_t i = 0; i < total;) {
+            const uint32_t room = BatchBegin(0x100);
+            const uint32_t end = total - i > room ? i + room : total;
+            const uint32_t emitted = end - i;
+            for (; i < end; ++i) {
+                const uint32_t src = FlattenedSource(mode, i);
+                const GfxTLVertex *v = indices != NULL ? &vertices[indices[src]] : &vertices[src];
+                RawColor4ub((GLubyte)((v->color >> 16) & 0xffu), (GLubyte)((v->color >> 8) & 0xffu),
+                            (GLubyte)(v->color & 0xffu), (GLubyte)((v->color >> 24) & 0xffu));
+                RawTexCoord2f(v->tu, v->tv);
+                RawVertex2f(v->sx, v->sy);
+            }
+            s_batch.count += emitted;
+        }
+        return;
+    }
+#endif
     const uint32_t block = BlockVertexCount(flattened);
     for (uint32_t first = 0; first < total; first += block) {
         const uint32_t end = (total - first) > block ? first + block : total;
@@ -3430,10 +4698,33 @@ void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexC
         s_tlScreenActive = 0;
         ApplyViewport();
     }
+#if defined(OPENCMR2_WARPOS)
+    uint32_t profT = s_profile ? ProfNow() : 0;
+#define PROF_SECTION(bucket) \
+    do { if (s_profile) { const uint32_t n_ = ProfNow(); s_profTicks[bucket] += n_ - profT; profT = n_; } } while (0)
+#else
+#define PROF_SECTION(bucket) do { } while (0)
+#endif
+#if defined(OPENCMR2_WARPOS)
+    // A draw is a candidate for the texture-sorted buckets when its result
+    // does not depend on the draws around it: depth-tested and depth-writing
+    // triangles, opaque or (batch_sort_blended) blended. Anything else is
+    // order-dependent, so the buckets are sent before any of its state is set.
+    bool sortCandidate = s_batchSort && s_depthTest && s_depthWrite && FlattenedMode(mode) == GL_TRIANGLES &&
+                         (!s_alphaBlend || s_batchSortBlended);
+    if (s_batchSort && !sortCandidate) {
+        s_batchStats.whyNot[s_alphaBlend ? 1 : !s_depthTest ? 2 : !s_depthWrite ? 3 : 4]++;
+        FlushBuckets();
+    }
+#else
+    const bool sortCandidate = false;
+#endif
     GfxMatrix worldView;
     Apply3DTransforms(&worldView);
-    Apply3DRasterState();
+    if (!sortCandidate)
+        Apply3DRasterState();
     const int backdropFogAlpha = BackdropFogAlpha(vertices, vertexCount);
+    PROF_SECTION(kProfApply);
     // Draws a point or spot light reaches are lit on the CPU (see above).
     DrawGeometry geometry = { vertices, indices, indices != NULL ? indexCount : vertexCount, 0, { 0, 0, 0, 0 } };
     const GfxVertex *drawVertices = vertices;
@@ -3441,16 +4732,68 @@ void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexC
     const bool twoStages = s_multiTextureCpuLight && s_caps.maxTexUnits > 1 &&
         GfxStage_DrawUsesTwoUnits(s_stages[0].colorOp, s_stages[0].texture != NULL, s_stages[1].colorOp,
                                   s_stages[1].colorArg1, s_stages[1].colorArg2, s_stages[1].texture != NULL);
-    if (s_lightingEnabled && ((s_cpuLightsEnabled && PositionalLightReachesDraw(&geometry)) || twoStages)) {
-        const GfxVertex *lit = CpuLightDraw(vertices, vertexCount, indices, indexCount);
-        if (lit != NULL) {
-            drawVertices = lit;
-            s_cpuLitDraw = 1;
+#if defined(OPENCMR2_WARPOS)
+    // [video] cpu_light_all (default 1): every lit draw is lit here. The R200
+    // PPC stack spends about 2.4 us on a lit vertex against 0.7 us on a
+    // pre-lit one (drawbench, reference A4000), and two thirds of a stage's
+    // draws are lit.
+    const bool lightAll = s_cpuLightAll != 0;
+#else
+    const bool lightAll = false;
+#endif
+    // Lit on the CPU: the light setup is built here; the vertices are lit
+    // either straight into a sorted bucket or, for the immediate path, into
+    // the scratch copy.
+    LightSetup lightSetup;
+    bool cpuLight = false;
+    const bool positionalReach = s_lightingEnabled && PositionalLightReachesDraw(&geometry);
+    if (s_lightingEnabled && (lightAll || twoStages || (s_cpuLightsEnabled && positionalReach))) {
+        BuildLightSetup(&lightSetup, positionalReach);
+        cpuLight = true;
+        s_cpuLitDraw = 1;
+        if (!sortCandidate) {
+            const GfxVertex *lit = CpuLightDraw(lightSetup, vertices, vertexCount, indices, indexCount);
+            if (lit != NULL) {
+                drawVertices = lit;
+            } else {
+                cpuLight = false;
+                s_cpuLitDraw = 0;
+            }
         }
     }
+    PROF_SECTION(kProfLight);
     const bool prelit = Apply3DLightingAndFog(backdropFogAlpha);
     if (s_colourLogEnabled)
         ColourLogSample(vertices, backdropFogAlpha, prelit);
+#if defined(OPENCMR2_WARPOS)
+    if (sortCandidate) {
+        if (prelit && StagesCapturable()) {
+            TexKey key;
+            const int wantedStages = CaptureTextureStages(&key);
+            const EmitPlan sortedPlan = BuildEmitPlan(prelit, mode, wantedStages);
+            if (sortedPlan.emitColor) {
+                PROF_SECTION(kProfApply);
+                const int format = 1 | (wantedStages << 1) | 8;
+                if (BucketAppend(key, CurrentRasterKey(), format, mode, vertices, vertexCount, indices,
+                                 indices != NULL ? indexCount : vertexCount, sortedPlan, wantedStages, worldView,
+                                 cpuLight ? &lightSetup : NULL)) {
+                    PROF_SECTION(kProfEmit);
+                    return;
+                }
+            }
+        }
+        // Not sortable after all (lit by GL, a texture to upload): the
+        // immediate path, in order, with its raster state applied now.
+        s_batchStats.whyNot[!prelit ? 0 : 5]++;
+        FlushBuckets();
+        Apply3DRasterState();
+        if (cpuLight) {
+            const GfxVertex *lit = CpuLightDraw(lightSetup, vertices, vertexCount, indices, indexCount);
+            if (lit != NULL)
+                drawVertices = lit;
+        }
+    }
+#endif
     const int activeStages = Apply3DTextureStages();
     // The library renders a multitextured draw unlit when fog is on or unit 1
     // uses DECAL/REPLACE (gl/src/draw.c's `lit` predicate). Normals are then
@@ -3464,8 +4807,11 @@ void Submit3DDrawBody(int primitive, const GfxVertex *vertices, uint32_t vertexC
     }
 
     const EmitPlan plan = BuildEmitPlan(prelit, mode, activeStages);
+    PROF_SECTION(kProfApply);
     Submit3DBlocks(mode, drawVertices, indices, indices != NULL ? indexCount : vertexCount,
                    plan, emitNormals, activeStages, worldView);
+    PROF_SECTION(kProfEmit);
+#undef PROF_SECTION
 }
 
 // Matches stage zero's GL state to s_boundTexture before a 2D draw. A 3D pass
@@ -3513,6 +4859,12 @@ void SyncStage0ForTL(void)
 // screen; the game's viewport still clips it through the scissor test.
 void BeginTLDraw(void)
 {
+#if defined(OPENCMR2_WARPOS)
+    // 2D is order-dependent: send the sorted 3D buckets before any of its
+    // state is set (a flush in the middle of the setup below would change
+    // raster and texture state it has already checked).
+    FlushBuckets();
+#endif
     if (s_glCache.lighting != 0) {
         glDisable(GL_LIGHTING);
         s_glCache.lighting = 0;
@@ -3554,7 +4906,29 @@ void BeginTLDraw(void)
         ClearClientArrays();
         BeginScreenDraw();
         s_tlScreenActive = 1;
+#if defined(OPENCMR2_WARPOS)
+        if (s_batching) {
+            // BeginScreenDraw left the projection selected.
+            glMatrixMode(GL_MODELVIEW);
+            if (!s_modelviewIdentity) {
+                glLoadIdentity();
+                s_modelviewIdentity = 1;
+            }
+        }
+#endif
     }
+#if defined(OPENCMR2_WARPOS)
+    if (s_batching) {
+        // The modelview is the identity for 3D and 2D alike: nothing to load,
+        // and the cached world*view product stays valid.
+        if (!s_modelviewIdentity) {
+            glMatrixMode(GL_MODELVIEW);
+            glLoadIdentity();
+            s_modelviewIdentity = 1;
+        }
+        return;
+    }
+#endif
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     // The modelview now holds the TL identity, not the cached product.

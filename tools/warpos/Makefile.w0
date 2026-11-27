@@ -1,0 +1,153 @@
+# <Program> for WarpOS (PowerPC Amiga): cross-built on Linux.
+#
+#   make -f WarpOS/Makefile.warpos -j$(nproc)    -> build/warpos/<Program>
+#
+# ppc-amigaos-gcc (adtools) with the MOS2WOS WarpOS SDK overlay. The link is a
+# relocatable ELF (ld -r), checked for the WarpOS contract, which
+# tools/warpos/elf2warpos/elf2warpos.py turns into the hunk executable here, on Linux
+# (no Elf2Exe2 run on the Amiga).
+#
+# Run from the repository root. Copy from the skill into the project:
+#   templates/Makefile.warpos   -> WarpOS/Makefile.warpos
+#   templates/warpos-etrel.ld   -> tools/warpos/warpos-etrel.ld
+#   tools/elf2warpos/           -> tools/elf2warpos/
+
+NAME ?= Program
+
+# ---- Toolchain (override on the command line or in the environment) -----
+WOS_TOOLCHAIN_BIN ?= /opt/ppc-amigaos/bin
+MOS2WOS_ROOT      ?= $(HOME)/amiga/toolchains/mos2wos/gg
+WOS_SDK_ROOT      ?= $(MOS2WOS_ROOT)/ppc-warpos
+WOS_CROSS         ?= $(WOS_TOOLCHAIN_BIN)/ppc-amigaos-
+
+CC      := $(WOS_CROSS)gcc
+LD      := $(WOS_CROSS)ld
+NM      := $(WOS_CROSS)nm
+READELF := $(WOS_CROSS)readelf
+OBJCOPY := $(WOS_CROSS)objcopy
+PYTHON  ?= python3
+
+# The oldest WarpOS boards (Blizzard/CyberStorm PPC) are 603e/604e: code for a
+# 603e runs on every one of them. Schedule for the board you test on.
+CPU  ?= 603e
+TUNE ?= -mtune=7400
+
+# The compiler targets AmigaOS 4; its SysV code generator and ELF binutils
+# suit MOS2WOS once the OS defaults are replaced.
+WOS_CPPFLAGS = -nostdinc \
+               -U__AMIGAOS4__ -U__AMIGAOS4 -UAMIGAOS4 \
+               -U__amigaos4__ -U__amigaos4 -Uamigaos4 -U__NEWLIB__ \
+               -D__PPC__ -DWARPUP -DNEWLIB \
+               -isystem $(WOS_SDK_ROOT)/newlib/include \
+               -isystem $(WOS_SDK_ROOT)/os-includeppc \
+               -isystem $(WOS_SDK_ROOT)/include \
+               -isystem $(WOS_SDK_ROOT)/netinclude \
+               -isystem $(WOS_SDK_ROOT)/gcc-include
+# ($(WOS_SDK_ROOT)/include/sdl holds SDL 1.2: add it only if the port really
+# uses that SDL, so a forgotten <SDL.h> fails instead of compiling against it.)
+
+# -fno-jump-tables: switch tables would need relocation types the converter
+# does not translate. No PIC, no unwind tables (discarded by the link script).
+WOS_ARCH_CFLAGS = -mcpu=$(CPU) -mcall-sysv -mbig-endian -mmultiple \
+                  -fno-pic -fno-pie -fno-stack-protector \
+                  -fno-asynchronous-unwind-tables -fno-unwind-tables \
+                  -fno-jump-tables
+
+WOS_STARTFILE    = $(WOS_SDK_ROOT)/lib/startupwos.o
+WOS_ENDFILE      = $(WOS_SDK_ROOT)/lib/end.o
+WOS_LIBRARY_DIRS = -L$(WOS_SDK_ROOT)/newlib/lib -L$(WOS_SDK_ROOT)/lib
+WOS_RUNTIME_LIBS = --start-group -lamigawos -lgccwos -lm \
+                   -lglosswos -lcwos -lglosswos -lgccwos --end-group
+WOS_LINK_FLAGS   = -r -EB -d -x -T tools/warpos/warpos-etrel.ld
+
+OUT       ?= build/warpos
+OBJDIR    := $(OUT)/obj
+DEBUG_ELF := $(OUT)/$(NAME).debug.elf
+ELF       := $(OUT)/$(NAME).warpelf
+TARGET    := $(OUT)/$(NAME)
+STACK     ?= 1048576
+
+BUILD_STAMP := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
+
+# ---- Sources -----------------------------------------------------------
+# The platform layer, then the portable core. List what is left OUT of the
+# core by name and fail when a listed name stops existing, so a rename cannot
+# slip a foreign-platform file back into the build.
+PLATFORM_SRCS := src/platform/warpos/wos_sys.c src/platform/warpos/wos_main.c
+CORE_EXCLUDE  :=
+$(foreach f,$(CORE_EXCLUDE),$(if $(wildcard $(f)),,$(error CORE_EXCLUDE lists $(f), which does not exist)))
+CORE_SRCS     := $(filter-out $(CORE_EXCLUDE),)
+ASM_SRCS      :=
+SRCS          := $(PLATFORM_SRCS) $(CORE_SRCS)
+
+# ---- Flags -------------------------------------------------------------
+# -fno-common: the ET_REL check refuses COMMON symbols.
+# -msdata=none -G0: no small-data relocations, which the converter cannot translate.
+# -Uamiga -Uamigaos: predefined outside the reserved namespace; they break
+#   identifiers in ordinary code.
+# -funsigned-char is PPC's default; say it when the original platform's
+#   char was unsigned too, -fsigned-char when the code came from x86.
+DEFINES := -D__WARPOS__ -D__BIG_ENDIAN__ -DWORDS_BIGENDIAN=1 \
+           -DWOS_BUILD_STAMP=\"$(BUILD_STAMP)\"
+ifeq ($(WOS_CRUMBS),1)      # breadcrumbs readable from memory in a hang
+DEFINES += -DWOS_CRUMBS
+endif
+
+OPT    ?= -O2
+CFLAGS := -std=gnu99 $(WOS_ARCH_CFLAGS) $(TUNE) $(OPT) -g -fno-strict-aliasing \
+          -fno-common -msdata=none -G0 -MMD -MP \
+          $(DEFINES) $(WOS_CPPFLAGS) -Uamiga -Uamigaos \
+          -Isrc/platform/warpos -I. $(EXTRA_CFLAGS)
+
+# A changed flag rebuilds every object.
+BUILD_FLAGS_STAMP := $(OBJDIR)/.build-flags
+$(shell mkdir -p $(OBJDIR); f='$(CFLAGS)'; [ "$$(cat $(BUILD_FLAGS_STAMP) 2>/dev/null)" = "$$f" ] || printf '%s' "$$f" > $(BUILD_FLAGS_STAMP))
+
+OBJS := $(patsubst %.c,$(OBJDIR)/%.o,$(SRCS)) $(patsubst %.s,$(OBJDIR)/%.o,$(ASM_SRCS))
+DEPS := $(OBJS:.o=.d)
+
+.PHONY: all clean
+.DELETE_ON_ERROR:
+all: $(TARGET)
+
+$(OBJDIR)/%.o: %.c $(BUILD_FLAGS_STAMP)
+	@mkdir -p $(dir $@)
+	@echo "  CC  $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJDIR)/%.o: %.s $(BUILD_FLAGS_STAMP)
+	@mkdir -p $(dir $@)
+	@echo "  AS  $<"
+	@$(CC) -x assembler-with-cpp $(WOS_ARCH_CFLAGS) -c $< -o $@
+
+# startupwos.o FIRST: the loader jumps to the start of .text, and a reordered
+# link dies before main(). The full link, debug info and all, is kept for
+# addr2line; the converter gets it with only the debug sections dropped.
+$(DEBUG_ELF): $(OBJS)
+	@echo "  LD  $@"
+	@$(LD) $(WOS_LINK_FLAGS) $(WOS_LIBRARY_DIRS) -o $@ \
+		$(WOS_STARTFILE) $(OBJS) $(EXTRA_LIBS) \
+		$(WOS_RUNTIME_LIBS) $(WOS_ENDFILE)
+
+# The WarpOS contract: nothing undefined, _start at .text+0, no COMMON
+# symbols, only the four relocation types the 68k stub applies.
+$(ELF): $(DEBUG_ELF)
+	@$(OBJCOPY) --strip-debug $< $@
+	@test -z "$$($(NM) --undefined-only $@)" || \
+		{ echo "Unexpected undefined symbols:"; $(NM) --undefined-only $@; exit 1; }
+	@$(NM) --defined-only --format=posix $@ | \
+		awk '$$1 == "_start" && $$2 == "T" && $$3 == "00000000" { found = 1 } END { exit found ? 0 : 1 }' || \
+		{ echo "_start is not defined at .text+0 in $@"; exit 1; }
+	@bad=$$($(NM) --format=posix $@ | awk '$$2 == "C" { print $$1 }'); \
+		test -z "$$bad" || { echo "Unexpected COMMON symbols: $$bad"; exit 1; }
+	@bad=$$($(READELF) --relocs --wide $@ | \
+		awk '$$3 ~ /^R_PPC_/ && $$3 !~ /^R_PPC_(ADDR32|ADDR16_LO|ADDR16_HA|REL24)$$/ { print $$3 }' | sort -u); \
+		test -z "$$bad" || { echo "Unsupported WarpOS relocations: $$bad"; exit 1; }
+
+$(TARGET): $(ELF) tools/warpos/elf2warpos/elf2warpos.py
+	@$(PYTHON) tools/warpos/elf2warpos/elf2warpos.py --stack $(STACK) $< $@
+
+clean:
+	rm -rf $(OUT)
+
+-include $(DEPS)

@@ -53,32 +53,8 @@ target_compile_options(opencmr2_domain_a INTERFACE
     "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/port/menu_layout.h>")
 
 # port/disk.cpp is Domain A too.
-add_library(cmr2_game OBJECT
-    ${GAME_SOURCES}
-    diagnostics/observer.cpp
-    diagnostics/replay_trace.cpp
-    port/ai_disk.cpp
-    port/c3d_stage.cpp
-    port/car_info_disk.cpp
-    port/credits_text.cpp
-    port/cod_disk.cpp
-    port/controller_disk.cpp
-    port/disk.cpp
-    port/finish_record_disk.cpp
-    port/font_pcf.cpp
-    port/leaderboard_disk.cpp
-    port/light_preset_disk.cpp
-    port/member_decode.cpp
-    port/replay_disk.cpp
-    port/route_disk.cpp
-    port/save_image_disk.cpp
-    port/split_table_disk.cpp
-    port/stage_camera_disk.cpp
-    port/stage_light_transform_disk.cpp
-    port/start_table_disk.cpp
-    port/scene_lighting_disk.cpp
-    port/texture_disk.cpp
-    port/track_collision_disk.cpp)
+include(${CMAKE_CURRENT_SOURCE_DIR}/amiga_domain_a.cmake)
+add_library(cmr2_game OBJECT ${AMIGA_DOMAIN_A_SOURCES})
 # Built through the executable that links it, not on its own.
 set_target_properties(cmr2_game PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_include_directories(cmr2_game PUBLIC

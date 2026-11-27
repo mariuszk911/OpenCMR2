@@ -3674,7 +3674,7 @@ void FrontendScroller_InitRallyStageSelection(Menu *pMenu, int param)
     int count;
 
     count = 0;
-#if defined(__m68k__)
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
     // PORT: AMIGA: car setup must not open with an unassigned slot (empty list).
     if (pMenu == FrontendMenu_GetCarSetup()) {
         int player = CGameInfo::GetConfiguredPlayerCount() - g_profilePlayersRemaining - 1;
@@ -10515,7 +10515,7 @@ short g_carPictureRectsHigh[22][4] = {
 void FrontendMenu_DrawCarSetup(Menu *pMenu)
 {
     short (*pRects)[4];
-#if defined(__m68k__)
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
     // PORT: AMIGA: clamp the cursor of an empty list before any index below.
     if (pMenu->itemCount <= 0)
         pMenu->cursor = 0;

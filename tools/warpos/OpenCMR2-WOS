@@ -1,0 +1,27 @@
+.KEY args/F
+; OpenCMR2 for WarpOS on the Radeon 9200 MiniGL R200 stack.
+; Run from the game drawer:  Execute OpenCMR2-WOS [args]
+; (Not "OpenCMR2": AmigaDOS names ignore case, and that is the executable.)
+; The drawer holds opencmr2, minigl_ppc.dll and minigl_ppc_host next to the
+; game data. Boot protocol: cold boot, then this script.
+; Quit a remote session with:  SetEnv OPENCMR2_QUIT 1
+FailAt 21
+Delete ENV:OPENCMR2_QUIT QUIET
+; The R200 stack's settings for this minigl_ppc.dll. CP emit must stay on
+; (performance, and presents fail without it). A tiled render target
+; (MINIGL_CTILE) and a left-over engine lease are removed: with them
+; presents failed and the host stopped. CP present stays off: with it the
+; picture had wrong colours and diagonal bands.
+; The compact vertex formats (MGLPPC_TCL6, MGLPPC_TCL5) are for 2D clients:
+; with both set the stage's distant scenery was drawn smeared. TCL6 alone
+; saves under a millisecond a frame and is not proven safe, so it stays off.
+Delete ENV:MGLPPC_LEASE ENV:MINIGL_CTILE QUIET
+Delete ENV:MGLPPC_TCL6 ENV:MGLPPC_TCL5 QUIET
+SetEnv MGLPPC_CPEMIT 1
+SetEnv MGLPPC_CPPRESENT 0
+SetEnv MGLPPC_HOSTPRI -1
+SetEnv MGLPPC_NOALTIVEC 1
+; minigl_ppc.dll starts minigl_ppc_host from PROGDIR: itself; a second host
+; started here would conflict with it.
+Stack 1048576
+opencmr2 <args>

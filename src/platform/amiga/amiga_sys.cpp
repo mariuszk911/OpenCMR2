@@ -7,12 +7,16 @@
 #include "platform/amiga/amiga_settings.h"
 #include "platform/amiga/amiga_sys.h"
 #include "platform/amiga/amiga_sys_time.h"
+#if defined(OPENCMR2_WARPOS)
+#include "platform/warpos/wos_clock.h"
+#endif
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "platform/amiga/amiga_os_begin.h"
 #include <exec/types.h>
 #include <exec/io.h>
 #include <exec/memory.h>
@@ -24,6 +28,7 @@
 #include <exec/interrupts.h>
 #include <dos/dos.h>
 #include <dos/dosextens.h>
+#include <dos/var.h>
 #include <intuition/intuition.h>
 #include <intuition/intuitionbase.h>
 #include <proto/exec.h>
@@ -31,13 +36,19 @@
 #include <proto/intuition.h>
 #include <proto/timer.h>
 #include <proto/keymap.h>
+#include "platform/amiga/amiga_os_end.h"
 
 #include <map>
 #include <new>
 #include <string>
 
-// proto/timer.h declares these; libnix supplies SysBase and DOSBase.
+// proto/timer.h declares these; libnix supplies SysBase and DOSBase. The
+// WarpOS SDK's proto/timer.h types the timer base as a Library.
+#if defined(OPENCMR2_WARPOS)
+struct Library *TimerBase;
+#else
 struct Device *TimerBase;
+#endif
 struct IntuitionBase *IntuitionBase;
 struct Library *KeymapBase;
 
@@ -159,6 +170,7 @@ static void ResetKeyState(void)
     Enable();
 }
 
+#if !defined(OPENCMR2_WARPOS)
 /* RAWKEY carries the DIK scan code; bit 7 (IECODE_UP_PREFIX) is key-up. A
  * tap is latched for two game samples so the game's frame-to-frame edge
  * (DeviceInfo.field_0x8) still sees it; a held key stays in s_inputHeld. */
@@ -187,6 +199,7 @@ static struct InputEvent *InputDeviceHandler(register struct InputEvent *events 
     }
     return events;
 }
+#endif
 
 static void CloseInputDevice(void)
 {
@@ -226,6 +239,13 @@ static void CloseInputDevice(void)
 
 extern "C" int AmigaSys_InputInit(void)
 {
+#if defined(OPENCMR2_WARPOS)
+    /* An input.device handler is 68k code input.device calls with register
+     * arguments; the PPC has none to give it. Key state comes from the
+     * window's IDCMP RAWKEY messages instead (AmigaSys_GetKeyState's path
+     * without a handler). */
+    return 0;
+#else
     if (s_inputDeviceState == 2)
         return 1;
     if (s_inputDeviceState != 0)
@@ -272,6 +292,7 @@ extern "C" int AmigaSys_InputInit(void)
     }
     Sys_Log("input: device handler installed");
     return 1;
+#endif
 }
 
 extern "C" void AmigaSys_InputShutdown(void)
@@ -313,7 +334,11 @@ int InitTime(void)
         return 0;
     }
 
+#if defined(OPENCMR2_WARPOS)
+    TimerBase = (struct Library *)s_timerRequest.tr_node.io_Device;
+#else
     TimerBase = s_timerRequest.tr_node.io_Device;
+#endif
     struct EClockVal clock;
     s_eclockFrequency = ReadEClock(&clock);
     if (s_eclockFrequency == 0) {
@@ -743,7 +768,8 @@ int BuildBodyText(char *body, struct IntuiText *lines, int maxLines)
         lines[count].DrawMode = JAM2;
         lines[count].LeftEdge = 0;
         lines[count].TopEdge = (SHORT)(count * 8);
-        lines[count].IText = (UBYTE *)line;
+        // IText is UBYTE * in the 68k NDK and STRPTR (char *) in the WarpOS SDK.
+        lines[count].IText = (decltype(lines[count].IText))line;
         lines[count].NextText = NULL;
         if (count > 0)
             lines[count - 1].NextText = &lines[count];
@@ -836,6 +862,19 @@ extern "C" int AmigaSys_EnsureSettingsFile(void)
     return 1;
 }
 
+#if defined(OPENCMR2_WARPOS)
+// PORT: AMIGA: on WarpOS ReadEClock is a 68k call (about 0.4 ms from the PPC);
+// the game clock is the PPC time base instead (wos_clock.c).
+extern "C" uint32_t Sys_GetTicks(void)
+{
+    return (uint32_t)(WosClock_Micros() / 1000u);
+}
+
+extern "C" double Sys_GetTicksPrecise(void)
+{
+    return (double)WosClock_Micros() / 1000.0;
+}
+#else
 extern "C" uint32_t Sys_GetTicks(void)
 {
     uint64_t now;
@@ -852,6 +891,7 @@ extern "C" double Sys_GetTicksPrecise(void)
         return 0.0;
     return AmigaSys_MillisecondsPrecise(now - s_eclockStart, s_eclockFrequency);
 }
+#endif
 
 extern "C" unsigned int Sys_GetUnixTime(void)
 {
@@ -1116,6 +1156,20 @@ bool CommitStagedFile(SysFile *file, bool closed)
 static void (*s_backgroundPump)(void);
 static uint32_t s_pumpLast;
 static uint32_t s_pumpGapMax;
+#if defined(OPENCMR2_WARPOS)
+static uint64_t s_pumpMicros;
+// Microseconds and calls in the file functions, for the profile line.
+static uint64_t s_fileMicros;
+static uint32_t s_fileCalls, s_fileBytes;
+struct FileTimer {
+    uint64_t start;
+    FileTimer() : start(WosClock_Micros()) { s_fileCalls++; }
+    ~FileTimer() { s_fileMicros += WosClock_Micros() - start; }
+};
+#define FILE_TIMER FileTimer fileTimer_
+#else
+#define FILE_TIMER do { } while (0)
+#endif
 static const uint32_t kPumpIntervalMs = 50;
 
 extern "C" void AmigaSys_SetBackgroundPump(void (*pump)(void))
@@ -1141,11 +1195,40 @@ static void RunBackgroundPump(void)
     if (gap > s_pumpGapMax)
         s_pumpGapMax = gap;
     s_pumpLast = now;
+#if defined(OPENCMR2_WARPOS)
+    const uint64_t start = WosClock_Micros();
     s_backgroundPump();
+    s_pumpMicros += WosClock_Micros() - start;
+#else
+    s_backgroundPump();
+#endif
 }
+
+#if defined(OPENCMR2_WARPOS)
+// Microseconds spent in the background pump (the audio feed) since the last
+// call, for the renderer's profile line.
+extern "C" unsigned long AmigaSys_TakePumpMicros(void)
+{
+    const unsigned long taken = (unsigned long)s_pumpMicros;
+    s_pumpMicros = 0;
+    return taken;
+}
+
+extern "C" unsigned long AmigaSys_TakeFileMicros(unsigned long *calls, unsigned long *bytes)
+{
+    const unsigned long taken = (unsigned long)s_fileMicros;
+    *calls = s_fileCalls;
+    *bytes = s_fileBytes;
+    s_fileMicros = 0;
+    s_fileCalls = 0;
+    s_fileBytes = 0;
+    return taken;
+}
+#endif
 
 extern "C" SysFile *Sys_OpenFile(const char *path, int mode)
 {
+    FILE_TIMER;
     char native[kNativePathSize];
     char staging[kNativePathSize];
     const int writing = mode == SYS_FILE_WRITE;
@@ -1188,6 +1271,7 @@ extern "C" int Sys_CloseFile(SysFile *file)
 {
     if (file == NULL)
         return 0;
+    FILE_TIMER;
     const bool closed = Close(file->handle) != 0;
     if (!closed)
         Sys_Log("Close %s failed (IoErr %ld)", file->path, (long)IoErr());
@@ -1203,6 +1287,10 @@ extern "C" uint32_t Sys_ReadFile(SysFile *file, void *buffer, uint32_t size)
     if (file == NULL || (buffer == NULL && size != 0))
         return 0;
     RunBackgroundPump();
+    FILE_TIMER;
+#if defined(OPENCMR2_WARPOS)
+    s_fileBytes += size;
+#endif
     const LONG read = Read(file->handle, buffer, (LONG)size);
     if (read < 0) {
         Sys_Log("Read %s failed (IoErr %ld)", file->path, (long)IoErr());
@@ -1239,6 +1327,7 @@ extern "C" uint32_t Sys_SeekFile(SysFile *file, int32_t offset, int origin)
     case SYS_SEEK_END: whence = OFFSET_END; break;
     default: return 0xffffffffu;
     }
+    FILE_TIMER;
     // AmigaDOS returns the position before the seek; ask again for the new one.
     if (Seek(file->handle, (LONG)offset, whence) < 0)
         return 0xffffffffu;
@@ -1650,7 +1739,15 @@ extern "C" void AmigaSys_SetWindow(void *window)
     // PORT: AMIGA: follow the working reVC input path. MiniGL's fullscreen
     // backdrop has no UserPort here, so open our own borderless, activated
     // IDCMP window on the same screen instead of borrowing the render window.
+#if defined(OPENCMR2_WARPOS)
+    // PORT: AMIGA: take the input on MiniGL's own window, as the R200 PPC
+    // stack's porting guide and its Quake 3 port do: the fallback below
+    // gives that window a port. Opening our own window on its screen is
+    // a 68k-side Intuition setup the PPC port does not need.
+    if (0) {
+#else
     if (base != NULL && base->WScreen != NULL) {
+#endif
         struct TagItem tags[] = {
             { WA_CustomScreen, (ULONG)base->WScreen },
             { WA_Left, 0 },
@@ -1768,6 +1865,17 @@ static int PollEvent(SysEvent *event, int *consumed)
     if (event == NULL || s_inputWindow == NULL || s_inputWindow->UserPort == NULL)
         return 0;
     TrackInputScreen();
+#if defined(OPENCMR2_WARPOS)
+    // PORT: AMIGA: GetMsg is a 68k call from the PPC. The port's list is
+    // plain memory: an empty list (the head's successor is the tail, whose
+    // own successor is NULL) means there is nothing to fetch. A message that
+    // arrives after this look is taken by the next poll.
+    {
+        const struct List *pending = &s_inputWindow->UserPort->mp_MsgList;
+        if (pending->lh_Head == NULL || pending->lh_Head->ln_Succ == NULL)
+            return 0;
+    }
+#endif
     while ((message = (struct IntuiMessage *)GetMsg(s_inputWindow->UserPort)) != NULL) {
         const ULONG messageClass = message->Class;
         int handled = 0;
@@ -1811,6 +1919,18 @@ static int PollEvent(SysEvent *event, int *consumed)
         } else if (messageClass == IDCMP_RAWKEY) {
             // Releases are not events: the game polls the held-key state.
             const int dik = AmigaKey_UpdateState(s_keyState, message->Code);
+#if defined(OPENCMR2_WARPOS)
+            // No input.device handler: these messages are the only source of
+            // the held/latched state, written by this task alone. A tap is
+            // latched for two game samples as the handler does on 68k, so a
+            // press and release drained in the same poll still reach the game.
+            if (dik != 0 && (message->Code & 0x80) != 0) {
+                s_inputHeld[dik] = 0;
+            } else if (dik != 0 && s_inputHeld[dik] == 0) {
+                s_inputHeld[dik] = 1;
+                s_inputLatch[dik] = 2;
+            }
+#else
             if (dik != 0 && (message->Code & 0x80) != 0) {
                 // Fallback for a release the input.device handler did not
                 // observe (for example a synthetic or dropped event).
@@ -1818,6 +1938,7 @@ static int PollEvent(SysEvent *event, int *consumed)
                 s_inputHeld[dik] = 0;
                 Enable();
             }
+#endif
             if (dik != 0 && (message->Code & 0x80) == 0) {
                 if (EnsureKeymap()) {
                     struct InputEvent ie;
@@ -1853,11 +1974,47 @@ static int PollEvent(SysEvent *event, int *consumed)
 // PORT: AMIGA: Ctrl-C in the Shell, the Break command or a task manager's
 // "break" is AmigaOS's polite quit request (the SIGTERM equivalent). Turn it
 // into the window-close quit so the normal shutdown closes the MiniGL screen.
+#if defined(OPENCMR2_WARPOS)
+/* A break signal does not reliably reach a PowerPC task, so a remote session
+ * quits the game with the one-shot ENV:OPENCMR2_QUIT (SetEnv OPENCMR2_QUIT 1).
+ * GetVar is a 68k call: checked once a second, not every poll. */
+extern "C" int AmigaSys_TakeEnvFlag(const char *name)
+{
+    char value[8];
+    if (name == NULL || GetVar((STRPTR)name, (STRPTR)value, sizeof(value), GVF_GLOBAL_ONLY) < 0)
+        return 0;
+    DeleteVar((STRPTR)name, GVF_GLOBAL_ONLY);
+    return 1;
+}
+
+static int TakeQuitVariable(void)
+{
+    static uint32_t s_lastCheck;
+    const uint32_t now = Sys_GetTicks();
+    if (now - s_lastCheck < 1000)
+        return 0;
+    s_lastCheck = now;
+    if (!AmigaSys_TakeEnvFlag("OPENCMR2_QUIT"))
+        return 0;
+    Sys_Log("input: ENV:OPENCMR2_QUIT set; quitting");
+    return 1;
+}
+#endif
+
 static int TakeBreak(SysEvent *event)
 {
+#if defined(OPENCMR2_WARPOS)
+    // PORT: AMIGA: no SetSignal here: from the PPC it is a 68k call (about
+    // 0.4 ms) on every poll, and a PPC program is never to be sent Ctrl-C
+    // anyway. Quitting is the window's close gadget, the game's own exit, or
+    // the ENV: switch, which is looked at once a second.
+    if (!TakeQuitVariable())
+        return 0;
+#else
     if ((SetSignal(0, SIGBREAKF_CTRL_C) & SIGBREAKF_CTRL_C) == 0)
         return 0;
     Sys_Log("input: break signal (Ctrl-C); quitting");
+#endif
     memset(event, 0, sizeof(*event));
     event->type = SYS_EVENT_QUIT;
     return 1;
@@ -1885,6 +2042,17 @@ extern "C" void AmigaSys_GetKeyState(unsigned char keys[256])
     int i;
     if (keys == NULL)
         return;
+#if defined(OPENCMR2_WARPOS)
+    /* Held keys plus latched taps, from the IDCMP messages (one task). */
+    for (i = 0; i < 256; i++) {
+        keys[i] = (s_inputHeld[i] || s_inputLatch[i]) ? 0x80 : 0;
+        if (s_inputHeld[i])
+            s_inputLatch[i] = 0;
+        else if (s_inputLatch[i] != 0)
+            s_inputLatch[i]--;
+    }
+    return;
+#endif
     if (s_inputDeviceState == 2) {
         /* One sample: held keys plus taps latched for this frame. */
         Disable();
@@ -1907,6 +2075,9 @@ extern "C" int AmigaSys_IsKeyDown(int dik)
 {
     if (dik < 0 || dik >= 256)
         return 0;
+#if defined(OPENCMR2_WARPOS)
+    return s_inputHeld[dik] != 0 || s_inputLatch[dik] != 0;
+#endif
     if (s_inputDeviceState == 2)
         return s_inputHeld[dik] != 0 || s_inputLatch[dik] != 0;
     return (s_keyState[dik] & 0x80) != 0;
@@ -2017,11 +2188,11 @@ extern "C" int Sys_MessageBox(const char *title, const char *text, int buttons)
     memset(&positive, 0, sizeof(positive));
     positive.FrontPen = 1;
     positive.DrawMode = JAM2;
-    positive.IText = (UBYTE *)"Retry";
+    positive.IText = (decltype(positive.IText))"Retry";
     memset(&negative, 0, sizeof(negative));
     negative.FrontPen = 1;
     negative.DrawMode = JAM2;
-    negative.IText = (UBYTE *)"Cancel";
+    negative.IText = (decltype(negative.IText))"Cancel";
 
     if (buttons == SYS_MESSAGEBOX_RETRY_CANCEL) {
         const BOOL retry = AutoRequest(NULL, &lines[0], &positive, &negative, 0, 0, 400, height);
@@ -2029,7 +2200,7 @@ extern "C" int Sys_MessageBox(const char *title, const char *text, int buttons)
     }
     // AutoRequest needs the negative gadget: without its text Intuition
     // returns at once and nothing is shown.
-    negative.IText = (UBYTE *)"OK";
+    negative.IText = (decltype(negative.IText))"OK";
     AutoRequest(NULL, &lines[0], NULL, &negative, 0, 0, 400, height);
     return SYS_MESSAGEBOX_RESULT_OK;
 }

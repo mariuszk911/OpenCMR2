@@ -24,6 +24,10 @@ if(AMIGAOS)
     include(${CMAKE_CURRENT_SOURCE_DIR}/amiga.cmake)
     return()
 endif()
+if(WARPOS)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/warpos.cmake)
+    return()
+endif()
 
 # Small standalone decoder, also usable by tests without SDL or game data.
 add_library(opencmr2_bink STATIC video/bink_decoder.cpp video/yuv_rgba.cpp)

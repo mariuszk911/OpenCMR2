@@ -14,9 +14,15 @@ project(OpenCMR2 LANGUAGES C CXX)
 # On Windows that is clang++ (not clang-cl) targeting the MSVC runtime.
 # The AmigaOS target is a cross build with Bebbo GCC; tools/amiga/build.sh is
 # its entry point and selects this compiler through cmake/amigaos.toolchain.cmake.
+# The WarpOS target builds with ppc-amigaos-gcc through tools/warpos/build.sh
+# and cmake/warpos.toolchain.cmake.
 if(AMIGAOS)
     if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU" OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         message(FATAL_ERROR "The AmigaOS target builds with m68k-amigaos-gcc/g++ (found ${CMAKE_CXX_COMPILER_ID}); use tools/amiga/build.sh")
+    endif()
+elseif(WARPOS)
+    if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU" OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        message(FATAL_ERROR "The WarpOS target builds with ppc-amigaos-gcc/g++ (found ${CMAKE_CXX_COMPILER_ID}); use tools/warpos/build.sh")
     endif()
 else()
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
@@ -30,13 +36,19 @@ endif()
 option(OPENCMR2_SANITIZE "Build with AddressSanitizer and UBSan" OFF)
 option(OPENCMR2_VENDORED_SDL "Download and build SDL3 instead of using an installed one" ${ANDROID})
 option(AMIGAOS "Build the native AmigaOS 68k target" OFF)
+option(WARPOS "Build the WarpOS PowerPC target" OFF)
+if(AMIGAOS AND WARPOS)
+    message(FATAL_ERROR "AMIGAOS and WARPOS are separate builds; select one")
+endif()
 # Task 0.1 section timing: off by default so normal builds contain no clock
 # call or timing accounting in the draw path. Only meaningful for AMIGAOS.
 option(OPENCMR2_MINIGL_SECTION_TIMING "Amiga MiniGL per-section timing counters (diagnostic build)" OFF)
 
 # Target identity for the fork-owned platform layer. The host builds leave
 # both macros undefined, so no ad-hoc #ifdef in the sources decides this.
-if(AMIGAOS)
+# WarpOS is an Amiga target too (OPENCMR2_AMIGA); OPENCMR2_WARPOS marks only
+# what differs on the PowerPC.
+if(AMIGAOS OR WARPOS)
     add_compile_definitions(OPENCMR2_AMIGA BIGENDIAN)
     if(OPENCMR2_MINIGL_SECTION_TIMING)
         add_compile_definitions(OPENCMR2_MINIGL_SECTION_TIMING)
@@ -45,7 +57,12 @@ if(AMIGAOS)
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-threadsafe-statics>)
-
+endif()
+if(WARPOS)
+    add_compile_definitions(OPENCMR2_WARPOS)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+endif()
+if(AMIGAOS)
     # The SDK is gitignored and may live elsewhere; the wrapper passes
     # -DPISTORM3D=/pistorm3d from its read-only mount.
     set(PISTORM3D "${CMAKE_SOURCE_DIR}/SDKs/PiStorm3D" CACHE PATH "PiStorm3D SDK root (SDK/, bin/, licences/)")
@@ -69,8 +86,9 @@ if(AMIGAOS)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 endif()
 
-if(AMIGAOS)
-    # The shared STL-heavy renderer files still build with GCC 6.5 in C++14.
+if(AMIGAOS OR WARPOS)
+    # The shared STL-heavy renderer files still build with GCC 6.5 in C++14;
+    # WarpOS keeps the same standard as the 68k build it shares them with.
     set(CMAKE_CXX_STANDARD 14)
 else()
     set(CMAKE_CXX_STANDARD 17)
@@ -99,7 +117,7 @@ if(WIN32)
 endif()
 
 if(OPENCMR2_SANITIZE)
-    if(AMIGAOS)
+    if(AMIGAOS OR WARPOS)
         message(FATAL_ERROR "OpenCMR2: sanitizers are not available for the AmigaOS target")
     endif()
     # The game calls its callback tables through generic function types, as
@@ -109,7 +127,7 @@ if(OPENCMR2_SANITIZE)
     add_link_options(-fsanitize=address,undefined)
 endif()
 
-if(NOT AMIGAOS)
+if(NOT AMIGAOS AND NOT WARPOS)
     if(NOT OPENCMR2_VENDORED_SDL)
         find_package(SDL3 3.4 CONFIG COMPONENTS SDL3-shared)
     endif()
@@ -138,7 +156,7 @@ add_subdirectory(src)
 
 # The tests run on the build machine; the Android build is the game alone and
 # the Amiga target has no test harness yet.
-if(NOT ANDROID AND NOT AMIGAOS)
+if(NOT ANDROID AND NOT AMIGAOS AND NOT WARPOS)
     enable_testing()
     add_subdirectory(tests)
 endif()

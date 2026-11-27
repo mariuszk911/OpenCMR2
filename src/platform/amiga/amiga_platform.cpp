@@ -11,10 +11,16 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(OPENCMR2_WARPOS)
+#include "platform/warpos/wos_diag.h"
+#endif
+
+#include "platform/amiga/amiga_os_begin.h"
 #include <exec/types.h>
 #include <dos/dos.h>
 #include <proto/dos.h>
 #include <proto/exec.h>
+#include "platform/amiga/amiga_os_end.h"
 
 namespace {
 
@@ -106,6 +112,9 @@ void BuildCommandLine(int argc, char **argv, char *out, size_t size)
 extern "C" int AmigaPlatform_Init(int argc, char **argv)
 {
     Sys_Log("platform: init");
+#if defined(OPENCMR2_WARPOS)
+    WosDiag_Install();
+#endif
     // The executable always lives in the installation directory. Keep the
     // data, settings and saves beside it; no alternate layouts are supported.
     AmigaSys_SetUserDir("PROGDIR:");
@@ -136,6 +145,9 @@ extern "C" void AmigaPlatform_Shutdown(void)
     // that hides Workbench. Tear it down before Intuition itself is closed.
     Gfx_Shutdown();
     AmigaSys_Shutdown();
+#if defined(OPENCMR2_WARPOS)
+    WosDiag_Remove();
+#endif
 }
 
 extern "C" const char *AmigaPlatform_GetDataDir(void)

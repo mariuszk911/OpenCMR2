@@ -48,6 +48,13 @@ tools/amiga/build.sh --clean
 tools/amiga/build.sh --info
 ```
 
+WarpOS (PowerPC) builds go through their own wrapper, native only:
+
+```sh
+tools/warpos/build.sh
+tools/warpos/build.sh --clean
+```
+
 The wrapper selects native, Docker, or `flatpak-spawn --host` automatically.
 Do not invoke the cross compiler for a project build. Use `--clean` after
 changing a struct, compiler flag, force-include or header: incremental builds
@@ -155,6 +162,25 @@ explain the reason in the comment or point to a tracked document.
 Details and evidence are in
 [docs/AMIGA_PORT.md](docs/AMIGA_PORT.md#libnix-and-gcc-65-gotchas).
 
+## WarpOS rules
+
+The PowerPC build (`OPENCMR2_WARPOS`, [docs/WARPOS_PORT.md](docs/WARPOS_PORT.md))
+shares the Amiga code; these come on top.
+
+- Include AmigaOS headers between `amiga_os_begin.h` and `amiga_os_end.h`
+  (2-byte packing on PPC). Never pack game headers.
+- No 68k callbacks from PPC code: no input handlers, no PPC function as a
+  hook, no `CreateNewProc`. A hook is a 68k machine-code array.
+- Every OS call is a 68k context switch. None per frame; poll ENV: at most
+  once a second; no `Disable`/`Enable`.
+- Flush the data cache (`dcbf`) for memory the 68k side reads.
+- `MGLPPC_CPEMIT 1` always. Present by blit (sync off), with the display
+  locked across `mglSwitchDisplay`. Do not start `minigl_ppc_host` by hand.
+- Never Break a PPC program; quit through `ENV:OPENCMR2_QUIT`. After a failed
+  MiniGL run, cold power cycle before trusting another result.
+- The link must pass `tools/warpos/check_contract.sh`; no new relocation
+  types, no COMMON symbols.
+
 ## Stop conditions
 
 Stop and report instead of improvising when:
@@ -190,6 +216,8 @@ Stop and report instead of improvising when:
   libnix gotchas, upstream sync, packaging.
 - [docs/GAME_DIVERGENCE.md](docs/GAME_DIVERGENCE.md) — every `game/` change
   and how to re-apply it after a sync.
+- [docs/AMIGA_DEPLOY.md](docs/AMIGA_DEPLOY.md) — getting a build onto the
+  real Amiga: the bridge, file transfer, installing, running, results.
 - `docs-internal/AMIGA_PORT_NOTES.md` — the detailed port notes and evidence
   (local).
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — host architecture.

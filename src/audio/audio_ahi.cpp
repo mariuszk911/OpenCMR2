@@ -10,6 +10,9 @@
 #include "platform/amiga/amiga_ahi.h"
 #include "port/audio.h"
 #include "port/sys.h"
+#if defined(OPENCMR2_WARPOS)
+#include "platform/warpos/wos_clock.h"
+#endif
 
 #include <stdlib.h>
 #include <string.h>
@@ -66,10 +69,22 @@ void EnsureMixer(void)
     s_mixerReady = true;
 }
 
+#if defined(OPENCMR2_WARPOS)
+// Microseconds and calls in the audio API (every call holds a Lock), for
+// the renderer's profile line.
+uint64_t s_apiMicros;
+unsigned long s_apiCalls;
+struct Lock {
+    uint64_t start;
+    Lock() : start(WosClock_Micros()) { AmigaAhi_Lock(); s_apiCalls++; }
+    ~Lock() { AmigaAhi_Unlock(); s_apiMicros += WosClock_Micros() - start; }
+};
+#else
 struct Lock {
     Lock() { AmigaAhi_Lock(); }
     ~Lock() { AmigaAhi_Unlock(); }
 };
+#endif
 
 DWORD FrameBytes(const AudioData *data)
 {
@@ -350,3 +365,14 @@ extern "C" void Audio_ReleaseStream(AudioStream *stream)
     free(stream->ring);
     free(stream);
 }
+
+#if defined(OPENCMR2_WARPOS)
+extern "C" unsigned long AmigaSys_TakeAudioMicros(unsigned long *calls)
+{
+    const unsigned long taken = (unsigned long)s_apiMicros;
+    *calls = s_apiCalls;
+    s_apiMicros = 0;
+    s_apiCalls = 0;
+    return taken;
+}
+#endif

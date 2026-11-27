@@ -14,6 +14,8 @@ These guides describe the maintained workflow and current project scope.
 | [Network play](NETWORK.md) | LAN, VPN and internet setup, protocol and tests. |
 | [Video](VIDEO.md) | Bink decoder scope and validation. |
 | [AmigaOS/PiStorm port](AMIGA_PORT.md) | Target requirements, building, architecture and known differences of the Amiga build. |
+| [WarpOS port](WARPOS_PORT.md) | The PowerPC Amiga build: requirements, building, running and differences from the 68k port. |
+| [Amiga deployment](AMIGA_DEPLOY.md) | Getting a build onto the real Amiga: the bridge, file transfer, installing, running and reading results. |
 | [`game/` divergence manifest](GAME_DIVERGENCE.md) | Where the Amiga port's `game/` differs from upstream, and why. |
 | [Releases and Windows builds](WINDOWS.md) | Release packages and cross-building Windows from Linux. |
 

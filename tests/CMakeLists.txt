@@ -315,6 +315,12 @@ add_executable(intdiv_test intdiv.cpp ${PROJECT_SOURCE_DIR}/src/port/intdiv.cpp)
 target_include_directories(intdiv_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME intdiv COMMAND intdiv_test)
 
+# The WarpOS build's frexp/ldexp (src/platform/warpos/wos_libfix.c) must
+# match the C library bit for bit, errno included.
+add_executable(wos_fastmath_test wos_fastmath.cpp)
+target_include_directories(wos_fastmath_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME wos_fastmath COMMAND wos_fastmath_test)
+
 # M3.1: the preview-panel weather map index stays inside the four maps and the
 # maps actually loaded for the rally group.
 add_executable(weather_map_test weather_map.cpp)

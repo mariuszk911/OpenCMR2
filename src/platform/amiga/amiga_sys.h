@@ -26,6 +26,14 @@ unsigned long AmigaSys_GetPumpGapMax(void);
    the libraries are closed: for subsystems that own OS resources of their own
    (the network session closes its sockets and bsdsocket.library). */
 void AmigaSys_SetShutdownHook(void (*hook)(void));
+#if defined(OPENCMR2_WARPOS)
+/* One-shot ENV: switch for remote sessions: 1 when the global variable exists,
+   which is then deleted. A 68k call: callers poll it at most once a second. */
+int AmigaSys_TakeEnvFlag(const char *name);
+unsigned long AmigaSys_TakePumpMicros(void);
+unsigned long AmigaSys_TakeFileMicros(unsigned long *calls, unsigned long *bytes);
+unsigned long AmigaSys_TakeAudioMicros(unsigned long *calls);
+#endif
 const char *AmigaSys_GetDataDir(void);
 const char *AmigaSys_GetUserDir(void);
 /* Creates opencmr2.ini in the user directory with the v1 defaults if it is
