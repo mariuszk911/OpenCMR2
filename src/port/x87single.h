@@ -10,20 +10,19 @@
  * with a memcpy) it costs about 200 instructions, ~1 us under Emu68. The tyre
  * marks alone do ~18,000 of these per frame (FIN01 bench: ~20 ms/frame).
  *
- * The rounding is decided by the double result alone in all but one case.
- * hi is the double nearest the exact result, so the exact result is within
- * half a double ulp of it. Rounding to 24 bits drops the low 29 mantissa bits
- * of hi. Unless those bits are exactly one half (hi is then a tie at single
- * precision), the rest cannot move the exact result across the rounding
- * point. The fast path rounds hi's bits directly. Ties, zeros, denormals,
- * infinities and NaNs (~0.5 % of the game's operations) take the original
- * code below unchanged, so every result is bit-identical to it
- * (tests/x87_single.cpp compares the two).
+ * Upstream's X87s_Round consults the exact rest (lo) only when frexp(hi)
+ * lies exactly halfway between two floats, that is when hi's low 29 mantissa
+ * bits are one half; for every other normal hi it returns hi rounded to
+ * nearest even at 24 bits. The fast path computes that from hi's bits.
+ * Ties, zeros, denormals, infinities and NaNs (~0.5 % of the game's
+ * operations) take upstream's code below unchanged, so every result is
+ * bit-identical to it (tests/x87_single.cpp compares the two).
  *
  * This header defines game/X87Single.h's include guard and is force-included
  * (through port/msvcrt.h) before any game source, so game/ stays identical to
- * upstream. The slow path is a copy of upstream's code; the test fails if
- * upstream changes it.
+ * upstream. The exact path below is a copy of upstream's code and the macros
+ * repeat upstream's; after an upstream sync, diff them against
+ * game/X87Single.h (the test compares behaviour on sampled inputs only).
  */
 #ifndef _X87SINGLE_H
 #if !(defined(_MSC_VER) && _MSC_VER < 1300) /* MSVC6 builds the original: game/X87Single.h's plain operators */

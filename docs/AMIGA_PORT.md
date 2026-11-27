@@ -255,8 +255,8 @@ The toolchain has traps that ordinary C and C++ fall into. The rules are in
    A conflict outside the manifest is an accidental divergence or a new
    upstream feature to absorb deliberately.
 5. `src/port/menu_layout.h` and `src/port/x87single.h` stand in for
-   `game/Menu.h` and `game/X87Single.h`; their host tests fail when upstream
-   changes those headers.
+   `game/Menu.h` and `game/X87Single.h`. Their host tests catch most upstream
+   changes to those headers; also diff the copied parts against them.
 6. `src/video/bink_decoder.{h,cpp}` carries fork changes; re-check the
    reference hashes in [VIDEO.md](VIDEO.md) after merging it.
 7. Run the game on the target before calling the sync done.

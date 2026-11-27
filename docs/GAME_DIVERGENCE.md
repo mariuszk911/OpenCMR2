@@ -149,9 +149,10 @@ result's low 29 mantissa bits, and upstream's exact code (Dekker's product,
 denormals, infinities and NaNs. Every result is bit-identical; the libnix
 `frexp`/`ldexp` made each operation cost about 1 us on the target.
 `tests/x87_single.cpp` compiles upstream's header in a namespace of its own
-and compares the two bit for bit, on the host and on the target
-(`amiga_x87_single_test`), so an upstream change to `game/X87Single.h` fails
-the test. Re-copy the exact path after an upstream sync.
+and compares the two through their `X87S_*` macros, bit for bit, on the host
+and on the target (`amiga_x87_single_test`), so a behaviour change upstream
+fails the test on its sampled inputs. After an upstream sync, also diff the
+copied exact path and the macros against `game/X87Single.h`.
 
 An upstream-sync conflict outside this table is either an accidental
 divergence or a new upstream feature that must be absorbed deliberately.
