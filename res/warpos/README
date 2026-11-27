@@ -1,0 +1,59 @@
+OpenCMR2 for WarpOS (PowerPC)
+=============================
+
+A WarpOS port of OpenCMR2, a reimplementation of the engine of Colin McRae
+Rally 2.0, for Amigas with a PowerPC accelerator and a Radeon 9200. It needs
+the original PC game data; none is included.
+
+Contents
+--------
+
+  opencmr2                    the game (WarpOS executable)
+  OpenCMR2-WOS                the launch script; start the game with it
+  LICENSE                     OpenCMR2 licence (GNU GPL version 3)
+
+Requirements
+------------
+
+  - AmigaOS 3.x with WarpOS (powerpc.library) and a PowerPC accelerator,
+    603e or better. Tested only on an A4000 with a 68060 and an MPC7410;
+    expect a slower frame rate on 603e and 604e boards.
+  - A Radeon 9200 with Radeon9200.chip and Prometheus.card.
+  - The PPC MiniGL R200 stack from its MiniGLWOS-aligned version on
+    (dispatch ABI 5, 840-byte table): minigl_ppc.dll and minigl_ppc_host
+    in the game drawer, minigl.library in LIBS:. Not included.
+    The game is built on the same MiniGL headers as MiniGLWOS (Aminet
+    util/libs/MiniGLWOS_Classic, for Warp3D cards), so it should also run
+    with that minigl_ppc.dll; this is untested.
+  - AHI 4 (no AHI means no sound).
+  - The original PC installation of Colin McRae Rally 2.0.
+
+Installing
+----------
+
+1. Make a COPY of the PC installation on an Amiga drive. Do not use your
+   only copy: the Amiga version writes its settings and driver profiles in
+   its own format, which the PC version cannot read (and the other way
+   round). Saved games are kept apart from PC saves.
+2. Copy opencmr2 and OpenCMR2-WOS into that copy, next to the game data,
+   and put minigl_ppc.dll and minigl_ppc_host there too.
+3. Start the game from a Shell in that drawer:
+
+     Execute OpenCMR2-WOS
+
+   The script sets the MiniGL stack's options (ENV:MGLPPC_*) and the stack
+   size; starting opencmr2 directly skips them. minigl_ppc.dll starts
+   minigl_ppc_host by itself.
+
+Settings are in opencmr2.ini in the game drawer, created on the first start.
+The game's own Options, Graphics, Advanced graphics options, draw distance
+trades detail for frame rate (one step lower gives about 66 fps at the start
+of the first Rally Finland stage on the test machine, against 50).
+
+Quitting
+--------
+
+Quit from the game menu. Do not Break a WarpOS program from the Shell; if
+the game does not answer, SetEnv OPENCMR2_QUIT 1 in another Shell asks it
+to quit. After a failed run, power the machine off and on before trusting
+the next result: the graphics card keeps its state across a warm reset.

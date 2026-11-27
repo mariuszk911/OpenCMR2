@@ -25,7 +25,12 @@ tools/warpos/build.sh            # build/warpos, stages dist/warpos
 tools/warpos/build.sh --clean
 tools/warpos/build.sh --info
 tools/warpos/build.sh --g4       # build/warpos-g4, dist/warpos-g4
+tools/warpos/package.sh          # dist/OpenCMR2-warpos-<version>.lha and .zip
 ```
+
+`package.sh` archives `dist/warpos` (the executable, `OpenCMR2-WOS`, the
+README from `res/warpos/README` and the licence) in an `OpenCMR2/` drawer.
+The MiniGL PPC stack is a requirement and is not packaged.
 
 The default build is `-mcpu=603e` and runs on every WarpOS board. `--g4`
 selects `-mcpu=7400` for 7400/7410 boards only, with `-mno-altivec

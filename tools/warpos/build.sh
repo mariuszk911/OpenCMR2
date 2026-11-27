@@ -96,6 +96,10 @@ cmake --build "$BUILD" -j "$JOBS"
 
 mkdir -p "$DIST"
 cp "$BUILD/opencmr2" "$DIST/opencmr2"
+# elf2warpos writes a plain file; the executable bit becomes the Amiga's
+# executable protection flag in the archive.
+chmod 755 "$DIST/opencmr2"
 cp "$SCRIPT_DIR/OpenCMR2-WOS" "$DIST/OpenCMR2-WOS"
 cp "$REPO/LICENSE" "$DIST/LICENSE"
+cp "$REPO/res/warpos/README" "$DIST/README"
 printf 'build.sh: staged %s\n' "$DIST"
