@@ -3,6 +3,7 @@
 short Car_GetOrderCount(void);
 #include "SoundCurve.h"
 #include "port/sys.h"
+#include "diagnostics/bench_replay.h"
 #include "port/gfx.h"
 #include "FloatToInt.h"
 #include "port/disk.h"
@@ -8318,7 +8319,8 @@ void StageObject_SeedRaceRandomAndCPURevs(char replay, char restart)
 
     if (replay == 0 || restart != 0)
         g_stageRandomSeed = CMain::GetFrameTime();
-    if (CGameInfo::GetGameInfoSessionFlag())
+    // PORT: AMIGA benchmark: a run recorded for the attract uses the attract's seed.
+    if (CGameInfo::GetGameInfoSessionFlag() || BenchReplay_UseAttractSeed())
         g_stageRandomSeed = 0;
     srand(g_stageRandomSeed);
     rand();

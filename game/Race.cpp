@@ -3,6 +3,7 @@
 #include <windows.h>
 #include "Game.h"
 #include "port/diagnostics.h"
+#include "diagnostics/bench_replay.h"
 #include "RallyData.h"
 #include "GameInfo.h"
 #include "StageUI.h"
@@ -2904,7 +2905,9 @@ void Race_UpdateDriverReadyAndRecordState(CallbackStateMachine *param1, unsigned
                 pp++;
             } while ((INT_PTR)pp < (INT_PTR)(g_playerReplayStreams + 8)); // 0x537f5c in the original
         } else {
-            Replay_StopRecording(g_playerReplayStreams[index]);
+            // PORT: AMIGA benchmark: [debug] save_replay keeps player 1's finished run.
+            if (Replay_StopRecording(g_playerReplayStreams[index]))
+                BenchReplay_SaveFinishedRun(index, g_playerReplayStreams[index]);
         }
         flag = (CGameInfo::GetGraphicsOptionBits27To28() == 0);
         if (CGameInfo::GetConfiguredGameMode() == 3 && g_unk0x00537ff8[index] == 0) {

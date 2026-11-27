@@ -1,6 +1,7 @@
 #include "SavedGame.h"
 #include "port/save_slot.h"
 #include "port/sys.h"
+#include "diagnostics/bench_replay.h"
 #include "ChampionshipDriver.h"
 #include "Frontend.h"
 #include "FloatToInt.h"
@@ -1348,11 +1349,14 @@ void FrontendSession_InitFreshRace(void)
 
     index = g_unk0x0052f3d8;
     g_unk0x0052f3d8 = (g_unk0x0052f3d8 + 1) % 4;
+    // PORT: AMIGA benchmark: [debug] attract_stage plays one stage's DemoRuns run.
+    if (BenchReplay_AttractStage(&values[0], &values[3]))
+        index = 0;
     Profile_AssignAvailableCategory(0, -1);
     Profile_ResetCategoryData(0);
     RallyData_SetPlayerProfileInUse(0, 1);
     RallyData_SetEditedDriverOrCategoryName(0, g_strDemoName0x00519ec4);
-    RallyData_SetDriverCategoryOption(0, 0);
+    RallyData_SetDriverCategoryOption(0, BenchReplay_AttractCar()); // PORT: AMIGA benchmark: the run's car
     RallyData_SetDriverAutomaticGearbox(0, 1);
     CGameInfo::SaveFrontendOptionSettings();
     if (index == 3) {

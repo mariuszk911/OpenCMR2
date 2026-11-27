@@ -890,3 +890,9 @@ add_executable(gfx_core_cube_test gfx_core_cube.cpp
 target_include_directories(gfx_core_cube_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(gfx_core_cube_test PRIVATE SDL3::SDL3)
 add_test(NAME gfx_core_cube COMMAND gfx_core_cube_test)
+
+# The benchmark replay's pure helpers (src/diagnostics/bench_replay.h): the
+# [debug] attract_stage names (FIN01..JAP11) and the car selection of a run.
+add_executable(bench_replay_test bench_replay.cpp)
+target_include_directories(bench_replay_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME bench_replay COMMAND bench_replay_test)

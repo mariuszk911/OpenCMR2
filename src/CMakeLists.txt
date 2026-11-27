@@ -31,7 +31,7 @@ target_include_directories(opencmr2_bink PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Built as objects: the game and the platform layer call each other, so both
 # go into one archive (opencmr2_platform) and link on every toolchain.
-add_library(cmr2_game OBJECT ${GAME_SOURCES} diagnostics/replay_trace.cpp)
+add_library(cmr2_game OBJECT ${GAME_SOURCES} diagnostics/replay_trace.cpp diagnostics/bench_replay.cpp)
 target_include_directories(cmr2_game PUBLIC ${GAME_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/port/compat)
 target_compile_options(cmr2_game PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-x c>

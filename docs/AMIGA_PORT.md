@@ -146,6 +146,29 @@ The binary holds two renderers behind one `Gfx_*` API (`src/port/gfx.h`):
 first call. When `gles2` cannot start (no ogles2.library, too old, or no
 32-bit screen) the game logs why and uses MiniGL.
 
+### Benchmark replay
+
+A fixed workload for comparing builds and renderers on any stage
+(`src/diagnostics/bench_replay.h`). Off by default; the `[debug]` keys below
+act only with `attract_benchmark = 1`:
+
+- `save_replay = 1` starts races with the attract's random seed and saves
+  player 1's finished run as `replays\<stage><H|L>.rpl` (for example
+  `FIN01H.rpl`; H or L follows Track Detail). Record a single-player race with
+  the base car of its type and the Track Detail the benchmark will use: the
+  file stores the car type, and the attract drives the first car of that type.
+- `attract_stage = FIN01` (FIN01..JAP11) makes the attract demo play that
+  stage from `Game\DemoRuns\<stage><H|L>.rpl`; copy a saved run there
+  before starting the game. A missing or unreadable file is logged and the
+  attract keeps its own stages.
+- With `attract_stage` set, either renderer logs
+  `gfx: bench segment: ... ms/frame ... draws3d/frame` every 200 frames and
+  `gfx: bench time (<renderer>)` at the end of the timing window. The window
+  opens when a replay of player 1's car starts (the attract, or the player's
+  own replay) and closes when it ends; leaving a replay early leaves the window
+  open until the next one starts. `[video] frame_stats = 2` adds its own
+  per-draw clock reads to these numbers.
+
 ### Audio output
 
 AHI receives one finished stereo stream. All voices, the music and movie sound

@@ -16,6 +16,8 @@
 #include "render/minigl/gfx_minigl_movie.h"
 #include "port/sys.h"
 
+#include <stdio.h>
+
 #ifdef OPENCMR2_GLES2_RENDERER
 #include "render/gles2/gles2_api.h"
 #endif
@@ -212,6 +214,127 @@ const GfxBackend *WithFrameStats(const GfxBackend *backend)
     return &s_timed;
 }
 
+// The bench window (Gfx_BenchmarkBegin/End, around a replay of player 1's
+// car: the attract's or the player's own) timed the same way for either
+// renderer: the whole window and every 200 frames, in wall time, with the 3D
+// draws per frame. Installed only with [debug] attract_benchmark = 1 and
+// attract_stage set (diagnostics/bench_replay.h), like frame_stats by
+// replacing entries of a copy of the backend's table. Integers only: the 68k
+// target does not print floats.
+GfxBackend s_bench;
+const GfxBackend *s_benchInner;
+
+struct BenchTiming {
+    int active = 0;
+    uint32_t startMs = 0, segmentMs = 0;
+    uint32_t frames = 0, segmentFrames = 0;
+    uint32_t draws3d = 0, segmentDraws3d = 0;
+} s_bt;
+const uint32_t kBenchSegmentFrames = 200;
+
+// "12.34" from a numerator and a denominator, two decimals.
+void BenchRatio(char *out, size_t size, uint64_t num, uint64_t den)
+{
+    const uint64_t hundredths = den != 0 ? (num * 100 + den / 2) / den : 0;
+    snprintf(out, size, "%lu.%02lu", (unsigned long)(hundredths / 100), (unsigned long)(hundredths % 100));
+}
+
+void BenchSegmentStart(uint32_t now)
+{
+    s_bt.segmentMs = now;
+    s_bt.segmentFrames = s_bt.frames;
+    s_bt.segmentDraws3d = s_bt.draws3d;
+}
+
+void BenchPresent(void (*present)(int), int vsync)
+{
+    present(vsync);
+    if (!s_bt.active)
+        return;
+    s_bt.frames++;
+    const uint32_t frames = s_bt.frames - s_bt.segmentFrames;
+    if (frames < kBenchSegmentFrames)
+        return;
+    const uint32_t now = Sys_GetTicks();
+    const uint32_t ms = now - s_bt.segmentMs;
+    char msPerFrame[24], fps[24];
+    BenchRatio(msPerFrame, sizeof(msPerFrame), ms, frames);
+    BenchRatio(fps, sizeof(fps), (uint64_t)frames * 1000, ms);
+    Sys_Log("gfx: bench segment: frames %lu-%lu %s ms/frame %s fps %lu draws3d/frame",
+            (unsigned long)s_bt.segmentFrames, (unsigned long)s_bt.frames, msPerFrame, fps,
+            (unsigned long)((s_bt.draws3d - s_bt.segmentDraws3d) / frames));
+    BenchSegmentStart(now);
+}
+
+void Bench_Present(int vsync) { BenchPresent(s_benchInner->Gfx_Present, vsync); }
+void Bench_PresentStretched(int vsync) { BenchPresent(s_benchInner->Gfx_PresentStretched, vsync); }
+void Bench_DrawPrimitiveVB(int p, GfxVertexBuffer *b, uint32_t f, uint32_t n)
+{
+    s_bt.draws3d++;
+    s_benchInner->Gfx_DrawPrimitiveVB(p, b, f, n);
+}
+void Bench_DrawIndexedPrimitiveVB(int p, GfxVertexBuffer *b, uint32_t f, uint32_t n, const uint16_t *i, uint32_t ni)
+{
+    s_bt.draws3d++;
+    s_benchInner->Gfx_DrawIndexedPrimitiveVB(p, b, f, n, i, ni);
+}
+void Bench_DrawPrimitive(int p, const GfxVertex *v, uint32_t n)
+{
+    s_bt.draws3d++;
+    s_benchInner->Gfx_DrawPrimitive(p, v, n);
+}
+void Bench_DrawIndexedPrimitive(int p, const GfxVertex *v, uint32_t n, const uint16_t *i, uint32_t ni)
+{
+    s_bt.draws3d++;
+    s_benchInner->Gfx_DrawIndexedPrimitive(p, v, n, i, ni);
+}
+
+void Bench_Begin(void)
+{
+    s_bt = BenchTiming();
+    s_bt.active = 1;
+    s_bt.startMs = Sys_GetTicks();
+    BenchSegmentStart(s_bt.startMs);
+    Sys_Log("gfx: bench: begin (%s)", s_benchInner->name);
+    s_benchInner->Gfx_BenchmarkBegin();
+}
+
+void Bench_End(void)
+{
+    if (s_bt.active) {
+        s_bt.active = 0;
+        const uint32_t ms = Sys_GetTicks() - s_bt.startMs;
+        char msPerFrame[24], fps[24];
+        BenchRatio(msPerFrame, sizeof(msPerFrame), ms, s_bt.frames);
+        BenchRatio(fps, sizeof(fps), (uint64_t)s_bt.frames * 1000, ms);
+        Sys_Log("gfx: bench time (%s): %lu frames in %lu ms: %s ms/frame, %s fps, %lu draws3d/frame",
+                s_benchInner->name, (unsigned long)s_bt.frames, (unsigned long)ms, msPerFrame, fps,
+                (unsigned long)(s_bt.frames != 0 ? s_bt.draws3d / s_bt.frames : 0));
+    }
+    s_benchInner->Gfx_BenchmarkEnd();
+}
+
+const GfxBackend *WithBenchTiming(const GfxBackend *backend)
+{
+    // The keys of diagnostics/bench_replay.h, read here directly: the renderer
+    // tests link this file without the game. A key that names no playable run
+    // only leaves the timing installed: the window opens with a replay.
+    const char *stage = Sys_GetOptionText("debug.attract_stage", NULL);
+    if (Sys_GetOption("debug.attract_benchmark", 0) == 0 || stage == NULL || *stage == 0)
+        return backend;
+    s_benchInner = backend;
+    s_bench = *backend;
+    s_bench.Gfx_Present = &Bench_Present;
+    s_bench.Gfx_PresentStretched = &Bench_PresentStretched;
+    s_bench.Gfx_DrawPrimitiveVB = &Bench_DrawPrimitiveVB;
+    s_bench.Gfx_DrawIndexedPrimitiveVB = &Bench_DrawIndexedPrimitiveVB;
+    s_bench.Gfx_DrawPrimitive = &Bench_DrawPrimitive;
+    s_bench.Gfx_DrawIndexedPrimitive = &Bench_DrawIndexedPrimitive;
+    s_bench.Gfx_BenchmarkBegin = &Bench_Begin;
+    s_bench.Gfx_BenchmarkEnd = &Bench_End;
+    return &s_bench;
+}
+
 void SelectBackend()
 {
     const char *text = Sys_GetOptionText("video.renderer", "minigl");
@@ -243,7 +366,7 @@ void SelectBackend()
     (void)chosen;
 #endif
     Sys_Log("gfx: renderer %s", s_active->name);
-    s_active = WithFrameStats(s_active);
+    s_active = WithBenchTiming(WithFrameStats(s_active));
 }
 
 inline const GfxBackend *Active()

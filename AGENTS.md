@@ -120,7 +120,7 @@ explain the reason in the comment or point to a tracked document.
 
 | Domain | Paths | `-malign-int` | NDK/MiniGL headers |
 | --- | --- | --- | --- |
-| A — game layout | `game/`, `src/port/disk.cpp`, `src/port/replay_disk.cpp`, `src/diagnostics/observer.cpp`, `src/platform/amiga/main_amiga.cpp` | Yes, after the M0 gate | No |
+| A — game layout | `game/`, `src/port/disk.cpp`, `src/port/replay_disk.cpp`, `src/diagnostics/observer.cpp`, `src/diagnostics/bench_replay.cpp`, `src/platform/amiga/main_amiga.cpp` | Yes, after the M0 gate | No |
 | B — OS/renderer glue | `src/platform/amiga/`, `src/render/minigl/`, `src/audio/audio_ahi.cpp`, `src/input/input_amiga.cpp`, `src/render/gfx_core.cpp`, executors, stubs | Never | Yes |
 
 - `src/port/*.h` is the ABI. Only fixed-size scalars, opaque handles,
