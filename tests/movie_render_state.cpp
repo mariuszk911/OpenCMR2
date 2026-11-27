@@ -35,8 +35,12 @@ struct CaptureExecutor : GfxExecutor {
     void Execute(GfxFrame &frame, std::vector<GfxTexture *> &, GfxReadback &, bool, bool, bool stretch) override {
         stretched = stretch;
         for (const auto &command : frame.commands)
-            if (command.type == GFX_CMD_DRAW)
+            if (command.type == GFX_CMD_DRAW) {
                 drawnState = frame.states[command.state];
+                drawnState.world = frame.worlds[command.world];
+                drawnState.stages[0].texture = command.textures[0];
+                drawnState.stages[1].texture = command.textures[1];
+            }
     }
     void DestroyTexture(GfxTexture *) override {}
     void ReadTexture(GfxTexture *) override {}

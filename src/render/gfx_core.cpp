@@ -45,6 +45,8 @@ namespace {
 GfxExecutor *s_executor;
 GfxDrawState s_state;
 bool s_stateDirty = true;
+bool s_worldDirty = true;
+bool s_hasDirtyTextures = false;
 GfxFrame s_frame;
 GfxReadback s_readback;
 std::vector<GfxTexture *> s_textures;     // every live texture (not face views)
@@ -111,6 +113,7 @@ void ResetState()
     s_state.viewport.height = s_height;
     s_state.viewport.minZ = 0.0f;
     s_state.viewport.maxZ = 1.0f;
+    s_worldDirty = true;
     Touch();
 }
 
@@ -123,13 +126,55 @@ uint32_t RecordState()
     return (uint32_t)s_frame.states.size() - 1;
 }
 
+uint32_t RecordWorld()
+{
+    if (s_worldDirty || s_frame.worlds.empty()) {
+        s_frame.worlds.push_back(s_state.world);
+        s_worldDirty = false;
+    }
+    return (uint32_t)s_frame.worlds.size() - 1;
+}
+
+// Small ring cache of dynamic vertex-buffer copies made during the current
+// recording. Meshes drawn from a recently-locked shared buffer (such as the
+// car body after environment-map UV projection) submit 10-30 texture parts
+// from the same vertex slice without locking in between; reusing the first
+// copy avoids copying hundreds of KB of identical vertices per frame.
+struct DynCopyEntry {
+    const GfxVertexBuffer *buffer;
+    uint32_t version;
+    uint32_t firstVertex;
+    uint32_t endVertex;
+    uint32_t byteOffset;
+};
+DynCopyEntry s_dynCopies[32];
+int s_dynCopyCount = 0;
+int s_dynCopyNext = 0;
+
+inline void ResetDynCopies()
+{
+    s_dynCopyCount = 0;
+    s_dynCopyNext = 0;
+}
+
 // Vertices at a multiple of their size, so that the executor can draw them
 // from their first vertex.
 uint32_t AppendVertices(const void *data, size_t bytes, size_t stride)
 {
-    size_t offset = (s_frame.vertices.size() + stride - 1) / stride * stride;
-    s_frame.vertices.resize(offset);
-    s_frame.vertices.insert(s_frame.vertices.end(), (const uint8_t *)data, (const uint8_t *)data + bytes);
+    const size_t oldSize = s_frame.vertices.size();
+    const size_t offset = (oldSize + stride - 1) / stride * stride;
+    const size_t newSize = offset + bytes;
+    if (newSize > s_frame.vertices.capacity()) {
+        size_t cap = s_frame.vertices.capacity() ? s_frame.vertices.capacity() * 2 : 16384;
+        while (cap < newSize)
+            cap *= 2;
+        s_frame.vertices.reserve(cap);
+    }
+    s_frame.vertices.resize(newSize);
+    if (offset > oldSize)
+        memset(s_frame.vertices.data() + oldSize, 0, offset - oldSize);
+    if (bytes > 0)
+        memcpy(s_frame.vertices.data() + offset, data, bytes);
     return (uint32_t)offset;
 }
 
@@ -208,7 +253,33 @@ void RecordDraw(int primitive, bool transformed, const void *vertices, DWORD ver
         }
     } else {
         size_t stride = transformed ? sizeof(GfxTLVertex) : sizeof(GfxVertex);
-        cmd.firstVertexByte = AppendVertices(vertices, vertexCount * stride, stride);
+        bool reused = false;
+        if (buffer != NULL && !transformed) {
+            const uint32_t endVertex = firstVertex + vertexCount;
+            for (int i = 0; i < s_dynCopyCount; i++) {
+                const DynCopyEntry &e = s_dynCopies[i];
+                if (e.buffer == buffer && e.version == buffer->version &&
+                    firstVertex >= e.firstVertex && endVertex <= e.endVertex) {
+                    cmd.firstVertexByte = e.byteOffset + (firstVertex - e.firstVertex) * (uint32_t)sizeof(GfxVertex);
+                    reused = true;
+                    break;
+                }
+            }
+        }
+        if (!reused) {
+            cmd.firstVertexByte = AppendVertices(vertices, vertexCount * stride, stride);
+            if (buffer != NULL && !transformed) {
+                DynCopyEntry &e = s_dynCopies[s_dynCopyNext];
+                e.buffer = buffer;
+                e.version = buffer->version;
+                e.firstVertex = firstVertex;
+                e.endVertex = firstVertex + vertexCount;
+                e.byteOffset = cmd.firstVertexByte;
+                s_dynCopyNext = (s_dynCopyNext + 1) & 31;
+                if (s_dynCopyCount < 32)
+                    s_dynCopyCount++;
+            }
+        }
     }
     if (indices != NULL) {
         cmd.firstIndex = (uint32_t)s_frame.indices.size();
@@ -219,6 +290,9 @@ void RecordDraw(int primitive, bool transformed, const void *vertices, DWORD ver
         cmd.indexCount = 0;
     }
     cmd.state = RecordState();
+    cmd.world = RecordWorld();
+    cmd.textures[0] = s_state.stages[0].texture;
+    cmd.textures[1] = s_state.stages[1].texture;
     s_frame.commands.push_back(cmd);
 }
 
@@ -451,6 +525,7 @@ extern "C" void Gfx_SetFullscreen(BOOL fullscreen)
 
 extern "C" void Gfx_Shutdown(void)
 {
+    ResetDynCopies();
     while (!s_textures.empty())
         Gfx_DestroyTexture(s_textures.back());
     delete s_executor;
@@ -497,18 +572,26 @@ extern "C" void Gfx_EndScene(void)
 {
 }
 
+static bool s_lastStretch = false;
+
 static void Present(BOOL vsync, bool stretch)
 {
+    s_lastStretch = stretch;
     if (FILE *trace = TraceFile())
         fprintf(trace, "F %u\n", s_traceFrame++);
     if (Diagnostics::observer)
         Diagnostics::observer->BeginPresent();
-    if (s_executor != NULL)
+    if (s_executor != NULL) {
+        s_frame.hasDirtyTextures = s_hasDirtyTextures;
         s_executor->Execute(s_frame, s_textures, s_readback, true, vsync != 0, stretch);
+        s_hasDirtyTextures = false;
+    }
     s_frame.Reset();
+    ResetDynCopies();
     s_record++;
     s_presentedFrames++;
     s_stateDirty = true;
+    s_worldDirty = true;
     // A frame always starts on the back buffer.
     s_target = NULL;
     s_skipTarget = false;
@@ -522,11 +605,16 @@ extern "C" void Gfx_PresentStretched(BOOL vsync) { Present(vsync, true); }
 // Runs what is recorded so far without ending the frame.
 static void Flush(void)
 {
-    if (s_executor != NULL)
-        s_executor->Execute(s_frame, s_textures, s_readback, false, false);
+    if (s_executor != NULL) {
+        s_frame.hasDirtyTextures = s_hasDirtyTextures;
+        s_executor->Execute(s_frame, s_textures, s_readback, false, false, s_lastStretch);
+        s_hasDirtyTextures = false;
+    }
     s_frame.Reset();
+    ResetDynCopies();
     s_record++;
     s_stateDirty = true;
+    s_worldDirty = true;
     if (s_target != NULL)
         Gfx_SetRenderTarget(s_target);
 }
@@ -579,6 +667,7 @@ extern "C" void Gfx_PopState(void)
     const auto saved = s_savedStates.back();
     s_savedStates.pop_back();
     s_state = saved.first;
+    s_worldDirty = true;
     Touch();
     if (s_target != saved.second)
         Gfx_SetRenderTarget(saved.second);
@@ -654,7 +743,12 @@ extern "C" void Gfx_SetDistanceFade(float start, float end)
 extern "C" void Gfx_SetTransform(int type, const GfxMatrix *matrix)
 {
     switch (type) {
-    case GFX_TRANSFORM_WORLD: Set(s_state.world, *matrix, TouchOther); break;
+    case GFX_TRANSFORM_WORLD:
+        if (memcmp(&s_state.world, matrix, sizeof(s_state.world)) != 0) {
+            s_state.world = *matrix;
+            s_worldDirty = true;
+        }
+        break;
     case GFX_TRANSFORM_VIEW: Set(s_state.view, *matrix); break;
     case GFX_TRANSFORM_PROJECTION: Set(s_state.projection, *matrix); break;
     case GFX_TRANSFORM_TEXTURE0: Set(s_state.texture[0], *matrix); break;
@@ -756,7 +850,14 @@ BOOL_SETTER(Gfx_SetAlphaTest, alphaTest, TouchOther)
         }                                           \
     }
 
-STAGE_SETTER(Gfx_SetTexture, GfxTexture *, texture, TouchOther)
+// Textures live on each GfxCommand so switching textures does not copy the
+// whole GfxDrawState (~1.2 KB) for every draw.
+extern "C" void Gfx_SetTexture(int stage, GfxTexture *value)
+{
+    GfxStageState *s = Stage(stage);
+    if (s != NULL)
+        s->texture = value;
+}
 STAGE_SETTER(Gfx_SetStageColorOp, int, colorOp, TouchOther)
 STAGE_SETTER(Gfx_SetStageColorArg1, int, colorArg1, TouchOther)
 STAGE_SETTER(Gfx_SetStageColorArg2, int, colorArg2, TouchOther)
@@ -799,6 +900,9 @@ extern "C" void Gfx_DestroyVertexBuffer(GfxVertexBuffer *buffer)
     // Draws recorded this frame may still use it.
     if (buffer->referencedRecord == s_record)
         Flush();
+    for (int i = 0; i < s_dynCopyCount; i++)
+        if (s_dynCopies[i].buffer == buffer)
+            s_dynCopies[i].buffer = NULL;
     if (s_executor != NULL)
         s_executor->DestroyVertexBuffer(buffer);
     delete buffer;
@@ -926,6 +1030,7 @@ extern "C" GfxTexture *Gfx_CreateTexture(int width, int height, int format, int 
     t->cube = NULL;
     t->face = 0;
     t->dirty = true;
+    s_hasDirtyTextures = true;
     t->renderedTo = false;
     t->gpu = NULL;
     t->replacement = NULL;
@@ -965,13 +1070,14 @@ extern "C" void Gfx_DestroyTexture(GfxTexture *texture)
         if (Root(s_state.stages[i].texture) == texture)
             s_state.stages[i].texture = NULL;
     // Draws recorded this frame may still use it: flush them first.
-    for (const GfxDrawState &state : s_frame.states)
-        for (const GfxStageState &stage : state.stages)
-            if (Root(stage.texture) == texture ||
-                (Root(stage.texture) != NULL && Root(stage.texture)->replacement == texture)) {
-                Flush();
-                goto flushed;
-            }
+    for (const GfxCommand &cmd : s_frame.commands)
+        if (cmd.type == GFX_CMD_DRAW)
+            for (int i = 0; i < 2; i++)
+                if (Root(cmd.textures[i]) == texture ||
+                    (Root(cmd.textures[i]) != NULL && Root(cmd.textures[i])->replacement == texture)) {
+                    Flush();
+                    goto flushed;
+                }
 flushed:
     // Shutdown may visit a replacement before its owner. Detach it so the
     // owner cannot destroy it a second time (also applies to font fields).
@@ -1076,8 +1182,10 @@ extern "C" BOOL Gfx_LockTexture(GfxTexture *texture, int face, int mip, GfxLocke
 
 extern "C" void Gfx_UnlockTexture(GfxTexture *texture, int, int)
 {
-    if (texture != NULL)
+    if (texture != NULL) {
         Root(texture)->dirty = true;
+        s_hasDirtyTextures = true;
+    }
 }
 
 namespace {
@@ -1140,6 +1248,7 @@ extern "C" void Gfx_CopyTexture(GfxTexture *dst, GfxTexture *src)
     if (dst->format == src->format && dst->width == src->width && dst->height == src->height) {
         dst->levels[0][0] = src->levels[0][0];
         dst->dirty = true;
+        s_hasDirtyTextures = true;
         return;
     }
     if (dst->format == GFX_FORMAT_BC1 || dst->format == GFX_FORMAT_BC3) {
@@ -1167,6 +1276,7 @@ extern "C" void Gfx_CopyTexture(GfxTexture *dst, GfxTexture *src)
         }
     }
     dst->dirty = true;
+    s_hasDirtyTextures = true;
 }
 
 extern "C" void Gfx_GenerateMipmaps(GfxTexture *texture)
@@ -1196,6 +1306,7 @@ extern "C" void Gfx_GenerateMipmaps(GfxTexture *texture)
         }
     }
     texture->dirty = true;
+    s_hasDirtyTextures = true;
 }
 
 extern "C" BOOL Gfx_ReadBackBuffer(int x, int y, int width, int height, DWORD *pixels)

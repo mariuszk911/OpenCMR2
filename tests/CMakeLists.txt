@@ -864,6 +864,11 @@ add_executable(gles2_fragment_test gles2_fragment.cpp)
 target_include_directories(gles2_fragment_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME gles2_fragment COMMAND gles2_fragment_test)
 
+# Draw batching for the GLES2 executor (2D/TL consecutive + 3D opaque buckets).
+add_executable(gles2_batch_test gles2_batch.cpp)
+target_include_directories(gles2_batch_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME gles2_batch COMMAND gles2_batch_test)
+
 # gfx_core's recorded states: no-op setters and GfxDrawState::vertexSerial
 # (which the GLES2 executor trusts instead of comparing states).
 add_executable(gfx_core_serial_test gfx_core_serial.cpp

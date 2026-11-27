@@ -654,9 +654,9 @@ struct Executor : GfxExecutor {
         return s;
     }
 
-    int TextureKind(const GfxStageState &stage)
+    int TextureKind(GfxTexture *texture)
     {
-        GfxTexture *t = Gfx_DrawnTexture(stage.texture);
+        GfxTexture *t = Gfx_DrawnTexture(texture);
         if (t == NULL)
             return 0;
         if (t->flags & GFX_TEXTURE_CUBE)
@@ -674,24 +674,24 @@ struct Executor : GfxExecutor {
 
     // As in gfx_gpu.cpp: point-filtered sprites and text, read through a
     // linear sampler by the shader.
-    bool ScaledPoint(const GfxStageState &stage)
+    bool ScaledPoint(const GfxStageState &stage, GfxTexture *texture)
     {
-        int kind = TextureKind(stage);
+        int kind = TextureKind(texture);
         return (kind == 1 || kind == 6) && stage.magFilter == GFX_FILTER_POINT && stage.mipFilter == GFX_MIPFILTER_NONE;
     }
 
     // The two stages' textures and samplers: units 0 and 2 for 2D textures,
     // 1 and 3 for cubes.
-    void BindTextures(const GfxDrawState &s)
+    void BindTextures(const GfxDrawState &s, GfxTexture *const cmdTextures[2])
     {
         for (int i = 0; i < 2; i++) {
             const GfxStageState &stage = s.stages[i];
-            GfxTexture *t = Gfx_DrawnTexture(stage.texture);
+            GfxTexture *t = Gfx_DrawnTexture(cmdTextures[i]);
             GlTexture *g = t != NULL ? Ensure(t) : NULL;
             GfxStageState sampled = stage;
-            if (ScaledPoint(stage) || TextureKind(stage) == 5 || TextureKind(stage) == 6)
+            if (ScaledPoint(stage, cmdTextures[i]) || TextureKind(cmdTextures[i]) == 5 || TextureKind(cmdTextures[i]) == 6)
                 sampled.minFilter = sampled.magFilter = GFX_FILTER_LINEAR;
-            if (TextureKind(stage) == 4) {
+            if (TextureKind(cmdTextures[i]) == 4) {
                 sampled.minFilter = sampled.magFilter = GFX_FILTER_LINEAR;
                 sampled.mipFilter = GFX_MIPFILTER_LINEAR;
             }
@@ -710,9 +710,9 @@ struct Executor : GfxExecutor {
                     bound.samplers[unit] = sampler;
                 }
             }
-            GlTexture *native = t != NULL && (t->flags & GFX_TEXTURE_VECTOR_ICON) ? Ensure(stage.texture) : NULL;
+            GlTexture *native = t != NULL && (t->flags & GFX_TEXTURE_VECTOR_ICON) ? Ensure(cmdTextures[i]) : NULL;
             GfxStageState source = stage;
-            if (ScaledPoint(stage)) source.minFilter = source.magFilter = GFX_FILTER_LINEAR;
+            if (ScaledPoint(stage, cmdTextures[i])) source.minFilter = source.magFilter = GFX_FILTER_LINEAR;
             GLuint original = native != NULL ? native->texture : white2D;
             GLuint sourceSampler = Sampler(source);
             int unit = 5 + i;
@@ -741,7 +741,8 @@ struct Executor : GfxExecutor {
 
     // ---- uniforms (as gfx_gpu.cpp's) ----
 
-    static bool SameVertexUniforms(const GfxDrawState &a, const GfxDrawState &b)
+    static bool SameVertexUniforms(const GfxDrawState &a, const GfxMatrix &worldA, const GfxDrawState &b,
+                                   const GfxMatrix &worldB)
     {
         for (int i = 0; i < 2; i++)
             if (a.stages[i].texCoordIndex != b.stages[i].texCoordIndex ||
@@ -754,7 +755,7 @@ struct Executor : GfxExecutor {
                a.specularSource == b.specularSource && a.ambientSource == b.ambientSource &&
                a.emissiveSource == b.emissiveSource && a.fog == b.fog && a.fogTableMode == b.fogTableMode &&
                a.fogVertexMode == b.fogVertexMode && a.fogStart == b.fogStart && a.fogEnd == b.fogEnd &&
-               a.ambient == b.ambient && memcmp(&a.world, &b.world, sizeof(a.world)) == 0 &&
+               a.ambient == b.ambient && memcmp(&worldA, &worldB, sizeof(worldA)) == 0 &&
                memcmp(&a.view, &b.view, sizeof(a.view)) == 0 &&
                memcmp(&a.projection, &b.projection, sizeof(a.projection)) == 0 &&
                memcmp(a.texture, b.texture, sizeof(a.texture)) == 0 &&
@@ -781,11 +782,11 @@ struct Executor : GfxExecutor {
         return r;
     }
 
-    void FillVertexUniforms(const GfxDrawState &s, int targetW, int targetH, const GfxViewport &viewport,
-                            bool scaled, VertexUniforms &u)
+    void FillVertexUniforms(const GfxDrawState &s, const GfxMatrix &world, int targetW, int targetH,
+                            const GfxViewport &viewport, bool scaled, VertexUniforms &u)
     {
         memset(&u, 0, sizeof(u));
-        Multiply(s.world, s.view, u.worldView);
+        Multiply(world, s.view, u.worldView);
         memcpy(u.projection, &s.projection, sizeof(u.projection));
         memcpy(u.textureMatrix[0], &s.texture[0], 64);
         memcpy(u.textureMatrix[1], &s.texture[1], 64);
@@ -841,7 +842,7 @@ struct Executor : GfxExecutor {
 
     // fade: the draw is a 3D one into the back buffer, which the distance
     // fade applies to.
-    void FillFragmentUniforms(const GfxDrawState &s, bool fade, FragmentUniforms &u)
+    void FillFragmentUniforms(const GfxDrawState &s, GfxTexture *const cmdTextures[2], bool fade, FragmentUniforms &u)
     {
         memset(&u, 0, sizeof(u));
         const GfxStageState &a = s.stages[0], &b = s.stages[1];
@@ -851,16 +852,16 @@ struct Executor : GfxExecutor {
         u.stage0[3] = a.alphaOp;
         u.stage0b[0] = a.alphaArg1;
         u.stage0b[1] = a.alphaArg2;
-        u.stage0b[2] = TextureKind(a);
-        u.stage0b[3] = ScaledPoint(a);
+        u.stage0b[2] = TextureKind(cmdTextures[0]);
+        u.stage0b[3] = ScaledPoint(a, cmdTextures[0]);
         u.stage1[0] = b.colorOp;
         u.stage1[1] = b.colorArg1;
         u.stage1[2] = b.colorArg2;
         u.stage1[3] = b.alphaOp;
         u.stage1b[0] = b.alphaArg1;
         u.stage1b[1] = b.alphaArg2;
-        u.stage1b[2] = TextureKind(b);
-        u.stage1b[3] = ScaledPoint(b);
+        u.stage1b[2] = TextureKind(cmdTextures[1]);
+        u.stage1b[3] = ScaledPoint(b, cmdTextures[1]);
         Color(s.textureFactor, u.textureFactor);
         u.alphaTest[0] = s.alphaTest;
         u.alphaTest[1] = s.alphaFunc;
@@ -898,6 +899,7 @@ struct Executor : GfxExecutor {
         drawUniforms.assign(frame.commands.size(), DrawUniforms());
         GfxTexture *target = NULL;
         const GfxDrawState *vertexState = NULL;
+        const GfxMatrix *vertexWorld = NULL;
         int vertexW = 0, vertexH = 0;
         bool vertexScaled = false;
         GLintptr vertexOffset = -1, fragmentOffset = -1;
@@ -917,21 +919,24 @@ struct Executor : GfxExecutor {
                 targetH = root->height;
             }
             const GfxDrawState &s = frame.states[c.state];
+            const GfxMatrix &world = frame.worlds[c.world];
             const bool scaled = target == NULL && s.screenW > 0 && s.screenH > 0;
             if (vertexState == NULL || vertexW != targetW || vertexH != targetH || vertexScaled != scaled ||
-                (vertexState != &s && !SameVertexUniforms(*vertexState, s))) {
+                ((vertexState != &s || vertexWorld != &world) &&
+                 !SameVertexUniforms(*vertexState, *vertexWorld, s, world))) {
                 VertexUniforms u;
-                FillVertexUniforms(s, targetW, targetH,
+                FillVertexUniforms(s, world, targetW, targetH,
                                    ToTarget(s.viewport, s.screenW, s.screenH, target == NULL, targetW, targetH), scaled,
                                    u);
                 vertexOffset = AppendUniforms(&u, sizeof(u));
                 vertexState = &s;
+                vertexWorld = &world;
                 vertexW = targetW;
                 vertexH = targetH;
                 vertexScaled = scaled;
             }
             FragmentUniforms f;
-            FillFragmentUniforms(s, target == NULL && !c.transformed, f);
+            FillFragmentUniforms(s, c.textures, target == NULL && !c.transformed, f);
             if (fragmentOffset < 0 || memcmp(&f, &fragment, sizeof(f)) != 0) {
                 fragmentOffset = AppendUniforms(&f, sizeof(f));
                 fragment = f;
@@ -1127,13 +1132,15 @@ struct Executor : GfxExecutor {
     {
         if (context == nullptr)
             return;
-        for (const GfxDrawState &s : frame.states)
-            for (const GfxStageState &stage : s.stages)
-                if (stage.texture != NULL)
-                    Ensure(Gfx_DrawnTexture(stage.texture));
-        for (const GfxCommand &c : frame.commands)
-            if (c.type == GFX_CMD_TARGET && c.target != NULL)
+        for (const GfxCommand &c : frame.commands) {
+            if (c.type == GFX_CMD_DRAW) {
+                for (int i = 0; i < 2; i++)
+                    if (c.textures[i] != NULL)
+                        Ensure(Gfx_DrawnTexture(c.textures[i]));
+            } else if (c.type == GFX_CMD_TARGET && c.target != NULL) {
                 Ensure(c.target->cube != NULL ? c.target->cube : c.target);
+            }
+        }
         UploadTextures(textures);
         gl.BindVertexArray(vertexArray);
         UploadGeometry(frame);
@@ -1197,7 +1204,7 @@ struct Executor : GfxExecutor {
                                    sizeof(FragmentUniforms));
                 boundFragmentOffset = u.fragmentOffset;
             }
-            BindTextures(s);
+            BindTextures(s, c.textures);
             BindVertices(c.buffer != NULL ? ((GlVertexBuffer *)c.buffer->gpu)->buffer : vertexBuffer, c.transformed);
             GLint firstVertex = (GLint)(c.firstVertexByte / (c.transformed ? sizeof(GfxTLVertex) : sizeof(GfxVertex)));
             if (c.firstIndex != ~0u)

@@ -751,7 +751,8 @@ struct Executor : GfxExecutor {
     // ---- uniforms ----
 
     // Whether two states give the same VertexUniforms (FillVertexUniforms).
-    static bool SameVertexUniforms(const GfxDrawState &a, const GfxDrawState &b)
+    static bool SameVertexUniforms(const GfxDrawState &a, const GfxMatrix &worldA, const GfxDrawState &b,
+                                   const GfxMatrix &worldB)
     {
         for (int i = 0; i < 2; i++)
             if (a.stages[i].texCoordIndex != b.stages[i].texCoordIndex ||
@@ -764,7 +765,7 @@ struct Executor : GfxExecutor {
                a.ambientSource == b.ambientSource && a.emissiveSource == b.emissiveSource && a.fog == b.fog &&
                a.fogTableMode == b.fogTableMode && a.fogVertexMode == b.fogVertexMode &&
                a.fogStart == b.fogStart && a.fogEnd == b.fogEnd && a.ambient == b.ambient &&
-               memcmp(&a.world, &b.world, sizeof(a.world)) == 0 && memcmp(&a.view, &b.view, sizeof(a.view)) == 0 &&
+               memcmp(&worldA, &worldB, sizeof(worldA)) == 0 && memcmp(&a.view, &b.view, sizeof(a.view)) == 0 &&
                memcmp(&a.projection, &b.projection, sizeof(a.projection)) == 0 &&
                memcmp(a.texture, b.texture, sizeof(a.texture)) == 0 &&
                memcmp(&a.material, &b.material, sizeof(a.material)) == 0 &&
@@ -792,11 +793,11 @@ struct Executor : GfxExecutor {
         return r;
     }
 
-    void FillVertexUniforms(const GfxCommand &cmd, const GfxDrawState &s, int targetW, int targetH,
-                            const GfxViewport &viewport, bool scaled, VertexUniforms &u)
+    void FillVertexUniforms(const GfxCommand &cmd, const GfxDrawState &s, const GfxMatrix &world, int targetW,
+                            int targetH, const GfxViewport &viewport, bool scaled, VertexUniforms &u)
     {
         memset(&u, 0, sizeof(u));
-        Multiply(s.world, s.view, u.worldView);
+        Multiply(world, s.view, u.worldView);
         memcpy(u.projection, &s.projection, sizeof(u.projection));
         memcpy(u.textureMatrix[0], &s.texture[0], 64);
         memcpy(u.textureMatrix[1], &s.texture[1], 64);
@@ -854,9 +855,9 @@ struct Executor : GfxExecutor {
         (void)cmd;
     }
 
-    int TextureKind(const GfxStageState &stage)
+    int TextureKind(GfxTexture *texture)
     {
-        GfxTexture *t = Gfx_DrawnTexture(stage.texture);
+        GfxTexture *t = Gfx_DrawnTexture(texture);
         if (t == NULL)
             return 0;
         if (t->flags & GFX_TEXTURE_CUBE)
@@ -877,15 +878,15 @@ struct Executor : GfxExecutor {
     // two pixels wide, or be skipped; the shader filters them smoothly
     // through a linear sampler. At their size it reads them as the point
     // filter does.
-    bool ScaledPoint(const GfxStageState &stage)
+    bool ScaledPoint(const GfxStageState &stage, GfxTexture *texture)
     {
-        int kind = TextureKind(stage);
+        int kind = TextureKind(texture);
         return (kind == 1 || kind == 6) && stage.magFilter == GFX_FILTER_POINT && stage.mipFilter == GFX_MIPFILTER_NONE;
     }
 
     // fade: the draw is a 3D one into the back buffer, which the distance
     // fade applies to.
-    void FillFragmentUniforms(const GfxDrawState &s, bool fade, FragmentUniforms &u)
+    void FillFragmentUniforms(const GfxDrawState &s, GfxTexture *const cmdTextures[2], bool fade, FragmentUniforms &u)
     {
         memset(&u, 0, sizeof(u));
         const GfxStageState &a = s.stages[0], &b = s.stages[1];
@@ -895,16 +896,16 @@ struct Executor : GfxExecutor {
         u.stage0[3] = a.alphaOp;
         u.stage0b[0] = a.alphaArg1;
         u.stage0b[1] = a.alphaArg2;
-        u.stage0b[2] = TextureKind(a);
-        u.stage0b[3] = ScaledPoint(a);
+        u.stage0b[2] = TextureKind(cmdTextures[0]);
+        u.stage0b[3] = ScaledPoint(a, cmdTextures[0]);
         u.stage1[0] = b.colorOp;
         u.stage1[1] = b.colorArg1;
         u.stage1[2] = b.colorArg2;
         u.stage1[3] = b.alphaOp;
         u.stage1b[0] = b.alphaArg1;
         u.stage1b[1] = b.alphaArg2;
-        u.stage1b[2] = TextureKind(b);
-        u.stage1b[3] = ScaledPoint(b);
+        u.stage1b[2] = TextureKind(cmdTextures[1]);
+        u.stage1b[3] = ScaledPoint(b, cmdTextures[1]);
         Color(s.textureFactor, u.textureFactor);
         u.alphaTest[0] = s.alphaTest;
         u.alphaTest[1] = s.alphaFunc;
@@ -926,18 +927,19 @@ struct Executor : GfxExecutor {
     }
 
     // The stages' textures (2D and cube for each), then the backdrop.
-    void TextureBindings(const GfxDrawState &s, SDL_GPUTextureSamplerBinding bindings[7])
+    void TextureBindings(const GfxDrawState &s, GfxTexture *const cmdTextures[2],
+                         SDL_GPUTextureSamplerBinding bindings[7])
     {
         for (int i = 0; i < 2; i++) {
             const GfxStageState &stage = s.stages[i];
-            GfxTexture *t = Gfx_DrawnTexture(stage.texture);
+            GfxTexture *t = Gfx_DrawnTexture(cmdTextures[i]);
             GpuTexture *g = t != NULL ? Ensure(t) : NULL;
             GfxStageState sampled = stage;
-            if (ScaledPoint(stage) || TextureKind(stage) == 5 || TextureKind(stage) == 6)
+            if (ScaledPoint(stage, cmdTextures[i]) || TextureKind(cmdTextures[i]) == 5 || TextureKind(cmdTextures[i]) == 6)
                 sampled.minFilter = sampled.magFilter = GFX_FILTER_LINEAR;
             // A distance field is read between its texels, and from its mip
             // levels where it is drawn smaller.
-            if (TextureKind(stage) == 4) {
+            if (TextureKind(cmdTextures[i]) == 4) {
                 sampled.minFilter = sampled.magFilter = GFX_FILTER_LINEAR;
                 sampled.mipFilter = GFX_MIPFILTER_LINEAR;
             }
@@ -946,9 +948,9 @@ struct Executor : GfxExecutor {
             SDL_GPUTexture *texture = g != NULL ? g->texture : NULL;
             bindings[i * 2] = { (texture != NULL && !cube) ? texture : white2D, sampler };
             bindings[i * 2 + 1] = { (texture != NULL && cube) ? texture : whiteCube, sampler };
-            GpuTexture *native = t != NULL && (t->flags & GFX_TEXTURE_VECTOR_ICON) ? Ensure(stage.texture) : NULL;
+            GpuTexture *native = t != NULL && (t->flags & GFX_TEXTURE_VECTOR_ICON) ? Ensure(cmdTextures[i]) : NULL;
             GfxStageState source = stage;
-            if (ScaledPoint(stage)) source.minFilter = source.magFilter = GFX_FILTER_LINEAR;
+            if (ScaledPoint(stage, cmdTextures[i])) source.minFilter = source.magFilter = GFX_FILTER_LINEAR;
             bindings[5 + i] = { native != NULL ? native->texture : white2D, Sampler(source) };
         }
         bindings[4] = { backdrop, Sampler(GfxStageState()) };
@@ -1164,13 +1166,15 @@ struct Executor : GfxExecutor {
             return;
         }
         // Textures used by this frame must exist before the passes start.
-        for (const GfxDrawState &s : frame.states)
-            for (const GfxStageState &stage : s.stages)
-                if (stage.texture != NULL)
-                    Ensure(Gfx_DrawnTexture(stage.texture));
-        for (const GfxCommand &c : frame.commands)
-            if (c.type == GFX_CMD_TARGET && c.target != NULL)
+        for (const GfxCommand &c : frame.commands) {
+            if (c.type == GFX_CMD_DRAW) {
+                for (int i = 0; i < 2; i++)
+                    if (c.textures[i] != NULL)
+                        Ensure(Gfx_DrawnTexture(c.textures[i]));
+            } else if (c.type == GFX_CMD_TARGET && c.target != NULL) {
                 Ensure(c.target->cube != NULL ? c.target->cube : c.target);
+            }
+        }
         UploadTextures(cmd, textures);
         UploadGeometry(cmd, frame);
         UploadVertexBuffers(cmd, frame);
@@ -1183,6 +1187,7 @@ struct Executor : GfxExecutor {
         // passes): the state and target size of the vertex ones, and the
         // fragment ones. Clears push their own.
         const GfxDrawState *vertexUniformState = NULL;
+        const GfxMatrix *vertexUniformWorld = NULL;
         int vertexUniformW = 0, vertexUniformH = 0;
         bool vertexUniformScaled = false;
         FragmentUniforms fragmentUniforms;
@@ -1280,26 +1285,29 @@ struct Executor : GfxExecutor {
                            viewport.minZ, viewport.maxZ };
                 SDL_Rect scissor = { (int)viewport.x, (int)viewport.y, (int)viewport.width, (int)viewport.height };
                 SetViewport(pass, bound, vp, scissor);
+                const GfxMatrix &world = frame.worlds[c.world];
                 if (vertexUniformState == NULL || vertexUniformW != targetW || vertexUniformH != targetH ||
                     vertexUniformScaled != scaled ||
-                    (vertexUniformState != &s && !SameVertexUniforms(*vertexUniformState, s))) {
+                    ((vertexUniformState != &s || vertexUniformWorld != &world) &&
+                     !SameVertexUniforms(*vertexUniformState, *vertexUniformWorld, s, world))) {
                     VertexUniforms vu;
-                    FillVertexUniforms(c, s, targetW, targetH, viewport, scaled, vu);
+                    FillVertexUniforms(c, s, world, targetW, targetH, viewport, scaled, vu);
                     SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
                     vertexUniformState = &s;
+                    vertexUniformWorld = &world;
                     vertexUniformW = targetW;
                     vertexUniformH = targetH;
                     vertexUniformScaled = scaled;
                 }
                 FragmentUniforms fu;
-                FillFragmentUniforms(s, target == NULL && !c.transformed, fu);
+                FillFragmentUniforms(s, c.textures, target == NULL && !c.transformed, fu);
                 if (!fragmentUniformsSet || memcmp(&fu, &fragmentUniforms, sizeof(fu)) != 0) {
                     SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
                     fragmentUniforms = fu;
                     fragmentUniformsSet = true;
                 }
                 SDL_GPUTextureSamplerBinding textures[7];
-                TextureBindings(s, textures);
+                TextureBindings(s, c.textures, textures);
                 if (!bound.texturesSet || memcmp(textures, bound.textures, sizeof(textures)) != 0) {
                     SDL_BindGPUFragmentSamplers(pass, 0, textures, 7);
                     memcpy(bound.textures, textures, sizeof(textures));

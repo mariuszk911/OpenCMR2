@@ -132,6 +132,8 @@ struct GfxCommand {
     uint32_t firstIndex;        // into the frame's indices, or ~0 for none
     uint32_t indexCount;
     uint32_t state;             // index into the frame's states
+    uint32_t world;             // index into the frame's worlds (3D draws)
+    GfxTexture *textures[2];    // stage 0 and 1 textures (stored here so texture changes do not copy GfxDrawState)
     // clear
     DWORD clearFlags;
     DWORD clearColor;
@@ -146,15 +148,19 @@ struct GfxFrame {
     std::vector<uint8_t> vertices;
     std::vector<uint16_t> indices;
     std::vector<GfxDrawState> states;
+    std::vector<GfxMatrix> worlds;
     std::vector<GfxCommand> commands;
     std::vector<GfxVertexBuffer *> buffers;     // drawn from, each once
+    bool hasDirtyTextures = false;              // at least one live texture has dirty == true
     void Reset()
     {
         vertices.clear();
         indices.clear();
         states.clear();
+        worlds.clear();
         commands.clear();
         buffers.clear();
+        hasDirtyTextures = false;
     }
 };
 

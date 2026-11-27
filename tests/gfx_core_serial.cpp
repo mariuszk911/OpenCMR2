@@ -29,7 +29,10 @@ extern "C" int Sys_GetOption(const char *, int fallback) { return fallback; }
 int Platform_GetSettingInt(const char *, int value) { return value; }
 const char *Platform_GetSetting(const char *, const char *value) { return value; }
 
-static std::vector<GfxDrawState> drawn;   // the state of every draw of the last frame
+static std::vector<GfxDrawState> drawn;   // the effective state of every draw of the last frame
+static size_t recordedStates;
+static size_t recordedVertexBytes;
+static std::vector<uint32_t> recordedFirstVertexBytes;
 
 struct CaptureExecutor : GfxExecutor {
     bool SetVideoMode(int, int, bool) override { return true; }
@@ -37,9 +40,18 @@ struct CaptureExecutor : GfxExecutor {
     void Execute(GfxFrame &frame, std::vector<GfxTexture *> &, GfxReadback &, bool, bool, bool) override
     {
         drawn.clear();
+        recordedStates = frame.states.size();
+        recordedVertexBytes = frame.vertices.size();
+        recordedFirstVertexBytes.clear();
         for (const GfxCommand &c : frame.commands)
-            if (c.type == GFX_CMD_DRAW)
-                drawn.push_back(frame.states[c.state]);
+            if (c.type == GFX_CMD_DRAW) {
+                GfxDrawState effective = frame.states[c.state];
+                effective.world = frame.worlds[c.world];
+                effective.stages[0].texture = c.textures[0];
+                effective.stages[1].texture = c.textures[1];
+                drawn.push_back(effective);
+                recordedFirstVertexBytes.push_back(c.firstVertexByte);
+            }
     }
     void DestroyTexture(GfxTexture *) override {}
     void ReadTexture(GfxTexture *) override {}
@@ -128,6 +140,11 @@ int main()
         Check(drawn.size() == 2 && memcmp(&drawn[0], &drawn[1], sizeof(GfxDrawState)) != 0, what);
         if (drawn.size() != 2)
             continue;
+        if (strcmp(call.first, "world") == 0 || strcmp(call.first, "texture") == 0 ||
+            strcmp(call.first, "stage 1 texture") == 0) {
+            snprintf(what, sizeof(what), "%s: does not copy GfxDrawState", call.first);
+            Check(recordedStates == 1, what);
+        }
         if (drawn[0].vertexSerial == drawn[1].vertexSerial) {
             snprintf(what, sizeof(what), "%s: same serial, same static vertex uniforms", call.first);
             Check(Static(drawn[0]) == Static(drawn[1]), what);
@@ -206,6 +223,34 @@ int main()
     Draw();
     Gfx_Present(FALSE);
     Check(drawn.size() == 2 && memcmp(&drawn[0], &drawn[1], sizeof(GfxDrawState)) == 0, "no-op calls: same state");
+
+    // Multiple draws from the same recently-locked dynamic VB share one copy in
+    // frame.vertices until the VB is locked again.
+    GfxVertexBuffer *dynVb = Gfx_CreateVertexBuffer(100);
+    GfxVertex *vptr = Gfx_LockVertexBuffer(dynVb);
+    vptr[0].x = 1.0f;
+    Gfx_UnlockVertexBuffer(dynVb);
+    const WORD triIdx[3] = { 0, 1, 2 };
+    Gfx_DrawIndexedPrimitiveVB(GFX_TRIANGLELIST, dynVb, 0, 100, triIdx, 3);
+    Gfx_DrawIndexedPrimitiveVB(GFX_TRIANGLELIST, dynVb, 10, 50, triIdx, 3);
+    Gfx_DrawIndexedPrimitiveVB(GFX_TRIANGLELIST, dynVb, 0, 100, triIdx, 3);
+    Gfx_Present(FALSE);
+    Check(recordedVertexBytes == 100 * sizeof(GfxVertex),
+          "dynamic VB draws reuse the first copy instead of duplicating vertices");
+    Check(recordedFirstVertexBytes.size() == 3 && recordedFirstVertexBytes[0] == 0 &&
+              recordedFirstVertexBytes[1] == 10 * sizeof(GfxVertex) && recordedFirstVertexBytes[2] == 0,
+          "reused sub-slice computes exact byte offset");
+
+    // Re-locking invalidates the copy cache within the same frame.
+    Gfx_DrawIndexedPrimitiveVB(GFX_TRIANGLELIST, dynVb, 0, 100, triIdx, 3);
+    vptr = Gfx_LockVertexBuffer(dynVb);
+    vptr[0].x = 2.0f;
+    Gfx_UnlockVertexBuffer(dynVb);
+    Gfx_DrawIndexedPrimitiveVB(GFX_TRIANGLELIST, dynVb, 0, 100, triIdx, 3);
+    Gfx_Present(FALSE);
+    Check(recordedVertexBytes == 200 * sizeof(GfxVertex),
+          "re-locking dynamic VB invalidates cache and preserves pre-lock vertices");
+    Gfx_DestroyVertexBuffer(dynVb);
 
     Gfx_DestroyTexture(texture);
     Gfx_Shutdown();
