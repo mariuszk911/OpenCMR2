@@ -118,14 +118,18 @@ void LogFrameStats()
     for (int i = 0; i < 1000; i++)
         Sys_GetTicksPrecise();
     const double clockUs = (Sys_GetTicksPrecise() - t0);   // ms per 1000 = us per call
+    // Integer microseconds: %f is not usable in Sys_Log on the Amiga targets.
     const double n = (double)s_fs.frames, n3 = s_fs.frames3d > 0 ? (double)s_fs.frames3d : 1.0;
-    Sys_Log("gfx: frame stats %s, %ld frames: ms/frame period %.2f = present %.2f + draw calls %.2f + other %.2f; "
-            "%ld 3D frames: period %.2f = present %.2f + draw calls %.2f + other %.2f, 3D draws %.0f; "
-            "draws/frame %.0f; clock read %.1f us",
-            s_inner->name, s_fs.frames, s_fs.period / n, s_fs.present / n, s_fs.draw / n,
-            (s_fs.period - s_fs.present - s_fs.draw) / n, s_fs.frames3d, s_fs.period3d / n3, s_fs.present3d / n3,
-            s_fs.draw3d / n3, (s_fs.period3d - s_fs.present3d - s_fs.draw3d) / n3, s_fs.draws3d / n3,
-            s_fs.draws / n, clockUs);
+#define FS_US(ms) ((long)((ms) * 1000.0 + 0.5))
+    Sys_Log("gfx: frame stats %s, %ld frames: us/frame period %ld = present %ld + draw calls %ld + other %ld; "
+            "%ld 3D frames: period %ld = present %ld + draw calls %ld + other %ld, 3D draws %ld; "
+            "draws/frame %ld; clock read %ld ns",
+            s_inner->name, s_fs.frames, FS_US(s_fs.period / n), FS_US(s_fs.present / n), FS_US(s_fs.draw / n),
+            FS_US((s_fs.period - s_fs.present - s_fs.draw) / n), s_fs.frames3d, FS_US(s_fs.period3d / n3),
+            FS_US(s_fs.present3d / n3), FS_US(s_fs.draw3d / n3),
+            FS_US((s_fs.period3d - s_fs.present3d - s_fs.draw3d) / n3), (long)(s_fs.draws3d / n3 + 0.5),
+            (long)(s_fs.draws / n + 0.5), FS_US(clockUs));
+#undef FS_US
     s_fs = FrameStats();
     s_fs.lastPresent = Sys_GetTicksPrecise();
 }
