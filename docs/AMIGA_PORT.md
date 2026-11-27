@@ -131,7 +131,16 @@ The binary holds two renderers behind one `Gfx_*` API (`src/port/gfx.h`):
 - **GLES2** (`src/render/gles2/`), on ogles2.library. It runs the shared frame
   recorder (`src/render/gfx_core.cpp`) with an ogles2 executor and shaders
   written for GLSL ES 1.00, shipped precompiled (see
-  `tools/amiga/shaders/README`).
+  `tools/amiga/shaders/README`). When `GL_EXT_clip_control` is available it
+  renders directly to the default framebuffer (`GL_UPPER_LEFT_EXT`) so V3D
+  keeps depth in tile SRAM and overlaps frame presentation without
+  an extra blit pass; otherwise it falls back to an offscreen framebuffer. The
+  executor batches compatible 2D/3D draws (including CPU world-matrix baking
+  for small meshes and screen-space non-overlapping merging for alpha-blended
+  3D draws), deduplicates per-frame shader uniforms, and keeps dynamic 3D
+  geometry in a `GL_STATIC_DRAW` buffer separate from the 2D stream buffer.
+  `[video]` options `gles2_direct`, `gles2_batch` (`0`/`1`/`2`),
+  `gles2_static_dynvb`, and `gles2_stats` control these paths for diagnostics.
 
 `src/render/gfx_dispatch_amiga.cpp` picks one from `[video] renderer` on the
 first call. When `gles2` cannot start (no ogles2.library, too old, or no
