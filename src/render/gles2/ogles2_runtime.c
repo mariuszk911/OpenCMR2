@@ -57,6 +57,10 @@ int Gles2Display_Open(int vsync, Gles2Api *api, Gles2Display *display, const cha
     tags[n++].ti_Data = mode.modeId;
     tags[n].ti_Tag = OGLES2_CCT_PISTORM_GET_WINDOW;
     tags[n++].ti_Data = (ULONG)&s_inputWindow;
+    /* The default framebuffer receives the scene directly when
+       GL_EXT_clip_control is available, eliminating the offscreen back-buffer
+       FBO and blit pass so V3D keeps full CPU/GPU overlap. Requesting depth
+       only (no stencil) gives a tile-only D32F depth buffer in ogles2.library. */
     tags[n].ti_Tag = OGLES2_CCT_DEPTH;
     tags[n++].ti_Data = 24;
     tags[n].ti_Tag = OGLES2_CCT_VSYNC;

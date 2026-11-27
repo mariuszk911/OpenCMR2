@@ -166,6 +166,34 @@ int main()
         Check(keepsOwnTest, "the key's own alpha function is kept");
     }
 
+    // Specialised fragment uniforms omit baked-in slots (0..3, 5, 8) and report
+    // the exact highest vec4 slot read.
+    {
+        static float ua[GLES2_FRAGMENT_VEC4 * 4], ub[GLES2_FRAGMENT_VEC4 * 4];
+        Check(Gles2Fragment_SpecialVec4Count(k) == 0, "plain specialised shader reads no fragment uniforms");
+        Check(Gles2Fragment_SpecialUniforms(s, k, ua) == 0, "plain SpecialUniforms returns 0");
+
+        GfxDrawState fa = s, fb = s;
+        fa.fog = true;
+        fa.fogColor = 0xff336699;
+        fb.fog = true;
+        fb.fogColor = 0xff336699;
+        fb.stages[0].colorOp = GFX_TOP_ADD;   // different op, same runtime fog uniform
+        Gles2FragmentKey kfa, kfb;
+        Gles2Fragment_Key(fa, GLES2_KIND_2D, GLES2_KIND_NONE, &kfa);
+        Gles2Fragment_Key(fb, GLES2_KIND_2D, GLES2_KIND_NONE, &kfb);
+        const int ca = Gles2Fragment_SpecialUniforms(fa, kfa, ua);
+        const int cb = Gles2Fragment_SpecialUniforms(fb, kfb, ub);
+        Check(ca == 8 && cb == 8 && Gles2Fragment_SpecialVec4Count(kfa) == 8, "vertex fog uses 8 vec4 slots");
+        Check(memcmp(ua, ub, sizeof(ua)) == 0, "different ops with same fog share specialised fragment uniforms");
+
+        fa.stages[0].colorOp = GFX_TOP_BUMPENVMAPLUMINANCE;
+        fa.stages[1].colorOp = GFX_TOP_ADD;
+        Gles2Fragment_Key(fa, GLES2_KIND_2D, GLES2_KIND_2D, &kfa);
+        Check(Gles2Fragment_SpecialVec4Count(kfa) == 12 && Gles2Fragment_SpecialUniforms(fa, kfa, ua) == 12,
+              "bump luminance uses 12 vec4 slots");
+    }
+
     // Distinct states, distinct keys.
     t = s;
     t.stages[0].colorOp = GFX_TOP_ADD;

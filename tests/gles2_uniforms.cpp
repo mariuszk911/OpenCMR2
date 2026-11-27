@@ -124,6 +124,37 @@ int main()
     float tl[4];
     Gles2U_FillTL(s, 1024, 768, true, tl);
     Check(tl[0] == 640.0f && tl[1] == 480.0f, "TL target size");
+
+    // Disabled lighting skips material/light slots and compares equal even when
+    // material or lights differ; disabled lights and disabled texture transforms
+    // are ignored too.
+    {
+        GfxDrawState a = s;
+        a.lighting = false;
+        GfxDrawState b = a;
+        b.material.diffuse = { 0.9f, 0.8f, 0.7f, 0.6f };
+        b.lights[2].diffuse = { 0.5f, 0.4f, 0.3f, 1.0f };
+        b.ambient = 0xffffffff;
+        Check(Gles2U_SameStatic(a, b), "unlit states ignore material and lights");
+        static float ua[GLES2_VERTEX_VEC4 * 4], ub[GLES2_VERTEX_VEC4 * 4];
+        Gles2U_FillStatic(a, 640, 480, viewport, false, ua);
+        Gles2U_FillStatic(b, 640, 480, viewport, false, ub);
+        Check(memcmp(ua + GLES2_SLOT(4), ub + GLES2_SLOT(4), sizeof(float) * 4 * GLES2_STATIC_VEC4) == 0,
+              "unlit static uniforms are identical regardless of lights/material");
+        Check(ua[GLES2_SLOT(77)] == 0.0f && ua[GLES2_SLOT(21 + 7 * 2) + 26] == 0.0f, "unlit zeroes lighting flags and lights");
+
+        // Lit state ignores disabled light slots and disabled texture matrices.
+        a = s;
+        b = s;
+        b.lights[5].diffuse.r = 0.77f;   // light 5 is disabled
+        b.texture[0]._41 = 42.0f;        // stage 0 textureTransform is DISABLE
+        Check(Gles2U_SameStatic(a, b), "disabled light and disabled texture transform are ignored");
+        Gles2U_FillStatic(a, 640, 480, viewport, false, ua);
+        Gles2U_FillStatic(b, 640, 480, viewport, false, ub);
+        Check(memcmp(ua + GLES2_SLOT(4), ub + GLES2_SLOT(4), sizeof(float) * 4 * GLES2_STATIC_VEC4) == 0,
+              "disabled light and disabled texture transform produce identical uniforms");
+    }
+
     if (failures == 0)
         std::puts("gles2_uniforms: ok");
     return failures != 0;

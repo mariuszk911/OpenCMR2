@@ -13,6 +13,16 @@
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 
+#ifndef GL_LOWER_LEFT_EXT
+#define GL_LOWER_LEFT_EXT 0x8CA1
+#endif
+#ifndef GL_UPPER_LEFT_EXT
+#define GL_UPPER_LEFT_EXT 0x8CA2
+#endif
+#ifndef GL_NEGATIVE_ONE_TO_ONE_EXT
+#define GL_NEGATIVE_ONE_TO_ONE_EXT 0x935E
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -74,9 +84,13 @@ extern "C" {
     X(void, DrawArrays, (GLenum mode, GLint first, GLsizei count), (mode, first, count))                           \
     X(void, DrawElements, (GLenum mode, GLsizei count, GLenum type, const void *indices),                          \
       (mode, count, type, indices))                                                                                \
+    X(void, DrawRangeElements,                                                                                     \
+      (GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void *indices),                    \
+      (mode, start, end, count, type, indices))                                                                    \
     X(void, DrawElementsBaseVertexOES,                                                                             \
       (GLenum mode, GLsizei count, GLenum type, const void *indices, GLint basevertex),                            \
       (mode, count, type, indices, basevertex))                                                                    \
+    X(void, ClipControlEXT, (GLenum origin, GLenum depth), (origin, depth))                                        \
     X(void, GenFramebuffers, (GLsizei n, GLuint * fbs), (n, fbs))                                                  \
     X(void, DeleteFramebuffers, (GLsizei n, const GLuint *fbs), (n, fbs))                                          \
     X(void, BindFramebuffer, (GLenum target, GLuint fb), (target, fb))                                             \
@@ -85,6 +99,8 @@ extern "C" {
     X(void, FramebufferRenderbuffer, (GLenum target, GLenum attachment, GLenum rbtarget, GLuint rb),               \
       (target, attachment, rbtarget, rb))                                                                          \
     X(GLenum, CheckFramebufferStatus, (GLenum target), (target))                                                   \
+    X(void, DiscardFramebufferEXT, (GLenum target, GLsizei numAttachments, const GLenum *attachments),             \
+      (target, numAttachments, attachments))                                                                       \
     X(void, GenRenderbuffers, (GLsizei n, GLuint * rbs), (n, rbs))                                                 \
     X(void, DeleteRenderbuffers, (GLsizei n, const GLuint *rbs), (n, rbs))                                         \
     X(void, BindRenderbuffer, (GLenum target, GLuint rb), (target, rb))                                            \

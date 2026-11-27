@@ -223,6 +223,73 @@ inline void Gles2Fragment_Uniforms(const GfxDrawState &s, const Gles2FragmentKey
     }
 }
 
+// Highest vec4 slot referenced by a specialised fragment shader plus one
+// (0 when the shader reads no fragment uniforms at all).
+inline int Gles2Fragment_SpecialVec4Count(const Gles2FragmentKey &k)
+{
+    int vec4Count = 0;
+    for (int i = 0; i < 2; i++) {
+        if (k.colorOp[i] == 0)
+            continue;
+        const int args[4] = { k.colorArg1[i], k.colorArg2[i], k.alphaArg1[i], k.alphaArg2[i] };
+        for (int a = 0; a < 4; a++)
+            if ((args[a] & 0xf) == GFX_TA_TFACTOR)
+                vec4Count = 5;
+    }
+    if (k.alphaTest && k.alphaTest != GFX_CMP_NEVER)
+        vec4Count = 7;
+    if (k.fog)
+        vec4Count = k.fog == 2 ? 10 : 8;
+    if (k.colorOp[0] >= GFX_TOP_BUMPENVMAP)
+        vec4Count = k.colorOp[0] == GFX_TOP_BUMPENVMAPLUMINANCE ? 12 : 11;
+    return vec4Count;
+}
+
+// Runtime uniforms read by a specialised fragment shader (slots 0..3, 5 and 8
+// are baked into the shader source, so they stay zero and never force a new
+// uniform upload when only the shader key changed). Returns the highest slot
+// referenced plus one (0 when the shader reads no uniforms at all).
+inline int Gles2Fragment_SpecialUniforms(const GfxDrawState &s, const Gles2FragmentKey &k, float *u)
+{
+    memset(u, 0, sizeof(float) * 4 * GLES2_FRAGMENT_VEC4);
+    int vec4Count = 0;
+    bool factor = false;
+    for (int i = 0; i < 2; i++) {
+        if (k.colorOp[i] == 0)
+            continue;
+        const int args[4] = { k.colorArg1[i], k.colorArg2[i], k.alphaArg1[i], k.alphaArg2[i] };
+        for (int a = 0; a < 4; a++)
+            factor = factor || (args[a] & 0xf) == GFX_TA_TFACTOR;
+    }
+    if (factor) {
+        Gles2U_Color(s.textureFactor, u + GLES2_SLOT(4));
+        vec4Count = 5;
+    }
+    if (k.alphaTest && k.alphaTest != GFX_CMP_NEVER) {
+        u[GLES2_SLOT(6) + 0] = (s.alphaRef & 0xff) / 255.0f;
+        vec4Count = 7;
+    }
+    if (k.fog) {
+        Gles2U_Color(s.fogColor, u + GLES2_SLOT(7));
+        vec4Count = 8;
+        if (k.fog == 2) {
+            u[GLES2_SLOT(9) + 0] = s.fogStart;
+            u[GLES2_SLOT(9) + 1] = s.fogEnd;
+            vec4Count = 10;
+        }
+    }
+    if (k.colorOp[0] >= GFX_TOP_BUMPENVMAP) {
+        memcpy(u + GLES2_SLOT(10), s.stages[0].bumpMat, sizeof(s.stages[0].bumpMat));
+        vec4Count = 11;
+        if (k.colorOp[0] == GFX_TOP_BUMPENVMAPLUMINANCE) {
+            u[GLES2_SLOT(11) + 0] = s.stages[0].bumpLumScale;
+            u[GLES2_SLOT(11) + 1] = s.stages[0].bumpLumOffset;
+            vec4Count = 12;
+        }
+    }
+    return vec4Count;
+}
+
 namespace Gles2Fragment {
 
 inline std::string Arg(int arg, const char *current, const char *texel)

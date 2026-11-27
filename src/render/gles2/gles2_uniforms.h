@@ -90,63 +90,86 @@ inline float Gles2U_TexCoordMode(DWORD index)
 // The 3D vertex uniforms of a draw, in two parts. viewport is the draw's viewport in target
 // pixels (for the half-pixel offset); scaled: the target is the back buffer
 // and the game's virtual screen applies.
+inline void Gles2U_FillWorldView(const GfxMatrix &world, const GfxMatrix &view, float *u16)
+{
+    Gles2U_Multiply(world, view, u16);
+}
+
 inline void Gles2U_FillWorldView(const GfxDrawState &s, float *u16)
 {
-    Gles2U_Multiply(s.world, s.view, u16);
+    Gles2U_FillWorldView(s.world, s.view, u16);
 }
 
 // Slots 4-82 of a full 83-slot buffer (slots 0-3 are left alone).
+// Skips fields the 3D vertex shader does not read: texture matrices whose stage
+// transform is disabled, all material/light slots when lighting is off, disabled
+// lights, and spot-light cosf() for non-spot lights.
 inline void Gles2U_FillStatic(const GfxDrawState &s, int targetW, int targetH, const GfxViewport &viewport,
                               bool scaled, float *u)
 {
     memset(u + GLES2_SLOT(GLES2_WORLD_VEC4), 0, sizeof(float) * 4 * GLES2_STATIC_VEC4);
     memcpy(u + GLES2_SLOT(4), &s.projection, 64);
-    memcpy(u + GLES2_SLOT(8), &s.texture[0], 64);
-    memcpy(u + GLES2_SLOT(12), &s.texture[1], 64);
-    Gles2U_Copy4(s.material.diffuse, u + GLES2_SLOT(16));
-    Gles2U_Copy4(s.material.ambient, u + GLES2_SLOT(17));
-    Gles2U_Copy4(s.material.specular, u + GLES2_SLOT(18));
-    Gles2U_Copy4(s.material.emissive, u + GLES2_SLOT(19));
-    float *ambient = u + GLES2_SLOT(20);
-    Gles2U_Color(s.ambient, ambient);
-    ambient[3] = s.material.power;
-    for (int i = 0; i < 8; i++) {
-        const GfxLight &l = s.lights[i];
-        float *lu = u + GLES2_SLOT(21 + 7 * i);
-        Gles2U_Copy4(l.diffuse, lu);
-        Gles2U_Copy4(l.specular, lu + 4);
-        Gles2U_Copy4(l.ambient, lu + 8);
-        Gles2U_TransformPoint(l.position, 1.0f, s.view, lu + 12);
-        lu[15] = (float)l.type;
-        Gles2U_TransformPoint(l.direction, 0.0f, s.view, lu + 16);
-        lu[19] = l.range > 0.0f ? l.range : 1e30f;
-        lu[20] = l.attenuation0;
-        lu[21] = l.attenuation1;
-        lu[22] = l.attenuation2;
-        lu[23] = l.falloff;
-        lu[24] = cosf(l.theta * 0.5f);
-        lu[25] = cosf(l.phi * 0.5f);
-        lu[26] = s.lightEnabled[i] ? 1.0f : 0.0f;
+    if (s.stages[0].textureTransform != GFX_TTFF_DISABLE)
+        memcpy(u + GLES2_SLOT(8), &s.texture[0], 64);
+    if (s.stages[1].textureTransform != GFX_TTFF_DISABLE)
+        memcpy(u + GLES2_SLOT(12), &s.texture[1], 64);
+    if (s.lighting) {
+        Gles2U_Copy4(s.material.diffuse, u + GLES2_SLOT(16));
+        Gles2U_Copy4(s.material.ambient, u + GLES2_SLOT(17));
+        Gles2U_Copy4(s.material.specular, u + GLES2_SLOT(18));
+        Gles2U_Copy4(s.material.emissive, u + GLES2_SLOT(19));
+        float *ambient = u + GLES2_SLOT(20);
+        Gles2U_Color(s.ambient, ambient);
+        ambient[3] = s.material.power;
+        for (int i = 0; i < 8; i++) {
+            if (!s.lightEnabled[i])
+                continue;
+            const GfxLight &l = s.lights[i];
+            float *lu = u + GLES2_SLOT(21 + 7 * i);
+            Gles2U_Copy4(l.diffuse, lu);
+            Gles2U_Copy4(l.specular, lu + 4);
+            Gles2U_Copy4(l.ambient, lu + 8);
+            lu[15] = (float)l.type;
+            if (l.type == GFX_LIGHT_DIRECTIONAL) {
+                Gles2U_TransformPoint(l.direction, 0.0f, s.view, lu + 16);
+            } else {
+                Gles2U_TransformPoint(l.position, 1.0f, s.view, lu + 12);
+                lu[19] = l.range > 0.0f ? l.range : 1e30f;
+                lu[20] = l.attenuation0;
+                lu[21] = l.attenuation1;
+                lu[22] = l.attenuation2;
+                if (l.type == GFX_LIGHT_SPOT) {
+                    Gles2U_TransformPoint(l.direction, 0.0f, s.view, lu + 16);
+                    lu[23] = l.falloff;
+                    lu[24] = cosf(l.theta * 0.5f);
+                    lu[25] = cosf(l.phi * 0.5f);
+                }
+            }
+            lu[26] = 1.0f;
+        }
+        float *flags = u + GLES2_SLOT(77);
+        flags[0] = 1.0f;
+        flags[1] = s.colorVertex ? 1.0f : 0.0f;
+        flags[2] = s.specular ? 1.0f : 0.0f;
+        flags[3] = s.localViewer ? 1.0f : 0.0f;
+        float *sources = u + GLES2_SLOT(78);
+        sources[0] = (float)s.diffuseSource;
+        sources[1] = (float)s.specularSource;
+        sources[2] = (float)s.ambientSource;
+        sources[3] = (float)s.emissiveSource;
     }
-    float *flags = u + GLES2_SLOT(77);
-    flags[0] = s.lighting ? 1.0f : 0.0f;
-    flags[1] = s.colorVertex ? 1.0f : 0.0f;
-    flags[2] = s.specular ? 1.0f : 0.0f;
-    flags[3] = s.localViewer ? 1.0f : 0.0f;
-    float *sources = u + GLES2_SLOT(78);
-    sources[0] = (float)s.diffuseSource;
-    sources[1] = (float)s.specularSource;
-    sources[2] = (float)s.ambientSource;
-    sources[3] = (float)s.emissiveSource;
     float *fog = u + GLES2_SLOT(79);
+    const bool vertexFogLinear = s.fog && s.fogTableMode == GFX_FOG_NONE && s.fogVertexMode == GFX_FOG_LINEAR;
     fog[0] = (s.fog && s.fogTableMode == GFX_FOG_NONE) ? (float)s.fogVertexMode : 0.0f;
     fog[1] = s.normalizeNormals ? 1.0f : 0.0f;
     // Direct3D takes the fog factor from the vertex's specular alpha when fog
     // is on with neither vertex nor table fog (a foggy stage's backdrop).
     fog[2] = (s.fog && s.fogTableMode == GFX_FOG_NONE && s.fogVertexMode == GFX_FOG_NONE) ? 1.0f : 0.0f;
-    float *fogRange = u + GLES2_SLOT(80);
-    fogRange[0] = s.fogStart;
-    fogRange[1] = s.fogEnd;
+    if (vertexFogLinear) {
+        float *fogRange = u + GLES2_SLOT(80);
+        fogRange[0] = s.fogStart;
+        fogRange[1] = s.fogEnd;
+    }
     float *tex = u + GLES2_SLOT(81);
     tex[0] = Gles2U_TexCoordMode(s.stages[0].texCoordIndex);
     tex[1] = Gles2U_TexCoordMode(s.stages[1].texCoordIndex);
@@ -159,6 +182,10 @@ inline void Gles2U_FillStatic(const GfxDrawState &s, int targetW, int targetH, c
     target[3] = viewport.height ? -1.0f / viewport.height : 0.0f;
 }
 
+// Single-struct convenience wrapper for unit tests and non-batched callers
+// where s.world is populated. Recorded frames carry per-command worlds in
+// frame.worlds[c.world] and call Gles2U_FillWorldView(world, s.view, u) +
+// Gles2U_FillStatic(...) directly.
 inline void Gles2U_FillVertex(const GfxDrawState &s, int targetW, int targetH, const GfxViewport &viewport,
                               bool scaled, float *u)
 {
@@ -215,23 +242,44 @@ inline void Gles2U_FillFragment(const GfxDrawState &s, int kind0, int kind1, flo
 // computed from compares equal).
 inline bool Gles2U_SameStatic(const GfxDrawState &a, const GfxDrawState &b)
 {
-    for (int i = 0; i < 2; i++)
+    for (int i = 0; i < 2; i++) {
         if (a.stages[i].texCoordIndex != b.stages[i].texCoordIndex ||
             a.stages[i].textureTransform != b.stages[i].textureTransform)
             return false;
-    return a.viewport.width == b.viewport.width && a.viewport.height == b.viewport.height &&
-           a.screenW == b.screenW && a.screenH == b.screenH && a.lighting == b.lighting &&
-           a.colorVertex == b.colorVertex && a.specular == b.specular && a.localViewer == b.localViewer &&
-           a.normalizeNormals == b.normalizeNormals && a.diffuseSource == b.diffuseSource &&
-           a.specularSource == b.specularSource && a.ambientSource == b.ambientSource &&
-           a.emissiveSource == b.emissiveSource && a.fog == b.fog && a.fogTableMode == b.fogTableMode &&
-           a.fogVertexMode == b.fogVertexMode && a.fogStart == b.fogStart && a.fogEnd == b.fogEnd &&
-           a.ambient == b.ambient && memcmp(&a.view, &b.view, sizeof(a.view)) == 0 &&
-           memcmp(&a.projection, &b.projection, sizeof(a.projection)) == 0 &&
-           memcmp(a.texture, b.texture, sizeof(a.texture)) == 0 &&
-           memcmp(&a.material, &b.material, sizeof(a.material)) == 0 &&
-           memcmp(a.lightEnabled, b.lightEnabled, sizeof(a.lightEnabled)) == 0 &&
-           memcmp(a.lights, b.lights, sizeof(a.lights)) == 0;
+        if (a.stages[i].textureTransform != GFX_TTFF_DISABLE &&
+            memcmp(&a.texture[i], &b.texture[i], sizeof(a.texture[i])) != 0)
+            return false;
+    }
+    if (a.viewport.width != b.viewport.width || a.viewport.height != b.viewport.height ||
+        a.screenW != b.screenW || a.screenH != b.screenH || a.lighting != b.lighting ||
+        a.normalizeNormals != b.normalizeNormals || a.fog != b.fog ||
+        memcmp(&a.view, &b.view, sizeof(a.view)) != 0 ||
+        memcmp(&a.projection, &b.projection, sizeof(a.projection)) != 0)
+        return false;
+    if (a.fog) {
+        const bool aNoTable = a.fogTableMode == GFX_FOG_NONE;
+        const bool bNoTable = b.fogTableMode == GFX_FOG_NONE;
+        if (aNoTable != bNoTable)
+            return false;
+        if (aNoTable) {
+            if (a.fogVertexMode != b.fogVertexMode)
+                return false;
+            if (a.fogVertexMode == GFX_FOG_LINEAR && (a.fogStart != b.fogStart || a.fogEnd != b.fogEnd))
+                return false;
+        }
+    }
+    if (a.lighting) {
+        if (a.colorVertex != b.colorVertex || a.specular != b.specular || a.localViewer != b.localViewer ||
+            a.diffuseSource != b.diffuseSource || a.specularSource != b.specularSource ||
+            a.ambientSource != b.ambientSource || a.emissiveSource != b.emissiveSource ||
+            a.ambient != b.ambient || memcmp(&a.material, &b.material, sizeof(a.material)) != 0 ||
+            memcmp(a.lightEnabled, b.lightEnabled, sizeof(a.lightEnabled)) != 0)
+            return false;
+        for (int i = 0; i < 8; i++)
+            if (a.lightEnabled[i] && memcmp(&a.lights[i], &b.lights[i], sizeof(a.lights[i])) != 0)
+                return false;
+    }
+    return true;
 }
 
 inline bool Gles2U_SameVertex(const GfxDrawState &a, const GfxDrawState &b)
