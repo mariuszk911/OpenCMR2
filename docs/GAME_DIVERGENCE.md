@@ -138,6 +138,19 @@ an upstream `game/Menu.h` change fails the host test. `tests/amiga/menu_layout_t
 checks the raw bytes on the target. Keep the header in sync with `game/Menu.h`
 after an upstream sync.
 
+`game/X87Single.h` is not patched either. `src/port/msvcrt.h`, force-included
+in every game unit, includes `src/port/x87single.h`, which defines the game
+header's `_X87SINGLE_H` guard and provides the same `X87S_*` operations with a
+fast path. The x87 single-precision rounding is decided from the double
+result's low 29 mantissa bits, and upstream's exact code (Dekker's product,
+`frexp`/`ldexp`), copied unchanged, runs only for exact ties, zeros,
+denormals, infinities and NaNs. Every result is bit-identical; the libnix
+`frexp`/`ldexp` made each operation cost about 1 us on the target.
+`tests/x87_single.cpp` compiles upstream's header in a namespace of its own
+and compares the two bit for bit, on the host and on the target
+(`amiga_x87_single_test`), so an upstream change to `game/X87Single.h` fails
+the test. Re-copy the exact path after an upstream sync.
+
 An upstream-sync conflict outside this table is either an accidental
 divergence or a new upstream feature that must be absorbed deliberately.
 Neither is resolved by silently keeping the local side.

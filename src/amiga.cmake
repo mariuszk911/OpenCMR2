@@ -506,6 +506,15 @@ set_source_files_properties(platform/amiga/amiga_libfix.c TARGET_DIRECTORY amiga
     PROPERTIES COMPILE_FLAGS "-fno-builtin -fno-math-errno")
 opencmr2_amiga_stack(amiga_ftoi_ties_test)
 
+# The x87 single-precision fast path (src/port/x87single.h) against upstream's
+# game/X87Single.h on Emu68's FPU (tests/x87_single.cpp; argument: pair count).
+add_executable(amiga_x87_single_test ${PROJECT_SOURCE_DIR}/tests/x87_single.cpp
+    platform/amiga/amiga_libfix.c)
+target_include_directories(amiga_x87_single_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR})
+set_source_files_properties(platform/amiga/amiga_libfix.c TARGET_DIRECTORY amiga_x87_single_test
+    PROPERTIES COMPILE_FLAGS "-fno-builtin -fno-math-errno")
+opencmr2_amiga_stack(amiga_x87_single_test)
+
 add_executable(amiga_replay_packet_test ${PROJECT_SOURCE_DIR}/tests/replay_packet.cpp)
 target_include_directories(amiga_replay_packet_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${GAME_DIR})
 target_compile_options(amiga_replay_packet_test PRIVATE "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/port/types.h")

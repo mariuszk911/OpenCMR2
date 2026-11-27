@@ -509,6 +509,13 @@ target_include_directories(ftoi_ties_test PRIVATE ${PROJECT_SOURCE_DIR}/game)
 target_compile_options(ftoi_ties_test PRIVATE "SHELL:-include ${PROJECT_SOURCE_DIR}/src/port/types.h")
 add_test(NAME ftoi_ties COMMAND ftoi_ties_test)
 
+# The bit-exact fast path of the x87 single-precision arithmetic
+# (src/port/x87single.h) against upstream's game/X87Single.h. Also built for
+# the Amiga target (src/amiga.cmake), where the FPU is Emu68's.
+add_executable(x87_single_test x87_single.cpp)
+target_include_directories(x87_single_test PRIVATE ${PROJECT_SOURCE_DIR}/game ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME x87_single COMMAND x87_single_test)
+
 # Replay input packet run checks read the same bits on every byte order. Also
 # built for the Amiga target (src/amiga.cmake).
 add_executable(replay_packet_test replay_packet.cpp)

@@ -67,4 +67,7 @@ void Crt_SplitPath(const char *path, char *drive, char *dir, char *fname, char *
 }
 #endif
 
+/* game/X87Single.h with a bit-exact fast path, ahead of any game source. */
+#include "x87single.h"
+
 #endif
