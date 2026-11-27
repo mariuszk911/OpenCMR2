@@ -1194,11 +1194,11 @@ int StageObject_ClampByteRange(int value);
 #define TRAIL_POINT(i) (&g_trailPoints[0][0][0] + (i))
 #define TRAIL_FADE(p, f) ((p)->f - (p)->f * (p)->age * 0x7c / 0x4d8)
 
-// PORT: AMIGA: a tyre-mark quad nothing of which can show. Its drawn alphas
-// are all at most 1 (the game's own test below, applied after the gravel marks'
-// alpha / 3), or all four corners are behind the camera plane, where the near
-// plane clips it anyway. Skipping them before the conversion saves several ms a
-// frame on the 68k (~1,400 triangles a frame once the trails are full).
+// PORT: AMIGA: a tyre-mark quad that cannot be seen. Its drawn alphas are all
+// at most 1 (the game's own test below, applied after the gravel marks' alpha /
+// 3: at most one 8-bit step), or all four corners are behind the camera plane,
+// which the near plane clips anyway. Skipping them before the conversion saves
+// several ms a frame on the 68k (~1,400 triangles a frame with full trails).
 static bool TyreMark_IsHidden(Quad2DInputVertex *const q[4], SceneNode *pView)
 {
     FixVector camera, forward, d;
