@@ -16,6 +16,7 @@
 #include "render/gfx_internal.h"
 #include "render/gles2/gfx_gles2_shaders.h"
 #include "render/gles2/gles2_api.h"
+#include "render/gles2/gles2_atlas.h"
 #include "render/gles2/gles2_batch.h"
 #include "render/gles2/gles2_fragment.h"
 #include "render/gles2/gles2_uniforms.h"
@@ -153,6 +154,11 @@ struct Executor : GfxExecutor {
     bool loggedBadTL = false;
     PresentationRect lastPresRect = {};
     int batchMode = 1;          // [video] gles2_batch (0 off, 1 full, 2 consecutive only)
+    bool useAtlas = true;       // [video] gles2_atlas (0 off, 1 on)
+    bool atlasFullLogged = false;
+    Gles2Atlas atlas;
+    GfxTexture atlasPageTex = {};
+    std::vector<uint8_t> atlasRgbaTmp, atlasPaddedTmp;
     int vsync = -1;
     int boundAttributes = 0;    // vertex attribute arrays enabled
     int activeUnit = -1;        // the texture unit last made active
@@ -198,7 +204,7 @@ struct Executor : GfxExecutor {
         double lastPresent = 0, upload = 0, uploadTex = 0, uploadVB = 0, uploadBatch = 0, uploadGeom = 0,
                build = 0, draw = 0, present = 0, period = 0;
         long frames = 0, draws = 0, rawDraws = 0, draws3d = 0, bakedDraws = 0, bakedGroups = 0, bakedVerts = 0,
-             vertexUploads = 0, worldUploads = 0, fragmentUploads = 0,
+             atlasRemapped = 0, vertexUploads = 0, worldUploads = 0, fragmentUploads = 0,
              programSwitches = 0, states = 0, worlds = 0, vertBytes = 0, idxCount = 0,
              textureBinds = 0, vertexBinds = 0, unitSwitches = 0, targets = 0, cubeDraws = 0, targetDraws = 0;
     } stats;
@@ -277,6 +283,13 @@ struct Executor : GfxExecutor {
         AmigaSys_SetWindow(NULL);
         GLuint textures[] = { backColor, white2D, whiteCube };
         gl.DeleteTextures(3, textures);
+        if (atlasPageTex.gpu != NULL) {
+            GlTexture *pg = (GlTexture *)atlasPageTex.gpu;
+            if (pg->texture != 0)
+                gl.DeleteTextures(1, &pg->texture);
+            delete pg;
+            atlasPageTex.gpu = NULL;
+        }
         gl.DeleteRenderbuffers(1, &backDepth);
         gl.DeleteFramebuffers(1, &backFramebuffer);
         GLuint buffers[] = { vertexBuffer, tlVertexBuffer, indexBuffer, quadBuffer, arenaBuffer };
@@ -410,9 +423,10 @@ struct Executor : GfxExecutor {
         batchMode = Sys_GetOption("video.gles2_batch", 1);
         if (batchMode < 0 || batchMode > 2)
             batchMode = 1;
-        Sys_Log("gfx: gles2: S3TC %s, base vertex draws %s, discard %s, direct %s, batch %d",
+        useAtlas = Sys_GetOption("video.gles2_atlas", 1) != 0;
+        Sys_Log("gfx: gles2: S3TC %s, base vertex draws %s, discard %s, direct %s, batch %d, atlas %s",
                 bcSupported ? "native" : "decoded", baseVertex ? "native" : "by attribute offsets",
-                discardFramebuffer ? "on" : "off", clipControl ? "on" : "off", batchMode);
+                discardFramebuffer ? "on" : "off", clipControl ? "on" : "off", batchMode, useAtlas ? "on" : "off");
 
         static const char *const attributes3D[6] = { "aPosition", "aNormal", "aDiffuse", "aSpecular", "aTex0", "aTex1" };
         static const char *const attributesTL[4] = { "aPosition", "aDiffuse", "aSpecular", "aTex" };
@@ -574,15 +588,10 @@ struct Executor : GfxExecutor {
         return g;
     }
 
-    // A level as uploaded: R, G, B, A bytes from the CPU copy, or the BC
-    // blocks as they are where the GPU takes them.
-    void ConvertLevel(GfxTexture *t, GlTexture *g, const uint8_t *src, int w, int h, std::vector<uint8_t> &out)
+    // Decodes a CPU texture level into tightly packed RGBA8 bytes.
+    void ConvertLevelRgba(const GfxTexture *t, const uint8_t *src, int w, int h, std::vector<uint8_t> &out)
     {
         const size_t n = (size_t)w * h;
-        if (g->compressed) {
-            out.assign(src, src + Gfx_LevelSize(t->format, w, h, NULL));
-            return;
-        }
         out.resize(n * 4);
         uint8_t *dst = out.data();
         switch (t->format) {
@@ -623,6 +632,17 @@ struct Executor : GfxExecutor {
         }
     }
 
+    // A level as uploaded: R, G, B, A bytes from the CPU copy, or the BC
+    // blocks as they are where the GPU takes them.
+    void ConvertLevel(GfxTexture *t, GlTexture *g, const uint8_t *src, int w, int h, std::vector<uint8_t> &out)
+    {
+        if (g->compressed) {
+            out.assign(src, src + Gfx_LevelSize(t->format, w, h, NULL));
+            return;
+        }
+        ConvertLevelRgba(t, src, w, h, out);
+    }
+
     // Every level of every face of a texture from its CPU copy.
     void Upload(GfxTexture *t, GlTexture *g)
     {
@@ -656,12 +676,94 @@ struct Executor : GfxExecutor {
         g->specified = true;
     }
 
+    void EnsureAtlasPage()
+    {
+        if (atlasPageTex.gpu != NULL)
+            return;
+        atlasPageTex = GfxTexture();
+        atlasPageTex.width = atlas.PageWidth();
+        atlasPageTex.height = atlas.PageHeight();
+        atlasPageTex.format = GFX_FORMAT_BGRA8;
+        atlasPageTex.mipLevels = 1;
+        atlasPageTex.flags = 0;
+        atlasPageTex.cube = NULL;
+        atlasPageTex.face = 0;
+        atlasPageTex.dirty = false;
+        atlasPageTex.renderedTo = false;
+        atlasPageTex.replacement = NULL;
+
+        GlTexture *g = new GlTexture;
+        gl.GenTextures(1, &g->texture);
+        SelectUnit(0);
+        gl.BindTexture(GL_TEXTURE_2D, g->texture);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+        gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, atlasPageTex.width, atlasPageTex.height, 0, GL_RGBA,
+                      GL_UNSIGNED_BYTE, NULL);
+        g->compressed = false;
+        g->specified = true;
+        g->samplerKey = ~0u;
+        InvalidateTextureBinding();
+        atlasPageTex.gpu = g;
+        atlas.SetPageTexture(&atlasPageTex);
+        Sys_Log("gfx: gles2: allocated %dx%d RGBA8 texture atlas (%u KB)", atlasPageTex.width, atlasPageTex.height,
+                (unsigned)((size_t)atlasPageTex.width * (size_t)atlasPageTex.height * 4u / 1024u));
+    }
+
+    void UpdateAtlas(const GfxFrame &frame)
+    {
+        for (size_t i = 0; i < frame.commands.size(); i++) {
+            const GfxCommand &c = frame.commands[i];
+            if (c.type != GFX_CMD_DRAW || c.transformed || !Gles2BatchDetail::IsMergeableTriangle(c.primitive))
+                continue;
+            const GfxDrawState &s = frame.states[c.state];
+            if (!Gles2BatchDetail::IsAtlasEligibleState(s) || !Gles2BatchDetail::CanWorldBake(frame, c))
+                continue;
+            GfxTexture *t0 = Gfx_DrawnTexture(c.textures[0]);
+            if (t0 == NULL || atlas.Find(t0) != NULL || !Gles2Atlas::IsEligibleTexture(t0))
+                continue;
+            const GfxVertex *srcV = Gles2BatchDetail::SourceVertices3D(frame, c);
+            if (srcV == NULL || !Gles2BatchDetail::UvsInUnitSquare(srcV, c.vertexCount))
+                continue;
+            bool added = false;
+            Gles2Atlas::Slot *slot = atlas.Add(t0, &added);
+            if (slot != NULL && added) {
+                Sys_Log("gfx: gles2: atlas +%dx%d fmt %d (slot %d,%d; %u live)", t0->width, t0->height, t0->format,
+                        slot->x, slot->y, (unsigned)atlas.LiveCount());
+            } else if (slot == NULL && !atlasFullLogged) {
+                Sys_Log("gfx: gles2: atlas page full (%u live), remaining textures unmerged",
+                        (unsigned)atlas.LiveCount());
+                atlasFullLogged = true;
+            }
+        }
+        if (!atlas.HasDirtySlots())
+            return;
+        EnsureAtlasPage();
+        GlTexture *pg = (GlTexture *)atlasPageTex.gpu;
+        SelectUnit(0);
+        gl.BindTexture(GL_TEXTURE_2D, pg->texture);
+        InvalidateTextureBinding();
+        std::vector<Gles2Atlas::Slot> &slots = atlas.Slots();
+        for (size_t i = 0; i < slots.size(); i++) {
+            Gles2Atlas::Slot &slot = slots[i];
+            if (!slot.inUse || !slot.dirty || slot.source == NULL || slot.source->levels[0][0].empty())
+                continue;
+            ConvertLevelRgba(slot.source, slot.source->levels[0][0].data(), slot.w, slot.h, atlasRgbaTmp);
+            Gles2Atlas::FillPaddedRgba(atlasRgbaTmp.data(), slot.w, slot.h, atlas.Gutter(), atlasPaddedTmp);
+            gl.TexSubImage2D(GL_TEXTURE_2D, 0, slot.x, slot.y, slot.paddedW, slot.paddedH, GL_RGBA, GL_UNSIGNED_BYTE,
+                             atlasPaddedTmp.data());
+            slot.dirty = false;
+        }
+        atlas.ClearDirtyFlag();
+    }
+
     void UploadTextures(std::vector<GfxTexture *> &textures)
     {
         for (GfxTexture *t : textures) {
             if (!t->dirty)
                 continue;
             Upload(t, Ensure(t));
+            if (useAtlas)
+                atlas.MarkDirty(t);
             t->dirty = false;
         }
         anyTextureDirty = false;
@@ -669,6 +771,8 @@ struct Executor : GfxExecutor {
 
     void DestroyTexture(GfxTexture *t) override
     {
+        if (atlas.Remove(t) && atlas.LiveCount() == 0)
+            atlasFullLogged = false;
         GlTexture *g = (GlTexture *)t->gpu;
         if (g == NULL || !open)
             return;
@@ -1662,8 +1766,9 @@ struct Executor : GfxExecutor {
         }
         const uint32_t bakedBase =
             (uint32_t)((frame.vertices.size() + sizeof(GfxVertex) - 1u) / sizeof(GfxVertex));
+        const Gles2Atlas *activeAtlas = (useAtlas && atlasPageTex.gpu != NULL && atlas.LiveCount() > 0) ? &atlas : NULL;
         batcher.Run(frame, batchInputs, batchMode, batchedCommands, batchedIndices, usedBatchedIndices,
-                    &batchedVertices, bakedBase, stats.enabled ? &lastBatchStats : NULL);
+                    &batchedVertices, bakedBase, stats.enabled ? &lastBatchStats : NULL, activeAtlas);
     }
 
     void Execute(GfxFrame &frame, std::vector<GfxTexture *> &textures, GfxReadback &readback, bool present,
@@ -1689,6 +1794,8 @@ struct Executor : GfxExecutor {
                 Ensure(c.target->cube != NULL ? c.target->cube : c.target);
         if (frame.hasDirtyTextures || anyTextureDirty)
             UploadTextures(textures);
+        if (useAtlas && batchMode == 1)
+            UpdateAtlas(frame);
         const double tTex = stats.enabled ? Sys_GetTicksPrecise() : 0.0;
         UploadVertexBuffers(frame);
         const double tVB = stats.enabled ? Sys_GetTicksPrecise() : 0.0;
@@ -1871,6 +1978,7 @@ struct Executor : GfxExecutor {
             stats.bakedDraws += (long)lastBatchStats.bakedDraws;
             stats.bakedGroups += (long)lastBatchStats.bakedGroups;
             stats.bakedVerts += (long)lastBatchStats.bakedVerts;
+            stats.atlasRemapped += (long)lastBatchStats.atlasRemappedDraws;
             for (const GfxCommand &c : frame.commands)
                 if (c.type == GFX_CMD_DRAW)
                     stats.rawDraws++;
@@ -2071,18 +2179,18 @@ struct Executor : GfxExecutor {
         const long f = stats.frames > 0 ? stats.frames : 1;
         Sys_Log("gfx: gles2 stats, %ld frames, ms/frame: period %.2f = upload %.2f (tex %.2f vb %.2f batch %.2f geom %.2f) "
                 "+ uniforms %.2f + draw loop %.2f + present %.2f + other %.2f; "
-                "per frame: draws %ld (from %ld, 3D %ld, baked %ld->%ld/%ldv), states %ld worlds %ld, vertB %ld idx %ld, "
+                "per frame: draws %ld (from %ld, 3D %ld, baked %ld->%ld/%ldv, atlas %u/%ld), states %ld worlds %ld, vertB %ld idx %ld, "
                 "uStatic %ld uWorld %ld uFrag %ld, prog %ld tex %ld vb %ld unit %ld, "
                 "rt %.2f rtDraws %.1f cube %.1f; readback %.2f %.2f ms; swap %.2f ms",
                 stats.frames, stats.period / n, stats.upload / n, stats.uploadTex / n, stats.uploadVB / n,
                 stats.uploadBatch / n, stats.uploadGeom / n, stats.build / n, stats.draw / n, stats.present / n,
                 (stats.period - stats.upload - stats.build - stats.draw - stats.present) / n,
                 stats.draws / f, stats.rawDraws / f, stats.draws3d / f, stats.bakedDraws / f, stats.bakedGroups / f,
-                stats.bakedVerts / f, stats.states / f, stats.worlds / f,
-                stats.vertBytes / f, stats.idxCount / f, stats.vertexUploads / f, stats.worldUploads / f,
-                stats.fragmentUploads / f, stats.programSwitches / f, stats.textureBinds / f, stats.vertexBinds / f,
-                stats.unitSwitches / f, stats.targets / n, stats.targetDraws / n, stats.cubeDraws / n,
-                stats.readbacks / n, stats.readback / n, stats.swap / n);
+                stats.bakedVerts / f, (unsigned)atlas.LiveCount(), stats.atlasRemapped / f, stats.states / f,
+                stats.worlds / f, stats.vertBytes / f, stats.idxCount / f, stats.vertexUploads / f,
+                stats.worldUploads / f, stats.fragmentUploads / f, stats.programSwitches / f, stats.textureBinds / f,
+                stats.vertexBinds / f, stats.unitSwitches / f, stats.targets / n, stats.targetDraws / n,
+                stats.cubeDraws / n, stats.readbacks / n, stats.readback / n, stats.swap / n);
         const bool enabled = stats.enabled;
         stats = Stats();
         stats.enabled = enabled;

@@ -136,10 +136,11 @@ The binary holds two renderers behind one `Gfx_*` API (`src/port/gfx.h`):
   keeps depth in tile SRAM and overlaps frame presentation without
   an extra blit pass; otherwise it falls back to an offscreen framebuffer. The
   executor batches compatible 2D/3D draws (including CPU world-matrix baking
-  for small meshes and screen-space non-overlapping merging for alpha-blended
-  3D draws), deduplicates per-frame shader uniforms, and keeps dynamic 3D
-  geometry in a `GL_STATIC_DRAW` buffer separate from the 2D stream buffer.
-  `[video]` options `gles2_direct`, `gles2_batch` (`0`/`1`/`2`),
+  for small meshes, screen-space non-overlapping merging for alpha-blended 3D
+  draws, and an RGBA8 texture atlas for small clamped alpha-blended 3D cards),
+  deduplicates per-frame shader uniforms, and keeps dynamic 3D geometry in a
+  `GL_STATIC_DRAW` buffer separate from the 2D stream buffer. `[video]` options
+  `gles2_direct`, `gles2_batch` (`0`/`1`/`2`), `gles2_atlas` (`0`/`1`),
   `gles2_static_dynvb`, and `gles2_stats` control these paths for diagnostics.
 
 `src/render/gfx_dispatch_amiga.cpp` picks one from `[video] renderer` on the

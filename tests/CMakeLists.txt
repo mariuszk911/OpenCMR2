@@ -876,6 +876,10 @@ add_executable(gles2_batch_test gles2_batch.cpp)
 target_include_directories(gles2_batch_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME gles2_batch COMMAND gles2_batch_test)
 
+add_executable(gles2_atlas_test gles2_atlas.cpp)
+target_include_directories(gles2_atlas_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME gles2_atlas COMMAND gles2_atlas_test)
+
 # gfx_core's recorded states: no-op setters and GfxDrawState::vertexSerial
 # (which the GLES2 executor trusts instead of comparing states).
 add_executable(gfx_core_serial_test gfx_core_serial.cpp

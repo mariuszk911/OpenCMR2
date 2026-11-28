@@ -16,6 +16,7 @@
 #define OPENCMR2_RENDER_GLES2_GLES2_BATCH_H
 
 #include "render/gfx_internal.h"
+#include "render/gles2/gles2_atlas.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -41,9 +42,10 @@ struct Gles2BatchedCmd {
 };
 
 struct Gles2BatchStats {
-    uint32_t bakedDraws = 0;    // raw 3D draws merged via CPU world-baking
-    uint32_t bakedGroups = 0;   // emitted world-baked draws
-    uint32_t bakedVerts = 0;    // vertices written to outBakedVerts
+    uint32_t bakedDraws = 0;        // raw 3D draws merged via CPU world-baking
+    uint32_t bakedGroups = 0;       // emitted world-baked draws
+    uint32_t bakedVerts = 0;        // vertices written to outBakedVerts
+    uint32_t atlasRemappedDraws = 0; // raw 3D draws merged via the texture atlas
 };
 
 namespace Gles2BatchDetail {
@@ -266,10 +268,29 @@ inline bool CanWorldBake(const GfxFrame &frame, const GfxCommand &c)
     return SourceVertices3D(frame, c) != NULL;
 }
 
-inline void AppendBakedVertices(const GfxVertex *src, uint32_t count, const GfxMatrix &m, bool isIdentity,
-                                bool transformNormal, std::vector<GfxVertex> &out)
+inline bool UvsInUnitSquare(const GfxVertex *src, uint32_t count)
 {
-    if (isIdentity) {
+    for (uint32_t i = 0; i < count; i++) {
+        const float u = src[i].u0;
+        const float v = src[i].v0;
+        if (!(u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f))
+            return false;
+    }
+    return true;
+}
+
+inline bool IsAtlasEligibleState(const GfxDrawState &s)
+{
+    return s.alphaBlend && s.stages[0].colorOp != GFX_TOP_DISABLE && s.stages[1].colorOp == GFX_TOP_DISABLE &&
+           s.stages[0].address == GFX_ADDRESS_CLAMP && s.stages[0].mipFilter == GFX_MIPFILTER_NONE &&
+           s.stages[0].textureTransform == GFX_TTFF_DISABLE && s.stages[0].texCoordIndex == 0u;
+}
+
+inline void AppendBakedVertices(const GfxVertex *src, uint32_t count, const GfxMatrix &m, bool isIdentity,
+                                bool transformNormal, std::vector<GfxVertex> &out,
+                                const Gles2AtlasTile *atlasTile = NULL)
+{
+    if (isIdentity && atlasTile == NULL) {
         out.insert(out.end(), src, src + count);
         return;
     }
@@ -283,10 +304,61 @@ inline void AppendBakedVertices(const GfxVertex *src, uint32_t count, const GfxM
     }
     out.resize(needed);
     GfxVertex *dst = &out[base];
+    if (isIdentity) {
+        const float u0 = atlasTile->u0, v0 = atlasTile->v0;
+        const float uScale = atlasTile->uScale, vScale = atlasTile->vScale;
+        for (uint32_t i = 0; i < count; i++) {
+            GfxVertex o = src[i];
+            o.u0 = u0 + o.u0 * uScale;
+            o.v0 = v0 + o.v0 * vScale;
+            dst[i] = o;
+        }
+        return;
+    }
     const float m11 = m._11, m12 = m._12, m13 = m._13;
     const float m21 = m._21, m22 = m._22, m23 = m._23;
     const float m31 = m._31, m32 = m._32, m33 = m._33;
     const float m41 = m._41, m42 = m._42, m43 = m._43;
+    if (atlasTile != NULL) {
+        const float u0 = atlasTile->u0, v0 = atlasTile->v0;
+        const float uScale = atlasTile->uScale, vScale = atlasTile->vScale;
+        if (transformNormal) {
+            for (uint32_t i = 0; i < count; i++) {
+                const GfxVertex &v = src[i];
+                GfxVertex &o = dst[i];
+                o.x = v.x * m11 + v.y * m21 + v.z * m31 + m41;
+                o.y = v.x * m12 + v.y * m22 + v.z * m32 + m42;
+                o.z = v.x * m13 + v.y * m23 + v.z * m33 + m43;
+                o.nx = v.nx * m11 + v.ny * m21 + v.nz * m31;
+                o.ny = v.nx * m12 + v.ny * m22 + v.nz * m32;
+                o.nz = v.nx * m13 + v.ny * m23 + v.nz * m33;
+                o.diffuse = v.diffuse;
+                o.specular = v.specular;
+                o.u0 = u0 + v.u0 * uScale;
+                o.v0 = v0 + v.v0 * vScale;
+                o.u1 = v.u1;
+                o.v1 = v.v1;
+            }
+        } else {
+            for (uint32_t i = 0; i < count; i++) {
+                const GfxVertex &v = src[i];
+                GfxVertex &o = dst[i];
+                o.x = v.x * m11 + v.y * m21 + v.z * m31 + m41;
+                o.y = v.x * m12 + v.y * m22 + v.z * m32 + m42;
+                o.z = v.x * m13 + v.y * m23 + v.z * m33 + m43;
+                o.nx = v.nx;
+                o.ny = v.ny;
+                o.nz = v.nz;
+                o.diffuse = v.diffuse;
+                o.specular = v.specular;
+                o.u0 = u0 + v.u0 * uScale;
+                o.v0 = v0 + v.v0 * vScale;
+                o.u1 = v.u1;
+                o.v1 = v.v1;
+            }
+        }
+        return;
+    }
     if (transformNormal) {
         for (uint32_t i = 0; i < count; i++) {
             const GfxVertex &v = src[i];
@@ -565,6 +637,7 @@ struct Gles2Batcher {
         uint32_t state;
         GfxTexture *tex0;
         GfxTexture *tex1;
+        bool usesAtlas;
         Gles2BatchDetail::ScreenRect rect;
         bool commutative;
         uint32_t firstNode;
@@ -727,12 +800,14 @@ struct Gles2Batcher {
     void EmitBakedSlice(const GfxFrame &frame, const uint32_t *cmdIndices, size_t count, uint32_t state,
                         uint32_t bakedVertexBase, std::vector<Gles2BatchedCmd> &outCommands,
                         std::vector<uint16_t> &outIndices, bool *usedBatchedIndices,
-                        std::vector<GfxVertex> &outBakedVerts, Gles2BatchStats *statsOut) const
+                        std::vector<GfxVertex> &outBakedVerts, Gles2BatchStats *statsOut,
+                        const Gles2Atlas *atlas = NULL, GfxTexture *atlasPage = NULL) const
     {
         if (count == 0)
             return;
         const GfxDrawState &s = frame.states[state];
         const bool transformNormal = Gles2BatchDetail::NeedsNormalTransform(s);
+        const bool useAtlas = (atlas != NULL && atlasPage != NULL);
         const uint32_t idWorld = IdentityWorld();
         EnsureBatchedIndices(frame, outIndices, usedBatchedIndices);
 
@@ -759,8 +834,9 @@ struct Gles2Batcher {
                     continue;
                 }
                 const bool isId = identityWorldIdx >= 0 && canonWorld[c.world] == (uint32_t)identityWorldIdx;
+                const Gles2AtlasTile *tile = useAtlas ? atlas->Find(Gfx_DrawnTexture(c.textures[0])) : NULL;
                 Gles2BatchDetail::AppendBakedVertices(src, c.vertexCount, frame.worlds[c.world], isId,
-                                                      transformNormal, outBakedVerts);
+                                                      transformNormal, outBakedVerts, tile);
                 Gles2BatchDetail::EmitTriangleIndices(frame, c, indexOffset + localVerts, outIndices);
                 localVerts += c.vertexCount;
                 mergedCount++;
@@ -773,8 +849,9 @@ struct Gles2Batcher {
                 const GfxVertex *src = Gles2BatchDetail::SourceVertices3D(frame, c);
                 if (src != NULL) {
                     const bool isId = identityWorldIdx >= 0 && canonWorld[c.world] == (uint32_t)identityWorldIdx;
+                    const Gles2AtlasTile *tile = useAtlas ? atlas->Find(Gfx_DrawnTexture(c.textures[0])) : NULL;
                     Gles2BatchDetail::AppendBakedVertices(src, c.vertexCount, frame.worlds[c.world], isId,
-                                                          transformNormal, outBakedVerts);
+                                                          transformNormal, outBakedVerts, tile);
                     Gles2BatchDetail::EmitTriangleIndices(frame, c, 0u, outIndices);
                     localVerts = c.vertexCount;
                     mergedCount = 1u;
@@ -784,6 +861,8 @@ struct Gles2Batcher {
                     continue;
                 Gles2BatchedCmd out;
                 out.cmd = frame.commands[firstCi];
+                if (useAtlas)
+                    out.cmd.textures[0] = atlasPage;
                 out.cmd.primitive = GFX_TRIANGLELIST;
                 out.cmd.state = state;
                 out.cmd.world = idWorld;
@@ -801,6 +880,8 @@ struct Gles2Batcher {
                     statsOut->bakedDraws += mergedCount;
                     statsOut->bakedGroups++;
                     statsOut->bakedVerts += localVerts;
+                    if (useAtlas)
+                        statsOut->atlasRemappedDraws += mergedCount;
                 }
                 continue;
             }
@@ -809,6 +890,8 @@ struct Gles2Batcher {
                 continue;
             Gles2BatchedCmd out;
             out.cmd = frame.commands[firstCi];
+            if (useAtlas)
+                out.cmd.textures[0] = atlasPage;
             out.cmd.primitive = GFX_TRIANGLELIST;
             out.cmd.state = state;
             out.cmd.world = idWorld;
@@ -833,6 +916,8 @@ struct Gles2Batcher {
                 statsOut->bakedDraws += mergedCount;
                 statsOut->bakedGroups++;
                 statsOut->bakedVerts += localVerts;
+                if (useAtlas)
+                    statsOut->atlasRemappedDraws += mergedCount;
             }
         }
     }
@@ -979,7 +1064,7 @@ struct Gles2Batcher {
     void FlushAlphaBuckets(const GfxFrame &frame, const std::vector<Gles2BatchInput> &inputs, uint32_t bakedVertexBase,
                            std::vector<Gles2BatchedCmd> &outCommands, std::vector<uint16_t> &outIndices,
                            bool *usedBatchedIndices, std::vector<GfxVertex> &outBakedVerts,
-                           Gles2BatchStats *statsOut)
+                           Gles2BatchStats *statsOut, const Gles2Atlas *atlas)
     {
         if (alphaBuckets.empty())
             return;
@@ -991,7 +1076,7 @@ struct Gles2Batcher {
                 EmitSingle(firstCmd, ab.state, ab.commonWorld, inputs[firstIdx], outCommands);
                 continue;
             }
-            if (ab.sameWorldAndBuf && ab.sameBufSpanOk) {
+            if (!ab.usesAtlas && ab.sameWorldAndBuf && ab.sameBufSpanOk) {
                 EnsureBatchedIndices(frame, outIndices, usedBatchedIndices);
                 const bool inlineBase = (ab.maxEnd <= 65536u);
                 const uint32_t baseOff = inlineBase ? 0u : ab.minBase;
@@ -1025,7 +1110,8 @@ struct Gles2Batcher {
                 for (uint32_t n = ab.firstNode; n != ~0u; n = alphaNodes[n].next)
                     runCmds.push_back(alphaNodes[n].cmdIndex);
                 EmitBakedSlice(frame, runCmds.data(), runCmds.size(), ab.state, bakedVertexBase, outCommands,
-                               outIndices, usedBatchedIndices, outBakedVerts, statsOut);
+                               outIndices, usedBatchedIndices, outBakedVerts, statsOut,
+                               ab.usesAtlas ? atlas : NULL, ab.usesAtlas ? ab.tex0 : NULL);
                 Gles2BatchDetail::ClearVector(runCmds);
             } else {
                 for (uint32_t n = ab.firstNode; n != ~0u; n = alphaNodes[n].next) {
@@ -1043,7 +1129,7 @@ struct Gles2Batcher {
     void Run(const GfxFrame &frame, const std::vector<Gles2BatchInput> &inputs, int mode,
              std::vector<Gles2BatchedCmd> &outCommands, std::vector<uint16_t> &outIndices, bool *usedBatchedIndices,
              std::vector<GfxVertex> *outBakedVerts = NULL, uint32_t bakedVertexBase = 0,
-             Gles2BatchStats *statsOut = NULL)
+             Gles2BatchStats *statsOut = NULL, const Gles2Atlas *atlas = NULL)
     {
         Gles2BatchDetail::ClearVector(outCommands);
         Gles2BatchDetail::ClearVector(outIndices);
@@ -1151,7 +1237,7 @@ struct Gles2Batcher {
                 FlushOpaqueBuckets(frame, inputs, bakedVertexBase, outCommands, outIndices, usedBatchedIndices,
                                    bakedRef, statsOut);
                 FlushAlphaBuckets(frame, inputs, bakedVertexBase, outCommands, outIndices, usedBatchedIndices,
-                                  bakedRef, statsOut);
+                                  bakedRef, statsOut, atlas);
                 Gles2BatchedCmd out;
                 out.cmd = c;
                 out.bufferId = 0;
@@ -1172,7 +1258,7 @@ struct Gles2Batcher {
             if (mode == 1 && Gles2BatchDetail::IsOpaque3D(c, s)) {
                 flushRun();
                 FlushAlphaBuckets(frame, inputs, bakedVertexBase, outCommands, outIndices, usedBatchedIndices,
-                                  bakedRef, statsOut);
+                                  bakedRef, statsOut, atlas);
                 const bool bakeable = allowBake && Gles2BatchDetail::CanWorldBake(frame, c);
                 const BucketKey key = { cs, bakeable ? Gles2BatchDetail::kBakedWorldKey : cw,
                                         bakeable ? Gles2BatchDetail::kBakedBufKey : in.bufferId, t0, t1 };
@@ -1236,7 +1322,7 @@ struct Gles2Batcher {
             if (!Gles2BatchDetail::IsMergeableTriangle(c.primitive) || c.vertexCount == 0 || c.vertexCount > 65536u) {
                 flushRun();
                 FlushAlphaBuckets(frame, inputs, bakedVertexBase, outCommands, outIndices, usedBatchedIndices,
-                                  bakedRef, statsOut);
+                                  bakedRef, statsOut, atlas);
                 EmitSingle(c, cs, cw, in, outCommands);
                 continue;
             }
@@ -1256,7 +1342,7 @@ struct Gles2Batcher {
                         if (prevS.screenW != s.screenW || prevS.screenH != s.screenH ||
                             memcmp(&prevS.viewport, &s.viewport, sizeof(s.viewport)) != 0)
                             FlushAlphaBuckets(frame, inputs, bakedVertexBase, outCommands, outIndices,
-                                              usedBatchedIndices, bakedRef, statsOut);
+                                              usedBatchedIndices, bakedRef, statsOut, atlas);
                     }
                     if (cachedVPState != cs) {
                         Gles2BatchDetail::MulMat4(s.view, s.projection, cachedVP);
@@ -1279,10 +1365,21 @@ struct Gles2Batcher {
                         Gles2BatchDetail::ProjectBoundsNDC(srcV, c.vertexCount, *mvpPtr);
                     const bool comm = Gles2BatchDetail::IsCommutativeBlend(s);
 
+                    GfxTexture *keyTex0 = t0;
+                    bool usesAtlas = false;
+                    if (atlas != NULL && t0 != NULL && t1 == NULL && Gles2BatchDetail::IsAtlasEligibleState(s) &&
+                        Gles2BatchDetail::UvsInUnitSquare(srcV, c.vertexCount)) {
+                        const Gles2AtlasTile *tile = atlas->Find(t0);
+                        if (tile != NULL && tile->page != NULL) {
+                            keyTex0 = tile->page;
+                            usesAtlas = true;
+                        }
+                    }
+
                     int32_t targetBucket = -1;
                     for (int32_t bi = (int32_t)alphaBuckets.size() - 1; bi >= 0; bi--) {
                         const AlphaBucket &ab = alphaBuckets[(size_t)bi];
-                        if (ab.state == cs && ab.tex0 == t0 && ab.tex1 == t1) {
+                        if (ab.state == cs && ab.tex0 == keyTex0 && ab.tex1 == t1 && ab.usesAtlas == usesAtlas) {
                             targetBucket = bi;
                             break;
                         }
@@ -1320,14 +1417,15 @@ struct Gles2Batcher {
                         if (alphaBuckets.size() >= Gles2BatchDetail::kMaxAlphaBuckets) {
                             alphaNodes.pop_back();
                             FlushAlphaBuckets(frame, inputs, bakedVertexBase, outCommands, outIndices,
-                                              usedBatchedIndices, bakedRef, statsOut);
+                                              usedBatchedIndices, bakedRef, statsOut, atlas);
                             alphaNodes.push_back(node);
                         }
                         const uint32_t freshIdx = (uint32_t)alphaNodes.size() - 1u;
                         AlphaBucket ab;
                         ab.state = cs;
-                        ab.tex0 = t0;
+                        ab.tex0 = keyTex0;
                         ab.tex1 = t1;
+                        ab.usesAtlas = usesAtlas;
                         ab.rect = rect;
                         ab.commutative = comm;
                         ab.firstNode = freshIdx;
@@ -1338,8 +1436,8 @@ struct Gles2Batcher {
                         ab.maxEnd = in.baseVertex + c.vertexCount;
                         ab.commonWorld = cw;
                         ab.commonBufferId = in.bufferId;
-                        ab.sameWorldAndBuf = true;
-                        ab.sameBufSpanOk = true;
+                        ab.sameWorldAndBuf = !usesAtlas;
+                        ab.sameBufSpanOk = !usesAtlas;
                         alphaBuckets.push_back(ab);
                     }
                     continue;
@@ -1347,7 +1445,7 @@ struct Gles2Batcher {
             }
 
             FlushAlphaBuckets(frame, inputs, bakedVertexBase, outCommands, outIndices, usedBatchedIndices, bakedRef,
-                              statsOut);
+                              statsOut, atlas);
 
             const bool bakeable = allowBake && !c.transformed && Gles2BatchDetail::CanWorldBake(frame, c);
             const BucketKey key = { cs, bakeable ? Gles2BatchDetail::kBakedWorldKey : cw,
@@ -1393,7 +1491,7 @@ struct Gles2Batcher {
         FlushOpaqueBuckets(frame, inputs, bakedVertexBase, outCommands, outIndices, usedBatchedIndices, bakedRef,
                            statsOut);
         FlushAlphaBuckets(frame, inputs, bakedVertexBase, outCommands, outIndices, usedBatchedIndices, bakedRef,
-                          statsOut);
+                          statsOut, atlas);
     }
 };
 

@@ -505,6 +505,259 @@ int main()
         Check(outCmds.size() == 3, "screenW/screenH change flushes open alpha buckets");
     }
 
+    // 12. Texture atlas on bakeable alpha-blended 3D draws:
+    //     - two draws with different source textures on the same page merge and
+    //       bake with remapped stage-0 UVs (leaving stage-1 UVs untouched);
+    //     - an overlapping draw with a different key in between still splits
+    //       the merge (painter's order preserved);
+    //     - a bucket keyed on the page NEVER takes the index-concatenation
+    //       branch even when both draws share the same world and buffer;
+    //     - single draws keep their original texture and UVs;
+    //     - draws with UVs outside [0, 1] are not remapped;
+    //     - opaque draws are untouched by the atlas.
+    {
+        GfxTexture page = {};
+        GfxTexture treeA = {}, treeB = {}, otherTex = {};
+        treeA.width = 128; treeA.height = 256; treeA.levels[0][0].resize(16, 1);
+        treeB.width = 128; treeB.height = 256; treeB.levels[0][0].resize(16, 2);
+        otherTex.width = 256; otherTex.height = 256; otherTex.levels[0][0].resize(16, 3);
+
+        Gles2Atlas atlas(1024, 1024, 1);
+        atlas.SetPageTexture(&page);
+        Check(atlas.Add(&treeA) != NULL && atlas.Add(&treeB) != NULL, "atlas places treeA and treeB");
+        const Gles2AtlasTile tA = *atlas.Find(&treeA);
+        const Gles2AtlasTile tB = *atlas.Find(&treeB);
+
+        GfxDrawState treeState = BaseState();
+        treeState.alphaBlend = true;
+        treeState.lighting = false;
+        treeState.stages[0].address = GFX_ADDRESS_CLAMP;
+        treeState.stages[0].mipFilter = GFX_MIPFILTER_NONE;
+
+        GfxVertexBuffer vb;
+        vb.vertices.resize(6);
+        memset(vb.vertices.data(), 0, sizeof(GfxVertex) * 6);
+        // Quad/tri 0: UVs in [0, 1], stage-1 UVs = (0.25, 0.75)
+        vb.vertices[0].x = 0.0f; vb.vertices[0].y = 0.0f; vb.vertices[0].u0 = 0.0f; vb.vertices[0].v0 = 0.0f;
+        vb.vertices[0].u1 = 0.25f; vb.vertices[0].v1 = 0.75f;
+        vb.vertices[1].x = 0.2f; vb.vertices[1].y = 0.0f; vb.vertices[1].u0 = 1.0f; vb.vertices[1].v0 = 0.0f;
+        vb.vertices[1].u1 = 0.25f; vb.vertices[1].v1 = 0.75f;
+        vb.vertices[2].x = 0.1f; vb.vertices[2].y = 0.2f; vb.vertices[2].u0 = 0.5f; vb.vertices[2].v0 = 1.0f;
+        vb.vertices[2].u1 = 0.25f; vb.vertices[2].v1 = 0.75f;
+        // Quad/tri 1: UVs outside [0, 1] (u0 = 1.5)
+        vb.vertices[3] = vb.vertices[0];
+        vb.vertices[4] = vb.vertices[1];
+        vb.vertices[4].u0 = 1.5f;
+        vb.vertices[5] = vb.vertices[2];
+
+        // 12a. Two consecutive tree draws (treeA, treeB) sharing the SAME world and buffer
+        //      must STILL bake (never index-concatenate) and remap UVs to page.
+        {
+            GfxFrame frame;
+            frame.states.push_back(treeState);
+            frame.worlds = { Identity() };
+            frame.indices = { 0, 1, 2 };
+            GfxCommand c0 = MakeDraw(GFX_TRIANGLELIST, false, 0, 0, &treeA, NULL, 3, 0, 3);
+            c0.buffer = &vb;
+            GfxCommand c1 = MakeDraw(GFX_TRIANGLELIST, false, 0, 0, &treeB, NULL, 3, 0, 3);
+            c1.buffer = &vb;
+            frame.commands = { c0, c1 };
+            std::vector<Gles2BatchInput> in = { { 1, 0 }, { 1, 0 } };
+            std::vector<GfxVertex> bakedVerts;
+            Gles2BatchStats bstats;
+            batcher.Run(frame, in, 1, outCmds, outIdx, &usedBatched, &bakedVerts, 0u, &bstats, &atlas);
+            Check(outCmds.size() == 1, "treeA + treeB on same atlas page merge into 1 draw");
+            Check(bstats.bakedDraws == 2 && bstats.bakedGroups == 1 && bstats.atlasRemappedDraws == 2,
+                  "atlas bucket forces baking even with identical world and buffer");
+            if (outCmds.size() == 1 && bakedVerts.size() == 6) {
+                Check(outCmds[0].cmd.textures[0] == &page && outCmds[0].bufferId == 0u,
+                      "merged atlas draw binds page texture and baked dynamic buffer");
+                Check(bakedVerts[0].u0 == tA.u0 && bakedVerts[0].v0 == tA.v0 &&
+                          bakedVerts[1].u0 == tA.u0 + tA.uScale && bakedVerts[2].v0 == tA.v0 + tA.vScale,
+                      "treeA UVs remapped to slotA");
+                Check(bakedVerts[3].u0 == tB.u0 && bakedVerts[3].v0 == tB.v0 &&
+                          bakedVerts[4].u0 == tB.u0 + tB.uScale && bakedVerts[5].v0 == tB.v0 + tB.vScale,
+                      "treeB UVs remapped to slotB");
+                Check(bakedVerts[0].u1 == 0.25f && bakedVerts[0].v1 == 0.75f &&
+                          bakedVerts[3].u1 == 0.25f && bakedVerts[3].v1 == 0.75f,
+                      "stage-1 UVs left untouched by atlas remapping");
+            }
+        }
+
+        // 12b. Single atlas-eligible draw keeps its original texture and is not baked.
+        {
+            GfxFrame frame;
+            frame.states.push_back(treeState);
+            frame.worlds = { Translate(0.2f) };
+            frame.indices = { 0, 1, 2 };
+            GfxCommand c0 = MakeDraw(GFX_TRIANGLELIST, false, 0, 0, &treeA, NULL, 3, 0, 3);
+            c0.buffer = &vb;
+            frame.commands = { c0 };
+            std::vector<Gles2BatchInput> in = { { 1, 0 } };
+            std::vector<GfxVertex> bakedVerts;
+            Gles2BatchStats bstats;
+            batcher.Run(frame, in, 1, outCmds, outIdx, &usedBatched, &bakedVerts, 0u, &bstats, &atlas);
+            Check(outCmds.size() == 1 && outCmds[0].cmd.textures[0] == &treeA && bakedVerts.empty() &&
+                      bstats.atlasRemappedDraws == 0,
+                  "single atlas-eligible draw keeps original texture and UVs");
+        }
+
+        // 12c. Painter's order: overlapping draw with non-atlas texture in between splits the merge.
+        {
+            GfxFrame frame;
+            frame.states.push_back(treeState);
+            // All three at the exact same screen region x=0..0.2, y=0..0.2 -> overlapping!
+            frame.worlds = { Translate(0.0f), Translate(0.05f), Translate(0.02f) };
+            frame.indices = { 0, 1, 2 };
+            GfxCommand c0 = MakeDraw(GFX_TRIANGLELIST, false, 0, 0, &treeA, NULL, 3, 0, 3);
+            c0.buffer = &vb;
+            GfxCommand c1 = MakeDraw(GFX_TRIANGLELIST, false, 0, 1, &otherTex, NULL, 3, 0, 3);
+            c1.buffer = &vb;
+            GfxCommand c2 = MakeDraw(GFX_TRIANGLELIST, false, 0, 2, &treeB, NULL, 3, 0, 3);
+            c2.buffer = &vb;
+            frame.commands = { c0, c1, c2 };
+            std::vector<Gles2BatchInput> in = { { 1, 0 }, { 1, 0 }, { 1, 0 } };
+            std::vector<GfxVertex> bakedVerts;
+            batcher.Run(frame, in, 1, outCmds, outIdx, &usedBatched, &bakedVerts, 0u, NULL, &atlas);
+            Check(outCmds.size() == 3 && outCmds[0].cmd.textures[0] == &treeA &&
+                      outCmds[1].cmd.textures[0] == &otherTex && outCmds[2].cmd.textures[0] == &treeB,
+                  "overlapping non-atlas draw between treeA and treeB splits merge to preserve painter's order");
+        }
+
+        // 12d. Draw with UVs outside [0, 1] is not remapped into the atlas bucket.
+        {
+            GfxFrame frame;
+            frame.states.push_back(treeState);
+            frame.worlds = { Translate(-0.5f), Translate(0.5f) };
+            frame.indices = { 0, 1, 2 };
+            GfxCommand c0 = MakeDraw(GFX_TRIANGLELIST, false, 0, 0, &treeA, NULL, 3, 0, 3);
+            c0.buffer = &vb;
+            c0.firstVertexByte = 0;
+            GfxCommand c1 = MakeDraw(GFX_TRIANGLELIST, false, 0, 1, &treeB, NULL, 3, 0, 3);
+            c1.buffer = &vb;
+            c1.firstVertexByte = 3 * sizeof(GfxVertex); // u0 = 1.5
+            frame.commands = { c0, c1 };
+            std::vector<Gles2BatchInput> in = { { 1, 0 }, { 1, 3 } };
+            std::vector<GfxVertex> bakedVerts;
+            batcher.Run(frame, in, 1, outCmds, outIdx, &usedBatched, &bakedVerts, 0u, NULL, &atlas);
+            Check(outCmds.size() == 2 && outCmds[0].cmd.textures[0] == &treeA &&
+                      outCmds[1].cmd.textures[0] == &treeB && bakedVerts.empty(),
+                  "draw with UV outside [0, 1] stays out of the atlas bucket");
+        }
+
+        // 12e. Opaque draws using atlased textures are untouched.
+        {
+            GfxFrame frame;
+            GfxDrawState opaque = treeState;
+            opaque.alphaBlend = false;
+            frame.states.push_back(opaque);
+            frame.worlds = { Translate(-0.5f), Translate(0.5f) };
+            frame.indices = { 0, 1, 2 };
+            GfxCommand c0 = MakeDraw(GFX_TRIANGLELIST, false, 0, 0, &treeA, NULL, 3, 0, 3);
+            c0.buffer = &vb;
+            GfxCommand c1 = MakeDraw(GFX_TRIANGLELIST, false, 0, 1, &treeB, NULL, 3, 0, 3);
+            c1.buffer = &vb;
+            frame.commands = { c0, c1 };
+            std::vector<Gles2BatchInput> in = { { 1, 0 }, { 1, 0 } };
+            std::vector<GfxVertex> bakedVerts;
+            batcher.Run(frame, in, 1, outCmds, outIdx, &usedBatched, &bakedVerts, 0u, NULL, &atlas);
+            Check(outCmds.size() == 2 && outCmds[0].cmd.textures[0] != &page &&
+                      outCmds[1].cmd.textures[0] != &page,
+                  "opaque path is unchanged even for textures present in the atlas");
+        }
+
+        // 12f. Non-identity world transforms + lighting (actual FIN01 tree-card hot path)
+        //      and non-overlapping interleaving across another texture.
+        {
+            GfxFrame frame;
+            GfxDrawState litTree = treeState;
+            litTree.lighting = true;
+            frame.states.push_back(litTree);
+            // 90 deg rotation around Z + translate (-0.8, 0, 0) for treeA,
+            // non-overlapping otherTex at x=+0.5, and translate (-0.5, 0, 0) for treeB.
+            GfxMatrix rot = Identity();
+            rot._11 = 0.0f; rot._12 = 1.0f;
+            rot._21 = -1.0f; rot._22 = 0.0f;
+            rot._41 = -0.8f;
+            frame.worlds = { rot, Translate(0.5f), Translate(-0.5f) };
+            GfxVertexBuffer vbLit;
+            vbLit.vertices.resize(3);
+            memset(vbLit.vertices.data(), 0, sizeof(GfxVertex) * 3);
+            vbLit.vertices[0].x = 0.0f; vbLit.vertices[0].y = 0.0f; vbLit.vertices[0].nx = 1.0f;
+            vbLit.vertices[0].u0 = 0.0f; vbLit.vertices[0].v0 = 0.0f; vbLit.vertices[0].u1 = 0.4f; vbLit.vertices[0].v1 = 0.6f;
+            vbLit.vertices[1].x = 0.2f; vbLit.vertices[1].y = 0.0f; vbLit.vertices[1].nx = 1.0f;
+            vbLit.vertices[1].u0 = 1.0f; vbLit.vertices[1].v0 = 0.5f; vbLit.vertices[1].u1 = 0.4f; vbLit.vertices[1].v1 = 0.6f;
+            vbLit.vertices[2].x = 0.1f; vbLit.vertices[2].y = 0.2f; vbLit.vertices[2].nx = 1.0f;
+            vbLit.vertices[2].u0 = 0.5f; vbLit.vertices[2].v0 = 1.0f; vbLit.vertices[2].u1 = 0.4f; vbLit.vertices[2].v1 = 0.6f;
+            frame.indices = { 0, 1, 2 };
+
+            GfxCommand c0 = MakeDraw(GFX_TRIANGLELIST, false, 0, 0, &treeA, NULL, 3, 0, 3);
+            c0.buffer = &vbLit;
+            GfxCommand c1 = MakeDraw(GFX_TRIANGLELIST, false, 0, 1, &otherTex, NULL, 3, 0, 3);
+            c1.buffer = &vbLit;
+            GfxCommand c2 = MakeDraw(GFX_TRIANGLELIST, false, 0, 2, &treeB, NULL, 3, 0, 3);
+            c2.buffer = &vbLit;
+            frame.commands = { c0, c1, c2 };
+            std::vector<Gles2BatchInput> in = { { 1, 0 }, { 1, 0 }, { 1, 0 } };
+            std::vector<GfxVertex> bakedVerts;
+            Gles2BatchStats bstats;
+            batcher.Run(frame, in, 1, outCmds, outIdx, &usedBatched, &bakedVerts, 0u, &bstats, &atlas);
+            Check(outCmds.size() == 2 && outCmds[0].cmd.textures[0] == &page &&
+                      outCmds[1].cmd.textures[0] == &otherTex && bstats.atlasRemappedDraws == 2,
+                  "lit non-identity treeA + treeB merge across non-overlapping otherTex");
+            if (bakedVerts.size() == 6) {
+                // v1=(0.2,0,0) * rot -> (-0.8, 0.2, 0), n=(1,0,0) -> (0,1,0)
+                Check(bakedVerts[1].x == -0.8f && bakedVerts[1].y == 0.2f &&
+                          bakedVerts[1].nx == 0.0f && bakedVerts[1].ny == 1.0f &&
+                          bakedVerts[1].u0 == tA.u0 + tA.uScale && bakedVerts[1].v0 == tA.v0 + 0.5f * tA.vScale &&
+                          bakedVerts[1].u1 == 0.4f && bakedVerts[1].v1 == 0.6f,
+                      "lit atlas bake transforms position, normal, and remaps stage-0 UV");
+                // treeB v0=(0,0,0) * Translate(-0.5) -> (-0.5, 0, 0), n=(1,0,0)
+                Check(bakedVerts[3].x == -0.5f && bakedVerts[3].nx == 1.0f &&
+                          bakedVerts[3].u0 == tB.u0 && bakedVerts[3].v0 == tB.v0,
+                      "second lit atlas draw transforms position, normal, and remaps stage-0 UV");
+            }
+        }
+
+        // 12g. EmitBakedSlice straddling 65536 retry path with atlas remapping.
+        {
+            GfxFrame frame;
+            frame.states.push_back(treeState);
+            frame.worlds = { Translate(-0.5f), Translate(0.5f) };
+            frame.indices = { 0, 1, 2 };
+            GfxCommand c0 = MakeDraw(GFX_TRIANGLELIST, false, 0, 0, &treeA, NULL, 3, 0, 3);
+            c0.buffer = &vb;
+            GfxCommand c1 = MakeDraw(GFX_TRIANGLELIST, false, 0, 1, &treeB, NULL, 3, 0, 3);
+            c1.buffer = &vb;
+            frame.commands = { c0, c1 };
+            std::vector<Gles2BatchInput> in = { { 1, 0 }, { 1, 0 } };
+            std::vector<GfxVertex> bakedVerts;
+            Gles2BatchStats bstats;
+            // bakedVertexBase = 65534 -> first 3-vert draw straddles 65536, triggering retry path.
+            batcher.Run(frame, in, 1, outCmds, outIdx, &usedBatched, &bakedVerts, 65534u, &bstats, &atlas);
+            Check(outCmds.size() == 2 && outCmds[0].cmd.textures[0] == &page &&
+                      outCmds[1].cmd.textures[0] == &page && bstats.atlasRemappedDraws == 2 &&
+                      bakedVerts.size() == 6 && bakedVerts[0].u0 == tA.u0 && bakedVerts[3].u0 == tB.u0,
+                  "EmitBakedSlice 65536-straddle retry path remaps UVs and binds atlas page");
+        }
+
+        // 12h. Ineligible states (WRAP, mipFilter, texCoordIndex, textureTransform) stay unremapped.
+        {
+            GfxDrawState wrapState = treeState;
+            wrapState.stages[0].address = GFX_ADDRESS_WRAP;
+            GfxDrawState mipState = treeState;
+            mipState.stages[0].mipFilter = GFX_MIPFILTER_LINEAR;
+            GfxDrawState tciState = treeState;
+            tciState.stages[0].texCoordIndex = 1u;
+            GfxDrawState ttffState = treeState;
+            ttffState.stages[0].textureTransform = GFX_TTFF_COUNT2;
+            Check(!Gles2BatchDetail::IsAtlasEligibleState(wrapState), "WRAP address rejected for atlas");
+            Check(!Gles2BatchDetail::IsAtlasEligibleState(mipState), "mipFilter != NONE rejected for atlas");
+            Check(!Gles2BatchDetail::IsAtlasEligibleState(tciState), "texCoordIndex != 0 rejected for atlas");
+            Check(!Gles2BatchDetail::IsAtlasEligibleState(ttffState), "textureTransform != DISABLE rejected for atlas");
+        }
+    }
+
     if (failures == 0)
         std::puts("gles2_batch: ok");
     return failures != 0;
