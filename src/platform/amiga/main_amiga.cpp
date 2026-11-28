@@ -14,7 +14,7 @@
 
 // AmigaOS version string, read by the Version command and installers.
 // "used" keeps it in the executable although nothing references it.
-__attribute__((used)) static const char s_versionTag[] = "$VER: OpenCMR2 0.9.2 (27.11.2026)";
+__attribute__((used)) static const char s_versionTag[] = "$VER: OpenCMR2 0.9.3 (28.11.2026)";
 
 // A refused saved game (a PC save, a damaged or newer file): the game logs the
 // name of every ignored file; the player is told once per kind of refusal.
